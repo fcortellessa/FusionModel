@@ -1,0 +1,31 @@
+model:
+  backbone: yolo26n.pt
+  freeze_backbone: false
+  streams: ["rgb_image", "digit_image"]
+  fusion: "gated"
+  head_type: quaternion
+  activation: GELU
+  mlp_quat_1: 256
+  mlp_quat_2: 1024
+  mlp_quat_3: 0
+  mlp_trans_1: 1024
+  mlp_trans_2: 1024
+  mlp_trans_3: 16
+
+training:
+  lr: 0.001
+  batch_size: 16
+  epochs: 25
+  num_workers: 4
+  optimizer: adam
+  dropout_rot: 0.3
+  dropout_trans: 0.1
+  use_batchnorm: True
+
+data:
+  root: "D:/MA/USB_TCP_combined"
+  streams: ["mono_cam", "tactile"]
+  image_size: 640
+  use_rgb: true
+  use_tactile: true
+  use_depth: false
