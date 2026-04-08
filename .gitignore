@@ -1,0 +1,9 @@
+# __pychache__/
+# *.pyc
+# *archive
+
+
+/*
+!MyModel/
+!.gitignore
+MyModel/utils/hf_upload.py
