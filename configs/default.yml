@@ -15,7 +15,7 @@ model:
 training:
   lr: 0.001
   batch_size: 16
-  epochs: 25
+  epochs: 250
   num_workers: 4
   optimizer: adam
   dropout_rot: 0.3
@@ -23,7 +23,7 @@ training:
   use_batchnorm: True
 
 data:
-  root: "D:/MA/USB_TCP_combined"
+  root: ""
   streams: ["mono_cam", "tactile"]
   image_size: 640
   use_rgb: true

@@ -76,7 +76,11 @@ class PoseEstimationNet(nn.Module):
             dummy_feat = self.forward_single_stream(dummy_input, extractor)
             feat_dim = dummy_feat.shape[1]
 
-        self.fusion, self.weights = build_fusion(fusion, feat_dim, len(streams))
+        if fusion == "concat":
+            self.fusion = build_fusion(fusion, feat_dim, len(streams))
+            self.weights = None  # No weights for concat
+        else:
+            self.fusion, self.weights = build_fusion(fusion, feat_dim, len(streams))
 
         fused_dim = feat_dim * len(streams) if fusion == "concat" else feat_dim
 

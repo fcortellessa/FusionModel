@@ -9,7 +9,7 @@ from pathlib import Path
 import logging
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.abspath(os.path.join(current_dir, "../.."))
+parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.insert(0, parent_dir)
 
 from base_model.pose_estimation_model import PoseEstimationNet
@@ -128,17 +128,18 @@ def train_loop(model, num_epochs, train_loader, val_loader, optimizer, criterion
 
 def main(config_path):
     cfg = load_config(config_path)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Preprocess data (split and transform) if directory doesn't exist
-    data_dir = "D:/MA/GripFusionNet/GripFusionNet/dummy_data"
+    data_dir = os.path.join(base_dir, "../Data")
     preprocessed_dir = os.path.join(data_dir, "Data_split/train_preprocessed")
     if not os.path.exists(preprocessed_dir):
         preprocess_data(root_dir=data_dir)
     
 
     train_loader, val_loader, test_loader = get_dataloaders(
-        root_dir="D:/MA/GripFusionNet/GripFusionNet/dummy_data/Data_split",
+        root_dir=os.path.join(data_dir, "Data_split"),
         batch_size=3,
         shuffle=True
     )
@@ -185,5 +186,4 @@ if __name__ == "__main__":
 
     # main(args.config)
 
-    # main("Dconfigs/default.yml")
-    main("configs/gated.yml")
+    main("configs/default.yml")
