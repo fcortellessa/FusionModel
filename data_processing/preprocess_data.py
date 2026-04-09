@@ -6,8 +6,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, "../.."))
 sys.path.insert(0, parent_dir)
 
-from Dataloader.split import split_dataset
-from Dataloader.preprocess_data import preprocess_and_save
+from GripFusionNet_split import split_dataset
+from GripFusionNet_preprocess_data import preprocess_and_save
 
 
 def preprocess_data(root_dir = "D:/MA/GripFusionNet/GripFusionNet/dummy_data"):

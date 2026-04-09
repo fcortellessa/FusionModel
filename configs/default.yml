@@ -35,4 +35,4 @@ data:
 
 # Example
 #  python train.py --config configs/exp_attention.yaml
-#  python train.py --config MyModel/config.yml
+#  python train.py --config config.yml

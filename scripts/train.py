@@ -1,6 +1,5 @@
 # scripts/train.py
 
-from asyncio.log import logger
 import os
 import sys
 import torch
@@ -13,14 +12,14 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, "../.."))
 sys.path.insert(0, parent_dir)
 
-from MyModel.base_model.pose_estimation_model import PoseEstimationNet
-from MyModel.data_processing.preprocess_data import preprocess_data
-from MyModel.losses.se2_losses import mse_loss, total_loss_2D_vector
-from MyModel.losses.absolute_pose_error import absolute_pose_error_x_rot
-from MyModel.losses.original_loss import total_loss
-from MyModel.utils.utils import setup_logger, load_config, save_checkpoint, load_checkpoint
+from base_model.pose_estimation_model import PoseEstimationNet
+from data_processing.preprocess_data import preprocess_data
+from losses.se2_losses import mse_loss, total_loss_2D_vector
+from losses.absolute_pose_error import absolute_pose_error_x_rot
+from losses.original_loss import total_loss
+from utils.utils import setup_logger, load_config, save_checkpoint, load_checkpoint
 
-from Dataloader.dataloader_preprocessed import get_dataloaders
+from data_processing.dataloader_preprocessed import get_dataloaders
 
 logger = logging.getLogger("GripFusionNet")
 logger = setup_logger()
@@ -98,7 +97,7 @@ def train_loop(model, num_epochs, train_loader, val_loader, optimizer, criterion
         # Save "best" model separately if you want
         if epoch_loss < best_loss:
             best_loss = epoch_loss
-            save_checkpoint(model, optimizer, epoch, epoch_loss, checkpoint_dir="MyModel/checkpoints/best")
+            save_checkpoint(model, optimizer, epoch, epoch_loss, checkpoint_dir="checkpoints/best")
 
         # Validation phase
         model.eval()
@@ -186,5 +185,5 @@ if __name__ == "__main__":
 
     # main(args.config)
 
-    # main("D:/MA/GripFusionNet/GripFusionNet/MyModel/configs/default.yml")
-    main("D:/MA/GripFusionNet/GripFusionNet/MyModel/configs/gated.yml")
+    # main("Dconfigs/default.yml")
+    main("configs/gated.yml")

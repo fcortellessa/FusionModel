@@ -524,14 +524,14 @@ if __name__ == "__main__":
 
 
     train_loader, val_loader, test_loader = get_dataloaders(
-        root_dir="D:/MA/GripFusionNet/GripFusionNet/dummy_data/Data_split",
+        root_dir="Data/Data_split",
         batch_size=3,
         shuffle=True
     )
 
     # checkpoint and logging
-    checkpoint_path = "D:/MA/GripFusionNet/GripFusionNet/MyModel/logging/pose_estimation_checkpoint.pt"
-    logging_dir = "D:/MA/GripFusionNet/GripFusionNet/MyModel/logging/logging.txt"
+    checkpoint_path = "logging/pose_estimation_checkpoint.pt"
+    logging_dir = "logging/logging.txt"
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
     os.makedirs(os.path.dirname(logging_dir), exist_ok=True)
 
