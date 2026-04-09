@@ -3,3 +3,6 @@ __pychache__/
 *archive
 .venv/
 Data/
+logs/
+checkpoints/
+yolo26n.pt
