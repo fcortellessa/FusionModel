@@ -37,7 +37,7 @@ def setup_logger(log_dir="logs"):
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    return logger
+    return logger, log_file
 
 
 def save_checkpoint(model, optimizer, epoch, loss, checkpoint_dir="checkpoints", interval=1):

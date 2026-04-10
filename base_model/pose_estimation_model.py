@@ -76,11 +76,9 @@ class PoseEstimationNet(nn.Module):
             dummy_feat = self.forward_single_stream(dummy_input, extractor)
             feat_dim = dummy_feat.shape[1]
 
-        if fusion == "concat":
-            self.fusion = build_fusion(fusion, feat_dim, len(streams))
-            self.weights = None  # No weights for concat
-        else:
-            self.fusion, self.weights = build_fusion(fusion, feat_dim, len(streams))
+        # build_fusion returns a single fusion module instance
+        self.fusion = build_fusion(fusion, feat_dim, len(streams))
+        self.weights = None
 
         fused_dim = feat_dim * len(streams) if fusion == "concat" else feat_dim
 
@@ -156,11 +154,12 @@ class PoseEstimationNet(nn.Module):
             features.append(feat)
 
         # Fuse features (Shape: [Batch, Fused_Dim])
-        if "gate" in self.fusion.__class__.__name__.lower():
-            fused, fusion_weights = self.fusion(features)
+        fusion_out = self.fusion(features)
+        if isinstance(fusion_out, tuple):
+            fused, fusion_weights = fusion_out
             avg_fusion_weights = fusion_weights.mean(dim=0)  # Average weights across batch for logging
         else:
-            fused = self.fusion(features)
+            fused = fusion_out
             avg_fusion_weights = None
 
         # Run through separate heads
