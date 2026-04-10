@@ -40,14 +40,15 @@ def setup_logger(log_dir="logs"):
     return logger
 
 
-def save_checkpoint(model, optimizer, epoch, loss, checkpoint_dir="checkpoints"):
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}_loss_{loss:.4f}.pth")
-    torch.save({
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss,
+def save_checkpoint(model, optimizer, epoch, loss, checkpoint_dir="checkpoints", interval=1):
+    if epoch % interval == 0:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}_loss_{loss:.4f}.pth")
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
     }, checkpoint_path)
     return checkpoint_path
 

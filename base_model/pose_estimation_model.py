@@ -156,7 +156,12 @@ class PoseEstimationNet(nn.Module):
             features.append(feat)
 
         # Fuse features (Shape: [Batch, Fused_Dim])
-        fused, fusion_weights = self.fusion(features)
+        if "gate" in self.fusion.__class__.__name__.lower():
+            fused, fusion_weights = self.fusion(features)
+            avg_fusion_weights = fusion_weights.mean(dim=0)  # Average weights across batch for logging
+        else:
+            fused = self.fusion(features)
+            avg_fusion_weights = None
 
         # Run through separate heads
         rotation = self.rot_head(fused)
@@ -172,5 +177,5 @@ class PoseEstimationNet(nn.Module):
             "rotation": rotation,   # Shape: [B, 4] for quat
             "trans": translation,    # Shape: [B, 3]
             "pose": torch.cat([translation, rotation], dim=-1)  # Shape: [B, 7]
-        }, fusion_weights.detach().mean(dim=0) # return mean fusion weights for logging
+        }, avg_fusion_weights  # return mean fusion weights for logging
         

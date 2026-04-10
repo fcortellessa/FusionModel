@@ -28,7 +28,7 @@ logger = setup_logger()
 def get_optimizer(model, lr=0.001):
     return torch.optim.Adam(model.parameters(), lr=lr)
 
-def train_loop(model, num_epochs, train_loader, val_loader, optimizer, criterion, device, last_epoch=0):
+def train_loop(model, num_epochs, train_loader, val_loader, optimizer, criterion, device, last_epoch=0, saving_interval=1):
     for epoch in range(last_epoch, num_epochs):
         model.train()
         train_metrics = {
@@ -80,21 +80,26 @@ def train_loop(model, num_epochs, train_loader, val_loader, optimizer, criterion
             tqdm_bar.set_postfix(loss=f"{loss.item():.4f}")
 
         # Calculate average metrics
-        fw_str = [f"{w:.2f}" for w in fusion_weights.tolist()]
+        if fusion_weights is not None:
+            fusion_weights_str = [f"{w:.2f}" for w in fusion_weights.tolist()]
+        else:
+            fusion_weights_str = "None"
         tqdm_bar.set_postfix({
             "loss": f"{loss.item():.3f}",
-            "gates": f"{fw_str}" 
+            "gates": f"{fusion_weights_str}" 
         })
 
-        avg_loss = train_metrics["loss"] / len(train_loader)
+        epoch_loss = train_metrics["loss"] / len(train_loader)    # Average loss per batch over the epoch = total loss for the epoch
         avg_q = train_metrics["loss_q"] / len(train_loader)
-        logger.info(f"Epoch {epoch+1} Complete | Avg Loss: {avg_loss:.4f} | Avg Quat Loss: {avg_q:.4f}")
+        logger.info(f"Epoch {epoch+1} Complete | Avg Loss: {epoch_loss:.4f} | Avg Quat Loss: {avg_q:.4f}")
 
         # --- SAVE CHECKPOINT ---
-        # Save every epoch
-        save_checkpoint(model, optimizer, epoch, epoch_loss)
+        # Save every n epochs or based on some condition (e.g., improvement)
+
+        save_checkpoint(model, optimizer, epoch, epoch_loss, interval=saving_interval)
 
         # Save "best" model separately if you want
+        best_loss = float('inf') 
         if epoch_loss < best_loss:
             best_loss = epoch_loss
             save_checkpoint(model, optimizer, epoch, epoch_loss, checkpoint_dir="checkpoints/best")
@@ -105,7 +110,7 @@ def train_loop(model, num_epochs, train_loader, val_loader, optimizer, criterion
         with torch.no_grad():
             for batch in val_loader:
                 batch = {k: v.to(device) for k, v in batch.items()}
-                pose_pred = model(batch)
+                pose_pred, fusion_weights = model(batch)
                 _, _, at, arx = absolute_pose_error_x_rot(pose_pred["pose"], batch["pose"])
                 val_abs_trans += at.item()
                 val_abs_rot_x += arx.item()
