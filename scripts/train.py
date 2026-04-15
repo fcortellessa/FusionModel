@@ -305,7 +305,7 @@ def train_loop(
         if tb_writer is not None:
             tb_writer.close()
 
-def main(config_path, checkpointing=False):
+def main(config_path, checkpointing=False, batch_size=None, optimizer=None):
   
     cfg = load_config(config_path)
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -319,14 +319,14 @@ def main(config_path, checkpointing=False):
     if not os.path.exists(preprocessed_dir):
         preprocess_data(root_dir=data_dir)
     
-
+    batch_size = batch_size or cfg["training"]["batch_size"]
     train_loader, val_loader, test_loader = get_dataloaders(
         root_dir=os.path.join(data_dir, "Data_split"),
-        batch_size=3,
+        batch_size=batch_size,
         shuffle=True
     )
 
-    checkpoint_path = f"checkpoints/checkpoint_{cfg['model']['fusion']}_lr{cfg['training']['lr']:.0e}_batch{cfg['training']['batch_size']}.pth"
+    checkpoint_path = f"checkpoints/checkpoint_{cfg['model']['fusion']}_lr{cfg['training']['lr']:.0e}_batch{batch_size}.pth"
     model = PoseEstimationNet(
         model_name=cfg["model"]["backbone"],
         streams=cfg["model"]["streams"],
@@ -392,14 +392,18 @@ def main(config_path, checkpointing=False):
 
 
 if __name__ == "__main__":
-    # import argparse
+    import argparse
 
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument("--config", type=str, required=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--batch_size", type=int, required=False, help="Override batch size from config")
+    parser.add_argument("--optimizer", type=str, required=False, help="Override optimizer from config")
 
-    # args = parser.parse_args()
+    args = parser.parse_args()
+    batch_size = args.batch_size
+    optimizer = args.optimizer
 
-    # main(args.config)
+    main(args.config, batch_size=batch_size, optimizer=optimizer)
 
     # main("D:/MA/GripFusionNet/GripFusionNet/MyModel/configs/default.yml")
-    main("configs/gated.yml", checkpointing = False)
+    # main("configs/gated.yml", checkpointing = False)

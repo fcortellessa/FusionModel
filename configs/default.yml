@@ -15,7 +15,7 @@ model:
 training:
   lr: 0.001
   batch_size: 16
-  epochs: 250
+  epochs: 150
   num_workers: 4
   optimizer: adam
   dropout_rot: 0.3

@@ -49,5 +49,5 @@ class GatedFusion(BaseFusion):
         # 4. Apply weighted sum
         out = (stacked * weights.unsqueeze(-1)).sum(dim=1)
 
-        print(f"GatedFusion Logits: {logits}, weights: {weights.squeeze()}")  # Debug print
+        # print(f"GatedFusion Logits: {logits}, weights: {weights.squeeze()}")  # Debug print
         return out, weights#.detach().mean(dim=0) # return weights for logging

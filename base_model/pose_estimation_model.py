@@ -8,6 +8,13 @@ Key components:
     (e.g., concatenation, attention-based) can be specified in the configuration.
 - Pose Head: The head of the model takes the fused features and outputs the predicted pose. Different head architectures can be used depending on the desired output format for the pose.
 The forward pass of the model processes each input stream through its respective backbone, extracts and processes the P3, P4, P5 features, fuses them, and then passes the fused features through the head to get the final pose prediction.
+
+
+ToDo:
+1. Learning Rate Scheduler: Implement a learning rate scheduler that adjusts the learning rate during training based on validation performance or a predefined schedule. This can help improve convergence and prevent overfitting.
+2. Dropout and Regularization: Add dropout layers and other regularization techniques to the model to prevent overfitting, especially when training on smaller datasets.
+3. Change optimizer: Experiment with different optimizers (e.g., AdamW, RMSprop) to see if they improve training stability and convergence.
+
 """
 import os
 import sys
