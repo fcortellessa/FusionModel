@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load your CSV (replace with your file path)
-df = pd.read_csv("logs/metrics_model_copy.csv")
+df = pd.read_csv("logs/train_20260415_122920_metrics.csv")
 
 # Ensure numeric columns
 numeric_cols = [

@@ -24,7 +24,7 @@ from data_processing.preprocess_data import preprocess_data
 from losses.se2_losses import mse_loss, total_loss_2D_vector
 from losses.absolute_pose_error import absolute_pose_error_x_rot
 from losses.original_loss import total_loss
-from utils.utils import setup_logger, load_config, save_checkpoint, load_checkpoint
+from utils.utils import setup_logger, load_config, save_checkpoint, load_checkpoint, get_optimizer
 
 from data_processing.dataloader_preprocessed import get_dataloaders
 
@@ -75,9 +75,6 @@ def _format_fusion_weights(fusion_weights):
         return ""
     return "[" + ",".join(f"{weight:.4f}" for weight in fusion_weights.tolist()) + "]"
 
-
-def get_optimizer(model, lr=0.001):
-    return torch.optim.Adam(model.parameters(), lr=lr)
 
 def train_loop(
     model,
@@ -357,6 +354,7 @@ def main(config_path, checkpointing=False, batch_size=None, optimizer=None):
 
     optimizer = get_optimizer(
         model,
+        optimizer_name=cfg["training"]["optimizer"],
         lr=cfg["training"]["lr"]
     )
 

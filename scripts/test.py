@@ -1,15 +1,24 @@
 # test script
 import time
+import os
+import sys
 import torch
 import pandas as pd
+
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
+sys.path.insert(0, parent_dir)
+
 from base_model.pose_estimation_model import PoseEstimationNet
-from utils.utils import load_checkpoint, load_config
+from data_processing.dataloader_preprocessed import get_test_dataloader
+from utils.utils import load_checkpoint, load_config, get_optimizer
 
 
 
-model_path = "checkpoints/best_model.pth"
-config_path = "configs/pose_estimation.yaml"
-test_data_path = "data/test_data.pt"
+model_path = "checkpoints/best/checkpoint_epoch_4_loss_16_4560.pth"
+config_path = "configs/gated.yml"
+root_data_path = "Data/Data_split/"
 
 
 if __name__ == "__main__":
@@ -28,11 +37,18 @@ if __name__ == "__main__":
         use_batchnorm=cfg["training"]["use_batchnorm"]
     )
     # load state dict
-    model.load_state_dict(load_checkpoint(model_path, device="cpu")["model_state_dict"])
+    test_loader = get_test_dataloader(
+        root_dir=root_data_path,
+        batch_size=cfg["training"]["batch_size"],
+        shuffle=True
+    )
+    optimizer = get_optimizer(model=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
+    model.load_state_dict(load_checkpoint(model, optimizer, model_path, device="cpu")["model_state_dict"])
     print("Model loaded successfully!")
 
     # load test data
-    test_data = torch.load(test_data_path)
+    # test_data = torch.load(test_data_path)
+
     # run inference
     model.eval()
     csv_results = {
@@ -43,7 +59,7 @@ if __name__ == "__main__":
         "gt_pose": []
     }
     with torch.no_grad():
-        for i, sample in enumerate(test_data):
+        for i, sample in enumerate(test_loader):
             inputs = {k: v.unsqueeze(0) for k, v in sample.items() if k != "pose"}
             target = sample["pose"].unsqueeze(0)
 

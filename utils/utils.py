@@ -52,13 +52,32 @@ def save_checkpoint(model, optimizer, epoch, loss, checkpoint_dir="checkpoints",
     }, checkpoint_path)
     return checkpoint_path
 
-def load_checkpoint(model, optimizer, checkpoint_path, device):
+def load_checkpoint(model, optimizer, checkpoint_path, device, strict=False):
+    """
+    Load checkpoint with model and optimizer state dicts.
+    
+    Args:
+        model: The model to load state into
+        optimizer: The optimizer to load state into
+        checkpoint_path: Path to checkpoint file
+        device: Device to load to
+        strict: Whether to strictly enforce matching keys (default False for robustness)
+    
+    Returns:
+        checkpoint dict with 'epoch', 'loss', 'model_state_dict', 'optimizer_state_dict'
+    """
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
-    return epoch, loss
+    return checkpoint
+
+
+
+def get_optimizer(model, optimizer_name="Adam", lr=0.001):
+    if optimizer_name == "Adam":
+        return torch.optim.Adam(model.parameters(), lr=lr)
+    else:
+        raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
 # Example usage:
 # logger = setup_logger()

@@ -48,3 +48,21 @@ def get_dataloaders(
     test_loader = DataLoader(test_set, batch_size=1, shuffle=False, **loader_args)
 
     return train_loader, val_loader, test_loader
+
+def get_test_dataloader(
+    root_dir,
+    batch_size=16,
+    shuffle=True,
+    num_workers=2
+):
+    test_set = PreprocessedTactileDataset(os.path.join(root_dir, 'test_preprocessed'))
+
+    loader_args = dict(
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        collate_fn=tactile_collate_fn
+    )
+    test_loader = DataLoader(test_set, batch_size=1, shuffle=False, **loader_args)
+
+    return test_loader
