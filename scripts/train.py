@@ -5,6 +5,8 @@ import sys
 import csv
 import time
 import subprocess
+import platform
+import socket
 import torch
 import tqdm
 
@@ -29,6 +31,10 @@ from data_processing.dataloader_preprocessed import get_dataloaders
 logger, log_file = setup_logger()
 
 
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
 def start_tensorboard(logdir, port=6006):
     if SummaryWriter is None:
         logger.warning("TensorBoard logging is unavailable because torch.utils.tensorboard could not be imported.")
@@ -45,18 +51,24 @@ def start_tensorboard(logdir, port=6006):
         "--host",
         "127.0.0.1",
     ]
+    # Platform-specific kwargs to suppress console windows and ensure proper process group handling
+    kwargs = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+    
+    if platform.system() == "Windows":
+        # This constant only exists on Windows
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        pass
 
     try:
-        return subprocess.Popen(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-        )
+        logger.info(f"Attempting to start TensorBoard at http://127.0.0.1:{port}")
+        return subprocess.Popen(command, **kwargs)
     except Exception as exc:
         logger.warning(f"Could not start TensorBoard automatically: {exc}")
         return None
-
 
 def _format_fusion_weights(fusion_weights):
     if fusion_weights is None:
@@ -309,6 +321,7 @@ def main(config_path, checkpointing=False, batch_size=None, optimizer=None):
   
     cfg = load_config(config_path)
     base_dir = os.path.dirname(os.path.abspath(__file__))
+
     metrics_csv_path = log_file.replace(".log", "_metrics.csv")
     tensorboard_log_dir = os.path.join("logs", "tensorboard", os.path.splitext(os.path.basename(log_file))[0])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -319,7 +332,7 @@ def main(config_path, checkpointing=False, batch_size=None, optimizer=None):
     if not os.path.exists(preprocessed_dir):
         preprocess_data(root_dir=data_dir)
     
-    batch_size = batch_size or cfg["training"]["batch_size"]
+    batch_size = batch_size if batch_size is not None else cfg["training"]["batch_size"]
     train_loader, val_loader, test_loader = get_dataloaders(
         root_dir=os.path.join(data_dir, "Data_split"),
         batch_size=batch_size,
@@ -327,6 +340,7 @@ def main(config_path, checkpointing=False, batch_size=None, optimizer=None):
     )
 
     checkpoint_path = f"checkpoints/checkpoint_{cfg['model']['fusion']}_lr{cfg['training']['lr']:.0e}_batch{batch_size}.pth"
+    
     model = PoseEstimationNet(
         model_name=cfg["model"]["backbone"],
         streams=cfg["model"]["streams"],
@@ -357,6 +371,10 @@ def main(config_path, checkpointing=False, batch_size=None, optimizer=None):
         "seed": cfg.get("training", {}).get("seed", ""),
     }
 
+    # TensorBoard and CSV logging setup
+    tb_port = 6006
+    tensorboard_process = None
+
     logger.info(
         f"run_start log_file={log_file} metrics_csv={metrics_csv_path} "
         f"tensorboard_dir={tensorboard_log_dir} "
@@ -364,31 +382,38 @@ def main(config_path, checkpointing=False, batch_size=None, optimizer=None):
         f"head_type={run_metadata['head_type']} batch_size={run_metadata['batch_size']} lr={run_metadata['lr']}"
     )
     tensorboard_process = start_tensorboard(os.path.join('logs', 'tensorboard'))
-    if tensorboard_process is not None:
-        logger.info(
-            f"tensorboard_start status=started run_dir={tensorboard_log_dir} url=http://127.0.0.1:6006"
-        )
+    if is_port_in_use(tb_port):
+        logger.info(f"TensorBoard already running on port {tb_port}. Logging to existing instance.")
     else:
-        logger.info(
-            f"tensorboard_start status=manual run_dir={tensorboard_log_dir} cmd=tensorboard --logdir logs/tensorboard url=http://127.0.0.1:6006"
-        )
+        # Pass the parent log directory so it sees all runs
+        tensorboard_process = start_tensorboard(os.path.join('logs', 'tensorboard'), port=tb_port)
+        
+    if tensorboard_process is not None:
+        logger.info(f"tensorboard_start status=started run_dir={tensorboard_log_dir} url=http://127.0.0.1:{tb_port}")
+    else:
+        logger.info(f"tensorboard_start status=attached run_dir={tensorboard_log_dir} url=http://127.0.0.1:{tb_port}")
 
+
+    # Training
     loss_function = total_loss
 
-    train_loop(
-        model=model,
-        num_epochs=cfg["training"]["epochs"],
-        train_loader=train_loader,
-        val_loader=val_loader,
-        optimizer=optimizer,
-        criterion=loss_function,
-        device=device, 
-        checkpointing=checkpointing,
-        checkpoint_path=checkpoint_path,
-        metrics_csv_path=metrics_csv_path,
-        run_metadata=run_metadata,
-        tensorboard_log_dir=tensorboard_log_dir,
-    )
+    try:
+        train_loop(
+            model=model,
+            num_epochs=cfg["training"]["epochs"],
+            train_loader=train_loader,
+            val_loader=val_loader,
+            optimizer=optimizer,
+            criterion=loss_function,
+            device=device, 
+            checkpointing=checkpointing,
+            checkpoint_path=checkpoint_path,
+            metrics_csv_path=metrics_csv_path,
+            run_metadata=run_metadata,
+            tensorboard_log_dir=tensorboard_log_dir,
+        )
+    finally:
+        pass
 
 
 if __name__ == "__main__":
