@@ -4,8 +4,14 @@ import os
 import sys
 import csv
 import time
+import subprocess
 import torch
 import tqdm
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:  # pragma: no cover - optional dependency
+    SummaryWriter = None
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
@@ -16,11 +22,40 @@ from data_processing.preprocess_data import preprocess_data
 from losses.se2_losses import mse_loss, total_loss_2D_vector
 from losses.absolute_pose_error import absolute_pose_error_x_rot
 from losses.original_loss import total_loss
-from utils.utils2 import setup_logger, load_config, save_checkpoint, load_checkpoint
+from utils.utils import setup_logger, load_config, save_checkpoint, load_checkpoint
 
 from data_processing.dataloader_preprocessed import get_dataloaders
 
 logger, log_file = setup_logger()
+
+
+def start_tensorboard(logdir, port=6006):
+    if SummaryWriter is None:
+        logger.warning("TensorBoard logging is unavailable because torch.utils.tensorboard could not be imported.")
+        return None
+
+    command = [
+        sys.executable,
+        "-m",
+        "tensorboard.main",
+        "--logdir",
+        logdir,
+        "--port",
+        str(port),
+        "--host",
+        "127.0.0.1",
+    ]
+
+    try:
+        return subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+    except Exception as exc:
+        logger.warning(f"Could not start TensorBoard automatically: {exc}")
+        return None
 
 
 def _format_fusion_weights(fusion_weights):
@@ -42,12 +77,20 @@ def train_loop(
     device,
     last_epoch=0,
     checkpointing=False,
+    checkpoint_path=None,
     metrics_csv_path=None,
     run_metadata=None,
+    tensorboard_log_dir=None,
 ):
-    best_loss = float("inf")
+    best_val_loss = float("inf")
+    best_checkpoint_path = os.path.join("checkpoints", "best", "best.pth")
+    if os.path.isdir(os.path.dirname(best_checkpoint_path)):
+        for filename in os.listdir(os.path.dirname(best_checkpoint_path)):
+            if filename.endswith(".pth"):
+                os.remove(os.path.join(os.path.dirname(best_checkpoint_path), filename))
     csv_file = None
     csv_writer = None
+    tb_writer = None
     metadata = run_metadata or {}
 
     if metrics_csv_path is not None:
@@ -80,6 +123,18 @@ def train_loop(
             ],
         )
         csv_writer.writeheader()
+
+    if tensorboard_log_dir is not None:
+        if SummaryWriter is None:
+            logger.warning("TensorBoard is unavailable because torch.utils.tensorboard could not be imported.")
+        else:
+            os.makedirs(tensorboard_log_dir, exist_ok=True)
+            tb_writer = SummaryWriter(log_dir=tensorboard_log_dir)
+            if metadata:
+                tb_writer.add_text(
+                    "run/metadata",
+                    "\n".join(f"{key}: {value}" for key, value in metadata.items()),
+                )
 
     try:
         for epoch in range(last_epoch, num_epochs):
@@ -152,30 +207,68 @@ def train_loop(
                 f"train_abs_rot_x={train_abs_rot_x:.4f} fusion_weights={fw_str} epoch_time_sec={epoch_time:.2f}"
             )
 
-            checkpoint_path = ""
-            if epoch_avg_loss < best_loss:
-                best_loss = epoch_avg_loss
-                checkpoint_path = save_checkpoint(model, optimizer, epoch, epoch_avg_loss, checkpoint_dir="checkpoints/best")
+            if tb_writer is not None:
+                global_step = epoch + 1
+                tb_writer.add_scalar("loss/train_total", epoch_avg_loss, global_step)
+                tb_writer.add_scalar("loss/train_q", avg_q, global_step)
+                tb_writer.add_scalar("loss/train_y", avg_y, global_step)
+                tb_writer.add_scalar("loss/train_z", avg_z, global_step)
+                tb_writer.add_scalar("metrics/train_abs_trans", train_abs_trans, global_step)
+                tb_writer.add_scalar("metrics/train_abs_rot_x", train_abs_rot_x, global_step)
 
             # Validation phase
             model.eval()
+            val_loss_total = 0.0
             val_abs_trans, val_abs_rot_x = 0.0, 0.0
             with torch.no_grad():
                 for batch in val_loader:
                     batch = {k: v.to(device) for k, v in batch.items()}
+                    pose = batch["pose"].to(device)
                     pose_pred, _ = model(batch)
-                    _, _, at, arx = absolute_pose_error_x_rot(pose_pred["pose"], batch["pose"])
+                    val_loss, _, _, _ = criterion(pose, pose_pred["pose"])
+                    _, _, at, arx = absolute_pose_error_x_rot(pose_pred["pose"], pose)
+                    val_loss_total += val_loss.item()
                     val_abs_trans += at.item()
                     val_abs_rot_x += arx.item()
 
+            val_loss_avg = val_loss_total / num_val
             val_abs_trans_avg = val_abs_trans / num_val
             val_abs_rot_x_avg = val_abs_rot_x / num_val
 
+            # Save checkpoint when validation improves; keep only the current best.
+            checkpoint_path = ""
+            if val_loss_avg < best_val_loss:
+                best_val_loss = val_loss_avg
+                best_dir = os.path.dirname(best_checkpoint_path)# Todo!!!
+                os.makedirs(best_dir, exist_ok=True)
+                for filename in os.listdir(best_dir):
+                    if filename.endswith(".pth"):
+                        os.remove(os.path.join(best_dir, filename))
+                checkpoint_path = save_checkpoint(
+                    model,
+                    optimizer,
+                    epoch,
+                    val_loss_avg,
+                    checkpoint_dir=best_dir,
+                )
+
             logger.info(
-                f"epoch={epoch+1}/{num_epochs} train_loss={epoch_avg_loss:.4f} train_abs_trans={train_abs_trans:.4f} "
+                f"epoch={epoch+1}/{num_epochs} train_loss={epoch_avg_loss:.4f} val_loss={val_loss_avg:.4f} "
+                f"train_abs_trans={train_abs_trans:.4f} "
                 f"train_abs_rot_x={train_abs_rot_x:.4f} val_abs_trans={val_abs_trans_avg:.4f} "
                 f"val_abs_rot_x={val_abs_rot_x_avg:.4f} fusion_weights={fw_str}"
             )
+
+            if tb_writer is not None:
+                global_step = epoch + 1
+                tb_writer.add_scalar("loss/val_total", val_loss_avg, global_step)
+                tb_writer.add_scalar("metrics/val_abs_trans", val_abs_trans_avg, global_step)
+                tb_writer.add_scalar("metrics/val_abs_rot_x", val_abs_rot_x_avg, global_step)
+                tb_writer.add_scalar("training/best_val_loss", best_val_loss, global_step)
+                tb_writer.add_scalar("training/epoch_time_sec", epoch_time, global_step)
+                tb_writer.add_scalar("training/lr", optimizer.param_groups[0]["lr"], global_step)
+                if fusion_weights is not None:
+                    tb_writer.add_text("fusion/weights", fw_str, global_step)
 
             logger.debug(f"Epoch {epoch+1} detailed: q={avg_q:.4f}, y={avg_y:.4f}")
 
@@ -193,7 +286,7 @@ def train_loop(
                         "val_abs_trans": f"{val_abs_trans_avg:.6f}",
                         "val_abs_rot_x": f"{val_abs_rot_x_avg:.6f}",
                         "fusion_weights": fw_str,
-                        "best_loss": f"{best_loss:.6f}",
+                        "best_loss": f"{best_val_loss:.6f}",
                         "epoch_time_sec": f"{epoch_time:.2f}",
                         "checkpoint_path": checkpoint_path,
                         "model_name": metadata.get("model_name", ""),
@@ -209,12 +302,15 @@ def train_loop(
     finally:
         if csv_file is not None:
             csv_file.close()
+        if tb_writer is not None:
+            tb_writer.close()
 
 def main(config_path, checkpointing=False):
   
     cfg = load_config(config_path)
     base_dir = os.path.dirname(os.path.abspath(__file__))
     metrics_csv_path = log_file.replace(".log", "_metrics.csv")
+    tensorboard_log_dir = os.path.join("logs", "tensorboard", os.path.splitext(os.path.basename(log_file))[0])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Preprocess data (split and transform) if directory doesn't exist
@@ -230,6 +326,7 @@ def main(config_path, checkpointing=False):
         shuffle=True
     )
 
+    checkpoint_path = f"checkpoints/checkpoint_{cfg['model']['fusion']}_lr{cfg['training']['lr']:.0e}_batch{cfg['training']['batch_size']}.pth"
     model = PoseEstimationNet(
         model_name=cfg["model"]["backbone"],
         streams=cfg["model"]["streams"],
@@ -256,15 +353,25 @@ def main(config_path, checkpointing=False):
         "head_type": cfg["model"]["head_type"],
         "freeze_backbone": cfg["model"]["freeze_backbone"],
         "lr": cfg["training"]["lr"],
-        "batch_size": 3,
+        "batch_size": cfg["training"]["batch_size"],
         "seed": cfg.get("training", {}).get("seed", ""),
     }
 
     logger.info(
         f"run_start log_file={log_file} metrics_csv={metrics_csv_path} "
+        f"tensorboard_dir={tensorboard_log_dir} "
         f"model={run_metadata['model_name']} fusion={run_metadata['fusion']} "
         f"head_type={run_metadata['head_type']} batch_size={run_metadata['batch_size']} lr={run_metadata['lr']}"
     )
+    tensorboard_process = start_tensorboard(os.path.join('logs', 'tensorboard'))
+    if tensorboard_process is not None:
+        logger.info(
+            f"tensorboard_start status=started run_dir={tensorboard_log_dir} url=http://127.0.0.1:6006"
+        )
+    else:
+        logger.info(
+            f"tensorboard_start status=manual run_dir={tensorboard_log_dir} cmd=tensorboard --logdir logs/tensorboard url=http://127.0.0.1:6006"
+        )
 
     loss_function = total_loss
 
@@ -277,8 +384,10 @@ def main(config_path, checkpointing=False):
         criterion=loss_function,
         device=device, 
         checkpointing=checkpointing,
+        checkpoint_path=checkpoint_path,
         metrics_csv_path=metrics_csv_path,
-        run_metadata=run_metadata
+        run_metadata=run_metadata,
+        tensorboard_log_dir=tensorboard_log_dir,
     )
 
 

@@ -47,26 +47,21 @@ def absolute_pose_error_x_rot(pred, target):
         pred: (N, 7) tensor [x, y, z, qx, qy, qz, qw]
         target: (N, 7) tensor [x, y, z, qx, qy, qz, qw]
     """
-    # --- 1. Translation Error (y/z only) ---
+    # Euclidean Distance for translation error
     trans_error = torch.norm(pred[:, 1:3] - target[:, 1:3], dim=1)
     y_error = torch.abs(pred[:, 1] - target[:, 1])
     z_error = torch.abs(pred[:, 2] - target[:, 2])
-    # Debug prints to check translation errors
-    # tqdm.tqdm_bar.write(f"Translation Error (y/z): {y_error.mean():.4f}, {z_error.mean():.4f}")
-    # print(f"Translation Error (y/z): {y_error}, {z_error},")
-    # print(f"Target Translation (y/z): {target[:, 1:3]}, Predicted Translation (y/z): {pred[:, 1:3]}")
 
-    # --- 2. Rotation Error (About X-axis only) ---
+
     def get_x_rotation(q):
         q = F.normalize(q, p=2, dim=1, eps=1e-7)
         x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
         
-        # Roll (x-axis rotation) formula: atan2(2(wx + yz), 1 - 2(x^2 + y^2))
+        # Used formula: atan2(2(wx + yz), 1 - 2(x^2 + y^2))
         sinr_cosp = 2 * (w * x + y * z)
         cosr_cosp = 1 - 2 * (x**2 + y**2)
         return torch.atan2(sinr_cosp, cosr_cosp)
 
-    # Calculate roll for both
     roll_pred = get_x_rotation(pred[:, 3:])
     roll_target = get_x_rotation(target[:, 3:])
 

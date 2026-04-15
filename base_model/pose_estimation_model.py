@@ -33,6 +33,7 @@ class PoseEstimationNet(nn.Module):
         super().__init__()
 
         self.streams = streams
+        self.fusion_type = fusion
         self.feature_extractors = nn.ModuleDict()
         self.in_channels = {}
 
