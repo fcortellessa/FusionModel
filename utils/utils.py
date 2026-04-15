@@ -40,10 +40,9 @@ def setup_logger(log_dir="logs"):
     return logger, log_file
 
 
-def save_checkpoint(model, optimizer, epoch, loss, checkpoint_dir="checkpoints", interval=1):
+def save_checkpoint(model, optimizer, epoch, loss, checkpoint_path="checkpoints", interval=1):
     if epoch % interval == 0:
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}_loss_{loss:.4f}.pth")
+        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
@@ -76,14 +75,14 @@ def load_checkpoint(model, optimizer, checkpoint_path, device, strict=False):
 def get_optimizer(model, optimizer_name="Adam", lr=0.001):
     if optimizer_name == "Adam":
         return torch.optim.Adam(model.parameters(), lr=lr)
+    elif optimizer_name == "AdamW":
+        return torch.optim.AdamW(model.parameters(), lr=lr)
+    elif optimizer_name == "RMSprop":
+        return torch.optim.RMSprop(model.parameters(), lr=lr)
+    elif optimizer_name == "SGD":
+        return torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+    elif optimizer_name == "MuSGD":
+        from ultralytics.optim import MuSGD
+        return MuSGD(model.parameters(), lr=lr, momentum=0.9)
     else:
-        raise ValueError(f"Unsupported optimizer: {optimizer_name}")
-
-# Example usage:
-# logger = setup_logger()
-# logger.info("This is an info message.")
-
-# checkpoint_path = save_checkpoint(model, optimizer, epoch, loss)
-# logger.info(f"Checkpoint saved at: {checkpoint_path}")
-
-# 
+        raise ValueError(f"Unsupported optimizer: {optimizer_name}. Available options: Adam, AdamW, RMSprop, SGD, MuSGD.")
