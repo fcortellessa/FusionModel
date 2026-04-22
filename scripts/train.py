@@ -96,6 +96,24 @@ def _get_lr_by_group(optimizer, group_name):
     return float(optimizer.param_groups[0]["lr"])
 
 
+def _to_float(value):
+    if isinstance(value, torch.Tensor):
+        return float(value.detach().item())
+    return float(value)
+
+
+class UncertaintyWeighting(torch.nn.Module):
+    def __init__(self, init_log_var_rot=0.0, init_log_var_trans=0.0):
+        super().__init__()
+        self.log_var_rot = torch.nn.Parameter(torch.tensor(float(init_log_var_rot), dtype=torch.float32))
+        self.log_var_trans = torch.nn.Parameter(torch.tensor(float(init_log_var_trans), dtype=torch.float32))
+
+    def forward(self, loss_rot, loss_trans):
+        weighted_rot = torch.exp(-self.log_var_rot) * loss_rot + self.log_var_rot
+        weighted_trans = torch.exp(-self.log_var_trans) * loss_trans + self.log_var_trans
+        return weighted_rot + weighted_trans
+
+
 def _build_named_param_groups(model, base_lr):
     grouped_params = {
         "base": [],
@@ -140,6 +158,7 @@ def train_loop(
     optimizer,
     criterion,
     device,
+    uncertainty_module=None,
     last_epoch=0,
     checkpointing=False,
     checkpoint_path=None,
@@ -208,6 +227,10 @@ def train_loop(
                 "lr_head_rot",
                 "lr_head_y",
                 "lr_head_z",
+                "uncertainty_log_var_rot",
+                "uncertainty_log_var_trans",
+                "uncertainty_weight_rot",
+                "uncertainty_weight_trans",
                 "batch_size",
                 "seed",
             ],
@@ -249,7 +272,12 @@ def train_loop(
 
                 pose_pred, fusion_weights = model(batch)    # fusion_weights is only returned for logging/debugging purposes
 
-                loss, loss_q, loss_y, loss_z = criterion(pose, pose_pred["pose"])
+                base_loss, loss_q, loss_y, loss_z = criterion(pose, pose_pred["pose"])
+                loss_trans = loss_y + loss_z
+                if uncertainty_module is not None:
+                    loss = uncertainty_module(loss_q, loss_trans)
+                else:
+                    loss = base_loss
                 abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = absolute_pose_error_x_rot(pose_pred["pose"].detach(), pose)
 
                 # Update metrics
@@ -329,7 +357,12 @@ def train_loop(
                     batch = {k: v.to(device) for k, v in batch.items()}
                     pose = batch["pose"].to(device)
                     pose_pred, _ = model(batch)
-                    val_loss, val_q, val_y, val_z = criterion(pose, pose_pred["pose"])
+                    val_base_loss, val_q, val_y, val_z = criterion(pose, pose_pred["pose"])
+                    val_trans = val_y + val_z
+                    if uncertainty_module is not None:
+                        val_loss = uncertainty_module(val_q, val_trans)
+                    else:
+                        val_loss = val_base_loss
                     _, _, at, arx = absolute_pose_error_x_rot(pose_pred["pose"], pose)
                     val_loss_total += val_loss.item()
                     val_loss_q += val_q.item()
@@ -348,6 +381,15 @@ def train_loop(
             lr_head_rot = _get_lr_by_group(optimizer, "head_rot")
             lr_head_y = _get_lr_by_group(optimizer, "head_y")
             lr_head_z = _get_lr_by_group(optimizer, "head_z")
+            uncertainty_log_var_rot = ""
+            uncertainty_log_var_trans = ""
+            uncertainty_weight_rot = ""
+            uncertainty_weight_trans = ""
+            if uncertainty_module is not None:
+                uncertainty_log_var_rot = _to_float(uncertainty_module.log_var_rot)
+                uncertainty_log_var_trans = _to_float(uncertainty_module.log_var_trans)
+                uncertainty_weight_rot = float(torch.exp(-uncertainty_module.log_var_rot.detach()).item())
+                uncertainty_weight_trans = float(torch.exp(-uncertainty_module.log_var_trans.detach()).item())
 
             if head_lr_decay_enabled:
                 per_head_losses = {
@@ -410,6 +452,11 @@ def train_loop(
                 f"lr_head_rot={lr_head_rot:.8f} lr_head_y={lr_head_y:.8f} "
                 f"lr_head_z={lr_head_z:.8f} fusion_weights={fw_str}"
             )
+            if uncertainty_module is not None:
+                logger.info(
+                    f"uncertainty rot_log_var={uncertainty_log_var_rot:.6f} trans_log_var={uncertainty_log_var_trans:.6f} "
+                    f"rot_weight={uncertainty_weight_rot:.6f} trans_weight={uncertainty_weight_trans:.6f}"
+                )
 
             if tb_writer is not None:
                 global_step = epoch + 1
@@ -435,6 +482,11 @@ def train_loop(
                 tb_writer.add_scalar("training/lr_head_rot", lr_head_rot, global_step)
                 tb_writer.add_scalar("training/lr_head_y", lr_head_y, global_step)
                 tb_writer.add_scalar("training/lr_head_z", lr_head_z, global_step)
+                if uncertainty_module is not None:
+                    tb_writer.add_scalar("uncertainty/log_var_rot", uncertainty_log_var_rot, global_step)
+                    tb_writer.add_scalar("uncertainty/log_var_trans", uncertainty_log_var_trans, global_step)
+                    tb_writer.add_scalar("uncertainty/weight_rot", uncertainty_weight_rot, global_step)
+                    tb_writer.add_scalar("uncertainty/weight_trans", uncertainty_weight_trans, global_step)
                 for group_name, group in param_groups_by_name.items():
                     tb_writer.add_scalar(f"training/lr_{group_name}", group["lr"], global_step)
                 if fusion_weights is not None:
@@ -486,6 +538,10 @@ def train_loop(
                         "lr_head_rot": f"{lr_head_rot:.8f}",
                         "lr_head_y": f"{lr_head_y:.8f}",
                         "lr_head_z": f"{lr_head_z:.8f}",
+                        "uncertainty_log_var_rot": "" if uncertainty_log_var_rot == "" else f"{uncertainty_log_var_rot:.8f}",
+                        "uncertainty_log_var_trans": "" if uncertainty_log_var_trans == "" else f"{uncertainty_log_var_trans:.8f}",
+                        "uncertainty_weight_rot": "" if uncertainty_weight_rot == "" else f"{uncertainty_weight_rot:.8f}",
+                        "uncertainty_weight_trans": "" if uncertainty_weight_trans == "" else f"{uncertainty_weight_trans:.8f}",
                         "batch_size": metadata.get("batch_size", ""),
                         "seed": metadata.get("seed", ""),
                     }
@@ -545,6 +601,9 @@ def main(
     ).to(device)
 
     head_lr_cfg = cfg.get("training", {}).get("head_lr_decay", {})
+    uncertainty_cfg = cfg.get("training", {}).get("uncertainty_weighting", {})
+    use_uncertainty_weighting = bool(uncertainty_cfg.get("enabled", False))
+    uncertainty_module = None
     base_lr = float(cfg["training"]["lr"])
     param_groups = _build_named_param_groups(model, base_lr=base_lr)
     resolved_head_lr_cfg = {
@@ -561,6 +620,20 @@ def main(
         lr=base_lr,
     )
 
+    if use_uncertainty_weighting:
+        uncertainty_module = UncertaintyWeighting(
+            init_log_var_rot=float(uncertainty_cfg.get("init_log_var_rot", 0.0)),
+            init_log_var_trans=float(uncertainty_cfg.get("init_log_var_trans", 0.0)),
+        ).to(device)
+        uncertainty_lr_mult = float(uncertainty_cfg.get("lr_mult", 1.0))
+        optimizer.add_param_group(
+            {
+                "name": "uncertainty",
+                "params": uncertainty_module.parameters(),
+                "lr": base_lr * uncertainty_lr_mult,
+            }
+        )
+
     run_metadata = {
         "model_name": cfg["model"]["backbone"],
         "streams": cfg["model"]["streams"],
@@ -571,6 +644,7 @@ def main(
         "batch_size": batch_size,
         "seed": cfg.get("training", {}).get("seed", ""),
         "head_lr_decay": resolved_head_lr_cfg,
+        "uncertainty_weighting": uncertainty_cfg if use_uncertainty_weighting else {"enabled": False},
     }
 
     # TensorBoard and CSV logging setup
@@ -583,6 +657,13 @@ def main(
         f"model={run_metadata['model_name']} fusion={run_metadata['fusion']} "
         f"head_type={run_metadata['head_type']} batch_size={run_metadata['batch_size']} lr={run_metadata['lr']}"
     )
+    if use_uncertainty_weighting:
+        logger.info(
+            "uncertainty_weighting enabled=true "
+            f"init_log_var_rot={uncertainty_cfg.get('init_log_var_rot', 0.0)} "
+            f"init_log_var_trans={uncertainty_cfg.get('init_log_var_trans', 0.0)} "
+            f"lr_mult={uncertainty_cfg.get('lr_mult', 1.0)}"
+        )
     if is_port_in_use(tb_port):
         logger.info(f"TensorBoard already running on port {tb_port}. Logging to existing instance.")
     else:
@@ -607,6 +688,7 @@ def main(
             optimizer=optimizer,
             criterion=loss_function,
             device=device, 
+            uncertainty_module=uncertainty_module,
             checkpointing=checkpointing,
             checkpoint_path=checkpoint_path,
             metrics_csv_path=metrics_csv_path,

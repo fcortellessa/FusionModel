@@ -18,6 +18,11 @@ training:
   epochs: 150
   num_workers: 4
   optimizer: Adam
+  uncertainty_weighting:
+    enabled: true
+    init_log_var_rot: 0.0
+    init_log_var_trans: 0.0
+    lr_mult: 1.0
   dropout_rot: 0.3
   dropout_trans: 0.1
   use_batchnorm: True
