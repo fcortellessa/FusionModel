@@ -146,6 +146,7 @@ def train_loop(
     metrics_csv_path=None,
     run_metadata=None,
     tensorboard_log_dir=None,
+    head_lr_decay_cfg=None,
 ):
     best_val_loss = float("inf")
     csv_file = None
@@ -154,6 +155,29 @@ def train_loop(
     metadata = run_metadata or {}
     global_batch_step = 0
     saved_checkpoint_path = ""
+
+    head_lr_decay_cfg = head_lr_decay_cfg or {}
+    head_lr_decay_enabled = bool(head_lr_decay_cfg.get("enabled", True))
+    head_patience = int(head_lr_decay_cfg.get("patience", 3))
+    head_reduce_factor = float(head_lr_decay_cfg.get("factor", 0.3))
+    head_min_lr_mult = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
+    base_group = next((g for g in optimizer.param_groups if g.get("name") == "base"), optimizer.param_groups[0])
+    base_lr = float(base_group["lr"])
+    head_min_lrs = {
+        "q": base_lr * head_min_lr_mult,
+        "y": base_lr * head_min_lr_mult,
+        "z": base_lr * head_min_lr_mult,
+    }
+
+    param_groups_by_name = {
+        group.get("name", f"group_{idx}"): group
+        for idx, group in enumerate(optimizer.param_groups)
+    }
+    head_lr_state = {
+        "q": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_rot"},
+        "y": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_y"},
+        "z": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_z"},
+    }
 
     if metrics_csv_path is not None:
         csv_file = open(metrics_csv_path, "w", newline="", encoding="utf-8")
@@ -263,6 +287,8 @@ def train_loop(
                     tb_writer.add_scalar("train_step/grad_norm", grad_norm, global_batch_step)
                     tb_writer.add_scalar("train_step/param_norm", param_norm, global_batch_step)
                     tb_writer.add_scalar("train_step/lr", optimizer.param_groups[0]["lr"], global_batch_step)
+                    for group_name, group in param_groups_by_name.items():
+                        tb_writer.add_scalar(f"train_step/lr_{group_name}", group["lr"], global_batch_step)
 
                     if fusion_weights is not None:
                         for idx, weight in enumerate(fusion_weights.detach().cpu().flatten().tolist()):
@@ -318,6 +344,10 @@ def train_loop(
             val_z_avg = val_loss_z / num_val
             val_abs_trans_avg = val_abs_trans / num_val
             val_abs_rot_x_avg = val_abs_rot_x / num_val
+            lr_base = _get_lr_by_group(optimizer, "base")
+            lr_head_rot = _get_lr_by_group(optimizer, "head_rot")
+            lr_head_y = _get_lr_by_group(optimizer, "head_y")
+            lr_head_z = _get_lr_by_group(optimizer, "head_z")
 
             if head_lr_decay_enabled:
                 per_head_losses = {
@@ -514,11 +544,21 @@ def main(
         use_batchnorm=cfg["training"]["use_batchnorm"] 
     ).to(device)
 
+    head_lr_cfg = cfg.get("training", {}).get("head_lr_decay", {})
+    base_lr = float(cfg["training"]["lr"])
+    param_groups = _build_named_param_groups(model, base_lr=base_lr)
+    resolved_head_lr_cfg = {
+        "enabled": bool(head_lr_cfg.get("enabled", True)),
+        "patience": int(head_lr_cfg.get("patience", 3)),
+        "factor": float(head_lr_cfg.get("factor", 0.3)),
+        "min_lr_mult": float(head_lr_cfg.get("min_lr_mult", 0.05)),
+    }
+
     optimizer_name = optimizer if optimizer is not None else cfg["training"]["optimizer"]
     optimizer = get_optimizer(
-        model,
+        param_groups,
         optimizer_name=optimizer_name,
-        lr=cfg["training"]["lr"]
+        lr=base_lr,
     )
 
     run_metadata = {
@@ -530,6 +570,7 @@ def main(
         "lr": cfg["training"]["lr"],
         "batch_size": batch_size,
         "seed": cfg.get("training", {}).get("seed", ""),
+        "head_lr_decay": resolved_head_lr_cfg,
     }
 
     # TensorBoard and CSV logging setup
@@ -571,6 +612,7 @@ def main(
             metrics_csv_path=metrics_csv_path,
             run_metadata=run_metadata,
             tensorboard_log_dir=tensorboard_log_dir,
+            head_lr_decay_cfg=resolved_head_lr_cfg,
         )
     finally:
         pass
