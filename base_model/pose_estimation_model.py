@@ -84,7 +84,7 @@ class PoseEstimationNet(nn.Module):
             dummy_feat = self.forward_single_stream(dummy_input, extractor)
             feat_dim = dummy_feat.shape[1]
 
-        # build_fusion returns a single fusion module instance
+        # build_fusion returns a single fusion module instance as specified by the config
         self.fusion = build_fusion(fusion, feat_dim, len(streams))
         self.weights = None
 
@@ -175,8 +175,7 @@ class PoseEstimationNet(nn.Module):
         y = self.y_head(fused)
         z = self.z_head(fused)
 
-        # Return as a dictionary or concatenated vector
-        # Here we follow your original logic where x is assumed 0
+        # Return as a dictionary or concatenated vector, x=0
         x_coord = torch.zeros_like(y)
         translation = torch.cat([x_coord, y, z], dim=-1)
 

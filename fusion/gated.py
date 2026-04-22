@@ -12,6 +12,11 @@ class SimpleGatedFusion(BaseFusion):
             nn.Linear(dim * num_streams, num_streams),
             nn.Softmax(dim=1)
         )
+    
+        # Force initial weights and bias to zero, because nn.Linear creates small random values
+        # nn.init.uniform_(self.gate[0].weight, -1e-3, 1e-3)
+        nn.init.zeros_(self.gate[0].weight)
+        nn.init.zeros_(self.gate[0].bias)
 
     def forward(self, features_list):
         combined = torch.cat(features_list, dim=1)
@@ -29,10 +34,13 @@ class GatedFusion(BaseFusion):
         super().__init__(dim, num_streams)
         self.temperature = temperature
         self.gate = nn.Sequential(
-            nn.Linear(dim * num_streams, 128), # Add a hidden layer for capacity
+            nn.Linear(dim * num_streams, 32), # ToDo: set higher if augmented data set is used
             nn.ReLU(),
-            nn.Linear(128, num_streams)
+            nn.Dropout(0.3), # to prevent overfitting on small dataset
+            nn.Linear(32, num_streams)
         )
+        nn.init.zeros_(self.gate[2].weight, -1e-3, 1e-3)
+        nn.init.zeros_(self.gate[2].bias)
 
     def forward(self, features_list):
         # 1. Ensure features are normalized so one doesn't dominate by scale
@@ -48,6 +56,4 @@ class GatedFusion(BaseFusion):
         
         # 4. Apply weighted sum
         out = (stacked * weights.unsqueeze(-1)).sum(dim=1)
-
-        # print(f"GatedFusion Logits: {logits}, weights: {weights.squeeze()}")  # Debug print
-        return out, weights#.detach().mean(dim=0) # return weights for logging
+        return out, weights
