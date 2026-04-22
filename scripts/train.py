@@ -89,6 +89,49 @@ def _compute_model_norms(model):
     return param_sq_sum ** 0.5, grad_sq_sum ** 0.5
 
 
+def _get_lr_by_group(optimizer, group_name):
+    for group in optimizer.param_groups:
+        if group.get("name") == group_name:
+            return float(group["lr"])
+    return float(optimizer.param_groups[0]["lr"])
+
+
+def _build_named_param_groups(model, base_lr):
+    grouped_params = {
+        "base": [],
+        "head_rot": [],
+        "head_y": [],
+        "head_z": [],
+    }
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if name.startswith("rot_head."):
+            grouped_params["head_rot"].append(param)
+        elif name.startswith("y_head."):
+            grouped_params["head_y"].append(param)
+        elif name.startswith("z_head."):
+            grouped_params["head_z"].append(param)
+        else:
+            grouped_params["base"].append(param)
+
+    param_groups = []
+    for group_name in ["base", "head_rot", "head_y", "head_z"]:
+        params = grouped_params[group_name]
+        if not params:
+            continue
+        param_groups.append(
+            {
+                "name": group_name,
+                "params": params,
+                "lr": float(base_lr),
+            }
+        )
+
+    return param_groups
+
+
 def train_loop(
     model,
     num_epochs,
@@ -137,6 +180,10 @@ def train_loop(
                 "head_type",
                 "freeze_backbone",
                 "lr",
+                "lr_base",
+                "lr_head_rot",
+                "lr_head_y",
+                "lr_head_z",
                 "batch_size",
                 "seed",
             ],
@@ -272,6 +319,48 @@ def train_loop(
             val_abs_trans_avg = val_abs_trans / num_val
             val_abs_rot_x_avg = val_abs_rot_x / num_val
 
+            if head_lr_decay_enabled:
+                per_head_losses = {
+                    "q": {"train": avg_q, "val": val_q_avg},
+                    "y": {"train": avg_y, "val": val_y_avg},
+                    "z": {"train": avg_z, "val": val_z_avg},
+                }
+                for head_key, head_vals in per_head_losses.items():
+                    state = head_lr_state[head_key]
+                    best_val = state["best_val"]
+                    val_head = head_vals["val"]
+                    train_head = head_vals["train"]
+                    improved = val_head < best_val
+                    if improved:
+                        state["best_val"] = val_head
+                        state["bad_epochs"] = 0
+                        continue
+
+                    overfit_detected = val_head > train_head
+                    if overfit_detected:
+                        state["bad_epochs"] += 1
+                    else:
+                        state["bad_epochs"] = 0
+
+                    if state["bad_epochs"] < head_patience:
+                        continue
+
+                    group_name = state["group_name"]
+                    group = param_groups_by_name.get(group_name)
+                    if group is None:
+                        continue
+
+                    old_lr = float(group["lr"])
+                    new_lr = max(old_lr * head_reduce_factor, head_min_lrs[head_key])
+                    if new_lr < old_lr:
+                        group["lr"] = new_lr
+                        logger.info(
+                            f"head_lr_reduce epoch={epoch+1} head={head_key} group={group_name} "
+                            f"old_lr={old_lr:.8f} new_lr={new_lr:.8f} train_head={train_head:.6f} "
+                            f"val_head={val_head:.6f} bad_epochs={state['bad_epochs']}"
+                        )
+                    state["bad_epochs"] = 0
+
             # Save checkpoint when validation improves; keep only the current best.
             if val_loss_avg < best_val_loss:
                 best_val_loss = val_loss_avg
@@ -287,7 +376,9 @@ def train_loop(
                 f"epoch={epoch+1}/{num_epochs} train_loss={epoch_avg_loss:.4f} val_loss={val_loss_avg:.4f} "
                 f"train_abs_trans={train_abs_trans:.4f} "
                 f"train_abs_rot_x={train_abs_rot_x:.4f} val_abs_trans={val_abs_trans_avg:.4f} "
-                f"val_abs_rot_x={val_abs_rot_x_avg:.4f} fusion_weights={fw_str}"
+                f"val_abs_rot_x={val_abs_rot_x_avg:.4f} lr_base={lr_base:.8f} "
+                f"lr_head_rot={lr_head_rot:.8f} lr_head_y={lr_head_y:.8f} "
+                f"lr_head_z={lr_head_z:.8f} fusion_weights={fw_str}"
             )
 
             if tb_writer is not None:
@@ -310,6 +401,12 @@ def train_loop(
                 tb_writer.add_scalar("training/best_val_loss", best_val_loss, global_step)
                 tb_writer.add_scalar("training/epoch_time_sec", epoch_time, global_step)
                 tb_writer.add_scalar("training/lr", optimizer.param_groups[0]["lr"], global_step)
+                tb_writer.add_scalar("training/lr_base", lr_base, global_step)
+                tb_writer.add_scalar("training/lr_head_rot", lr_head_rot, global_step)
+                tb_writer.add_scalar("training/lr_head_y", lr_head_y, global_step)
+                tb_writer.add_scalar("training/lr_head_z", lr_head_z, global_step)
+                for group_name, group in param_groups_by_name.items():
+                    tb_writer.add_scalar(f"training/lr_{group_name}", group["lr"], global_step)
                 if fusion_weights is not None:
                     tb_writer.add_text("fusion/weights", fw_str, global_step)
 
@@ -355,6 +452,10 @@ def train_loop(
                         "head_type": metadata.get("head_type", ""),
                         "freeze_backbone": metadata.get("freeze_backbone", ""),
                         "lr": metadata.get("lr", ""),
+                        "lr_base": f"{lr_base:.8f}",
+                        "lr_head_rot": f"{lr_head_rot:.8f}",
+                        "lr_head_y": f"{lr_head_y:.8f}",
+                        "lr_head_z": f"{lr_head_z:.8f}",
                         "batch_size": metadata.get("batch_size", ""),
                         "seed": metadata.get("seed", ""),
                     }

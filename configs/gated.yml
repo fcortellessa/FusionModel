@@ -21,6 +21,11 @@ training:
   dropout_rot: 0.3
   dropout_trans: 0.1
   use_batchnorm: True
+  head_lr_decay:
+    enabled: true
+    patience: 5
+    factor: 0.2
+    min_lr_mult: 0.00001
 
 data:
   root: "D:/MA/USB_TCP_combined"
