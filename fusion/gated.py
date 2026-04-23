@@ -39,8 +39,8 @@ class GatedFusion(BaseFusion):
             nn.Dropout(0.3), # to prevent overfitting on small dataset
             nn.Linear(32, num_streams)
         )
-        nn.init.zeros_(self.gate[2].weight, -1e-3, 1e-3)
-        nn.init.zeros_(self.gate[2].bias)
+        nn.init.uniform_(self.gate[3].weight, -1e-3, 1e-3)
+        nn.init.zeros_(self.gate[3].bias)
 
     def forward(self, features_list):
         # 1. Ensure features are normalized so one doesn't dominate by scale

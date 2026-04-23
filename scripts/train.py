@@ -258,11 +258,15 @@ def train_loop(
                 "loss_q": 0.0,
                 "loss_y": 0.0,
                 "loss_z": 0.0,
+                "abs_y": 0.0,
+                "abs_z": 0.0,
                 "abs_trans": 0.0,
                 "abs_rot_x": 0.0,
             }
 
             fusion_weights = None
+            fusion_weight_sums = None
+            fusion_weight_count = 0
             tqdm_bar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)", leave=False, mininterval=1.0)
             for batch in tqdm_bar:
                 optimizer.zero_grad()
@@ -280,12 +284,22 @@ def train_loop(
                     loss = base_loss
                 abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = absolute_pose_error_x_rot(pose_pred["pose"].detach(), pose)
 
+                if fusion_weights is not None:
+                    fusion_weights_flat = fusion_weights.detach().cpu().flatten().float()
+                    if fusion_weight_sums is None:
+                        fusion_weight_sums = fusion_weights_flat.clone()
+                    else:
+                        fusion_weight_sums += fusion_weights_flat
+                    fusion_weight_count += 1
+
                 # Update metrics
                 current_vals = {
                     "loss": loss.item(),
                     "loss_q": loss_q.item(),
                     "loss_y": loss_y.item(),
                     "loss_z": loss_z.item(),
+                    "abs_y": abs_trans_y.item(),
+                    "abs_z": abs_trans_z.item(),
                     "abs_trans": abs_trans.item(),
                     "abs_rot_x": abs_rot_x.item(),
                 }
@@ -335,14 +349,22 @@ def train_loop(
             avg_q = train_metrics["loss_q"] / num_train
             avg_y = train_metrics["loss_y"] / num_train
             avg_z = train_metrics["loss_z"] / num_train
+            train_abs_y = train_metrics["abs_y"] / num_train
+            train_abs_z = train_metrics["abs_z"] / num_train
             train_abs_trans = train_metrics["abs_trans"] / num_train
             train_abs_rot_x = train_metrics["abs_rot_x"] / num_train
             epoch_time = time.perf_counter() - epoch_start
 
+            fusion_weights_avg = None
+            if fusion_weight_sums is not None and fusion_weight_count > 0:
+                fusion_weights_avg = fusion_weight_sums / float(fusion_weight_count)
+
+            fw_epoch_str = _format_fusion_weights(fusion_weights_avg) if fusion_weights_avg is not None else fw_str
+
             logger.info(
                 f"epoch={epoch+1} train_loss={epoch_avg_loss:.4f} loss_q={avg_q:.4f} "
                 f"loss_y={avg_y:.4f} loss_z={avg_z:.4f} train_abs_trans={train_abs_trans:.4f} "
-                f"train_abs_rot_x={train_abs_rot_x:.4f} fusion_weights={fw_str} epoch_time_sec={epoch_time:.2f}"
+                f"train_abs_rot_x={train_abs_rot_x:.4f} fusion_weights={fw_epoch_str} epoch_time_sec={epoch_time:.2f}"
             )
 
             # Validation phase
@@ -351,6 +373,8 @@ def train_loop(
             val_loss_q = 0.0
             val_loss_y = 0.0
             val_loss_z = 0.0
+            val_abs_y = 0.0
+            val_abs_z = 0.0
             val_abs_trans, val_abs_rot_x = 0.0, 0.0
             with torch.no_grad():
                 for batch in val_loader:
@@ -363,11 +387,13 @@ def train_loop(
                         val_loss = uncertainty_module(val_q, val_trans)
                     else:
                         val_loss = val_base_loss
-                    _, _, at, arx = absolute_pose_error_x_rot(pose_pred["pose"], pose)
+                    ay, az, at, arx = absolute_pose_error_x_rot(pose_pred["pose"], pose)
                     val_loss_total += val_loss.item()
                     val_loss_q += val_q.item()
                     val_loss_y += val_y.item()
                     val_loss_z += val_z.item()
+                    val_abs_y += ay.item()
+                    val_abs_z += az.item()
                     val_abs_trans += at.item()
                     val_abs_rot_x += arx.item()
 
@@ -375,6 +401,8 @@ def train_loop(
             val_q_avg = val_loss_q / num_val
             val_y_avg = val_loss_y / num_val
             val_z_avg = val_loss_z / num_val
+            val_abs_y_avg = val_abs_y / num_val
+            val_abs_z_avg = val_abs_z / num_val
             val_abs_trans_avg = val_abs_trans / num_val
             val_abs_rot_x_avg = val_abs_rot_x / num_val
             lr_base = _get_lr_by_group(optimizer, "base")
@@ -460,37 +488,55 @@ def train_loop(
 
             if tb_writer is not None:
                 global_step = epoch + 1
-                tb_writer.add_scalar("loss/train/total", epoch_avg_loss, global_step)
-                tb_writer.add_scalar("loss/train/q", avg_q, global_step)
-                tb_writer.add_scalar("loss/train/y", avg_y, global_step)
-                tb_writer.add_scalar("loss/train/z", avg_z, global_step)
-                tb_writer.add_scalar("loss/val/total", val_loss_avg, global_step)
-                tb_writer.add_scalar("loss/val/q", val_q_avg, global_step)
-                tb_writer.add_scalar("loss/val/y", val_y_avg, global_step)
-                tb_writer.add_scalar("loss/val/z", val_z_avg, global_step)
-                tb_writer.add_scalar("loss/gap/train_minus_val", epoch_avg_loss - val_loss_avg, global_step)
-                tb_writer.add_scalar("metrics/train_abs_trans", train_abs_trans, global_step)
-                tb_writer.add_scalar("metrics/train_abs_rot_x", train_abs_rot_x, global_step)
-                tb_writer.add_scalar("metrics/val_abs_trans", val_abs_trans_avg, global_step)
-                tb_writer.add_scalar("metrics/val_abs_rot_x", val_abs_rot_x_avg, global_step)
-                tb_writer.add_scalar("metrics/gap_abs_trans", train_abs_trans - val_abs_trans_avg, global_step)
-                tb_writer.add_scalar("metrics/gap_abs_rot_x", train_abs_rot_x - val_abs_rot_x_avg, global_step)
+                tb_writer.add_scalars("loss/total", {"train": epoch_avg_loss, "val": val_loss_avg}, global_step)
+                tb_writer.add_scalars("loss/q", {"train": avg_q, "val": val_q_avg}, global_step)
+                tb_writer.add_scalars("loss/y", {"train": avg_y, "val": val_y_avg}, global_step)
+                tb_writer.add_scalars("loss/z", {"train": avg_z, "val": val_z_avg}, global_step)
+                tb_writer.add_scalars("metrics/abs_y", {"train": train_abs_y, "val": val_abs_y_avg}, global_step)
+                tb_writer.add_scalars("metrics/abs_z", {"train": train_abs_z, "val": val_abs_z_avg}, global_step)
+                tb_writer.add_scalars("metrics/abs_trans", {"train": train_abs_trans, "val": val_abs_trans_avg}, global_step)
+                tb_writer.add_scalars("metrics/abs_rot_x", {"train": train_abs_rot_x, "val": val_abs_rot_x_avg}, global_step)
+                tb_writer.add_scalar("diagnostics/loss_gap", epoch_avg_loss - val_loss_avg, global_step)
+                tb_writer.add_scalar("diagnostics/abs_y_gap", train_abs_y - val_abs_y_avg, global_step)
+                tb_writer.add_scalar("diagnostics/abs_z_gap", train_abs_z - val_abs_z_avg, global_step)
+                tb_writer.add_scalar("diagnostics/abs_trans_gap", train_abs_trans - val_abs_trans_avg, global_step)
+                tb_writer.add_scalar("diagnostics/abs_rot_x_gap", train_abs_rot_x - val_abs_rot_x_avg, global_step)
                 tb_writer.add_scalar("training/best_val_loss", best_val_loss, global_step)
                 tb_writer.add_scalar("training/epoch_time_sec", epoch_time, global_step)
-                tb_writer.add_scalar("training/lr", optimizer.param_groups[0]["lr"], global_step)
-                tb_writer.add_scalar("training/lr_base", lr_base, global_step)
-                tb_writer.add_scalar("training/lr_head_rot", lr_head_rot, global_step)
-                tb_writer.add_scalar("training/lr_head_y", lr_head_y, global_step)
-                tb_writer.add_scalar("training/lr_head_z", lr_head_z, global_step)
+                tb_writer.add_scalars(
+                    "training/lr",
+                    {
+                        "base": lr_base,
+                        "head_rot": lr_head_rot,
+                        "head_y": lr_head_y,
+                        "head_z": lr_head_z,
+                    },
+                    global_step,
+                )
                 if uncertainty_module is not None:
-                    tb_writer.add_scalar("uncertainty/log_var_rot", uncertainty_log_var_rot, global_step)
-                    tb_writer.add_scalar("uncertainty/log_var_trans", uncertainty_log_var_trans, global_step)
-                    tb_writer.add_scalar("uncertainty/weight_rot", uncertainty_weight_rot, global_step)
-                    tb_writer.add_scalar("uncertainty/weight_trans", uncertainty_weight_trans, global_step)
+                    tb_writer.add_scalars(
+                        "uncertainty/log_var",
+                        {
+                            "rot": uncertainty_log_var_rot,
+                            "trans": uncertainty_log_var_trans,
+                        },
+                        global_step,
+                    )
+                    tb_writer.add_scalars(
+                        "uncertainty/weight",
+                        {
+                            "rot": uncertainty_weight_rot,
+                            "trans": uncertainty_weight_trans,
+                        },
+                        global_step,
+                    )
                 for group_name, group in param_groups_by_name.items():
-                    tb_writer.add_scalar(f"training/lr_{group_name}", group["lr"], global_step)
+                    tb_writer.add_scalar(f"training/lr_groups/{group_name}", group["lr"], global_step)
                 if fusion_weights is not None:
                     tb_writer.add_text("fusion/weights", fw_str, global_step)
+                if fusion_weights_avg is not None:
+                    for idx, weight in enumerate(fusion_weights_avg.tolist()):
+                        tb_writer.add_scalar(f"fusion/epoch_weight_stream/{idx}", float(weight), global_step)
 
             if tb_writer is not None and epoch == num_epochs - 1 and metadata:
                 hparam_dict = {
