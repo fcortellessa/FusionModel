@@ -1,4 +1,7 @@
-import os   
+import json
+import os
+import re
+import shutil
 import sys
 from datetime import datetime
 import logging
@@ -9,6 +12,64 @@ import yaml
 def load_config(path):
     with open(path, "r") as f:
         return yaml.safe_load(f)
+
+
+def sanitize_filename(value):
+    value = str(value)
+    value = re.sub(r'[<>:"/\\|?*]+', "_", value)
+    value = re.sub(r"\s+", "_", value)
+    value = value.strip(" ._")
+    return value or "run"
+
+
+def get_run_group_dir(config_path, output_root="runs"):
+    config_stem = sanitize_filename(os.path.splitext(os.path.basename(config_path))[0])
+    return os.path.join(output_root, config_stem)
+
+
+def build_run_artifacts(config_path, cfg, batch_size, output_root="runs"):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fusion_name = sanitize_filename(cfg["model"]["fusion"])
+    run_name = f"{timestamp}_bs{batch_size}_{fusion_name}"
+
+    run_root_dir = output_root
+    run_dir = os.path.join(run_root_dir, run_name)
+    results_dir = os.path.join(run_dir, "results")
+    tensorboard_root_dir = os.path.join(run_root_dir, "tensorboard")
+    tensorboard_run_dir = os.path.join(tensorboard_root_dir, run_name)
+
+    for directory in [run_root_dir, run_dir, results_dir, tensorboard_root_dir, tensorboard_run_dir]:
+        os.makedirs(directory, exist_ok=True)
+
+    return {
+        "run_root_dir": run_root_dir,
+        "run_dir": run_dir,
+        "run_name": run_name,
+        "results_dir": results_dir,
+        "tensorboard_root_dir": tensorboard_root_dir,
+        "tensorboard_run_dir": tensorboard_run_dir,
+        "checkpoint_path": os.path.join(run_dir, "checkpoint_best.pth"),
+        "metrics_csv_path": os.path.join(run_dir, "metrics.csv"),
+        "config_snapshot_path": os.path.join(run_dir, "config.yml"),
+        "manifest_path": os.path.join(run_dir, "manifest.json"),
+    }
+
+
+def save_yaml(data, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+
+
+def save_json(data, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_json(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def setup_logger(log_dir="logs"):

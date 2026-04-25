@@ -1,4 +1,6 @@
 # test script
+import argparse
+import json
 import time
 import os
 import sys
@@ -15,14 +17,53 @@ from data_processing.dataloader_preprocessed import get_test_dataloader
 from utils.utils import load_checkpoint, load_config, get_optimizer
 
 
-
-model_path = "checkpoints/best/checkpoint_epoch_4_loss_16_4560.pth"
 config_path = "configs/gated.yml"
 root_data_path = "Data/Data_split/"
 
 
 if __name__ == "__main__":
-    cfg = load_config(config_path)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=config_path, help="Path to the training config used for the run")
+    parser.add_argument("--run_dir", type=str, default=None, help="Specific run directory to load instead of the latest run")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint path to load")
+    parser.add_argument("--results_dir", type=str, default=None, help="Override the directory where test CSVs are saved")
+    args = parser.parse_args()
+
+    if args.run_dir is not None:
+        manifest_path = os.path.join(args.run_dir, "manifest.json")
+        legacy_manifest_path = os.path.join(args.run_dir, "run_manifest.json")
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        elif os.path.exists(legacy_manifest_path):
+            with open(legacy_manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        else:
+            manifest = {
+                "config_snapshot_path": os.path.join(args.run_dir, "config.yml"),
+                "checkpoint_path": os.path.join(args.run_dir, "checkpoint_best.pth"),
+                "run_dir": args.run_dir,
+                "results_dir": os.path.join(args.run_dir, "results"),
+            }
+
+            if not os.path.exists(manifest["config_snapshot_path"]):
+                manifest["config_snapshot_path"] = os.path.join(args.run_dir, "config.resolved.yml")
+            if not os.path.exists(manifest["checkpoint_path"]):
+                manifest["checkpoint_path"] = os.path.join(args.run_dir, "checkpoints", "best.pth")
+    else:
+        if args.checkpoint is None:
+            raise ValueError("Provide either --run_dir or --checkpoint.")
+        manifest = {
+            "config_snapshot_path": args.config,
+            "checkpoint_path": args.checkpoint,
+            "results_dir": "results",
+        }
+
+    cfg_path = manifest.get("config_snapshot_path") or args.config
+    cfg = load_config(cfg_path)
+    model_path = args.checkpoint or manifest["checkpoint_path"]
+    results_dir = args.results_dir or manifest.get("results_dir") or os.path.join(os.path.dirname(model_path), "..", "results")
+    os.makedirs(results_dir, exist_ok=True)
     model = PoseEstimationNet(
         model_name=cfg["model"]["backbone"],
         streams=cfg["model"]["streams"],
@@ -42,7 +83,7 @@ if __name__ == "__main__":
         batch_size=cfg["training"]["batch_size"],
         shuffle=True
     )
-    optimizer = get_optimizer(model=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
+    optimizer = get_optimizer(model_or_params=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
     model.load_state_dict(load_checkpoint(model, optimizer, model_path, device="cpu")["model_state_dict"])
     print("Model loaded successfully!")
 
@@ -73,4 +114,4 @@ if __name__ == "__main__":
 
     # Save results to CSV
     df = pd.DataFrame(csv_results)
-    df.to_csv(f"results/results_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv", index=False)
+    df.to_csv(os.path.join(results_dir, f"results_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv"), index=False)

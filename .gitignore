@@ -1,9 +1,12 @@
 __pychache__/
-*.pyc
-*archive
 .venv/
 .vscode/launch.json
+.github/
+*.pyc
+yolo26n.pt
 Data/
 logs/
 checkpoints/
-yolo26n.pt
+runs/
+results/results.csv
+augment*
