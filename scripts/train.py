@@ -488,6 +488,7 @@ def main(
     optimizer=None,
     tensorboard_root_dir=None,
     tensorboard_port=6006,
+    force_preprocess=False,
 ):
   
     cfg = load_config(config_path)
@@ -508,10 +509,26 @@ def main(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Preprocess data (split and transform) if directory doesn't exist
-    data_dir = os.path.join(base_dir, "../Data")
+    configured_data_root = cfg.get("data", {}).get("root", "")
+    data_dir = configured_data_root if configured_data_root else os.path.join(base_dir, "../Data")
+    data_dir = os.path.abspath(data_dir)
     preprocessed_dir = os.path.join(data_dir, "Data_split/train_preprocessed")
-    if not os.path.exists(preprocessed_dir):
-        preprocess_data(root_dir=data_dir)
+    aug_cfg = cfg.get("data", {}).get("augmentation", {})
+    use_photo_aug = bool(aug_cfg.get("enabled", False))
+    should_preprocess = force_preprocess or (not os.path.exists(preprocessed_dir))
+    if should_preprocess:
+        preprocess_data(
+            root_dir=data_dir,
+            use_photometric_augmentation=use_photo_aug,
+            aug_seed=int(aug_cfg.get("seed", 42)),
+            aug_photo_count=int(aug_cfg.get("photo_count", 1)),
+            aug_overwrite=bool(aug_cfg.get("overwrite", False)),
+        )
+    elif use_photo_aug:
+        logger.info(
+            "Photometric augmentation is enabled in config, but existing preprocessed data was reused. "
+            "Use --force_preprocess to regenerate with augmentation."
+        )
     
     train_loader, val_loader, test_loader = get_dataloaders(
         root_dir=os.path.join(data_dir, "Data_split"),
@@ -675,6 +692,11 @@ if __name__ == "__main__":
         default=6006,
         help="TensorBoard port used for attach/start behavior",
     )
+    parser.add_argument(
+        "--force_preprocess",
+        action="store_true",
+        help="Force rebuild of Data_split and *_preprocessed folders before training",
+    )
 
     args = parser.parse_args()
 
@@ -685,4 +707,5 @@ if __name__ == "__main__":
         optimizer=args.optimizer,
         tensorboard_root_dir=args.tensorboard_root,
         tensorboard_port=args.tensorboard_port,
+        force_preprocess=args.force_preprocess,
     )

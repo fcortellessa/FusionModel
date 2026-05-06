@@ -84,6 +84,12 @@ def split_dataset(input_folder, output_root, train_ratio=0.8, val_ratio=0.15, te
 
     print(f"Splitting into: {len(train_triplets)} train, {len(val_triplets)} val, {len(test_triplets)} test")
 
+    # Recreate split folders to avoid stale files from previous runs.
+    for split_name in ["train", "val", "test"]:
+        split_dir = os.path.join(output_root, split_name)
+        if os.path.exists(split_dir):
+            shutil.rmtree(split_dir)
+
     # Copy files into respective subfolders
     for triplet in train_triplets:
         copy_triplet(triplet, input_folder, os.path.join(output_root, "train"))

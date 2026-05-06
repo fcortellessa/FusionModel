@@ -34,6 +34,11 @@ data:
   use_rgb: true
   use_tactile: true
   use_depth: false
+  augmentation:
+    enabled: false
+    seed: 42
+    photo_count: 1
+    overwrite: false
 
 # Set `data.root` to the folder containing your samples:
 # {timestamp}.json, {timestamp}.png, {timestamp}_digit.png
