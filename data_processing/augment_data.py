@@ -1,0 +1,404 @@
+import argparse
+import json
+import random
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import albumentations as A
+import numpy as np
+from PIL import Image
+from tqdm import tqdm
+
+
+@dataclass(frozen=True)
+class Triplet:
+	timestamp: str
+	rgb_path: Path
+	digit_path: Path
+	json_path: Path
+
+
+def list_triplets(input_dir: Path) -> List[Triplet]:
+	triplets: List[Triplet] = []
+	for json_path in sorted(input_dir.glob("*.json")):
+		ts = json_path.stem
+		rgb_path = input_dir / f"{ts}.png"
+		digit_path = input_dir / f"{ts}_digit.png"
+		if rgb_path.exists() and digit_path.exists():
+			triplets.append(Triplet(ts, rgb_path, digit_path, json_path))
+	return triplets
+
+
+def _rng_for(seed: int, timestamp: str, mode: str, variant_idx: int) -> np.random.Generator:
+	# Use a deterministic per-sample seed so ordering changes do not affect outputs.
+	token = f"{seed}|{timestamp}|{mode}|{variant_idx}"
+	local_seed = int(np.frombuffer(token.encode("utf-8"), dtype=np.uint8).sum()) % (2**32 - 1)
+	return np.random.default_rng(local_seed)
+
+
+def _read_pose(json_path: Path) -> Tuple[np.ndarray, np.ndarray, Dict]:
+	with json_path.open("r", encoding="utf-8") as fh:
+		data = json.load(fh)
+
+	pos = np.array([data["position"][k] for k in ("x", "y", "z")], dtype=np.float64)
+	quat = np.array([data["orientation"][k] for k in ("x", "y", "z", "w")], dtype=np.float64)
+	return pos, quat, data
+
+
+def _write_pose(json_out: Path, source_data: Dict, pos: np.ndarray, quat: np.ndarray) -> None:
+	payload = dict(source_data)
+	payload["position"] = {
+		"x": float(pos[0]),
+		"y": float(pos[1]),
+		"z": float(pos[2]),
+	}
+	payload["orientation"] = {
+		"x": float(quat[0]),
+		"y": float(quat[1]),
+		"z": float(quat[2]),
+		"w": float(quat[3]),
+	}
+
+	with json_out.open("w", encoding="utf-8") as fh:
+		json.dump(payload, fh, indent=2)
+
+
+def _apply_albumentations_deterministic(
+	img: Image.Image,
+	transform: A.Compose,
+	seed: int,
+) -> np.ndarray:
+	"""Run an albumentations transform deterministically without leaking global RNG state."""
+	np_state = np.random.get_state()
+	py_state = random.getstate()
+	try:
+		np.random.seed(seed)
+		random.seed(seed)
+		if hasattr(A, "set_seed"):
+			A.set_seed(seed)
+		elif hasattr(A, "seed"):
+			A.seed(seed)
+		result = transform(image=np.asarray(img))
+		return result["image"]
+	finally:
+		np.random.set_state(np_state)
+		random.setstate(py_state)
+
+
+def _apply_rgb_augmentation(
+	rgb_img: Image.Image,
+	rng: np.random.Generator,
+) -> Tuple[Image.Image, Dict]:
+	"""RGB-specific photometric augmentation.
+	Gaussian noise p=0.002, hue ±5°, brightness ±30%, contrast ±30%, blur p=0.2, gamma=0.1.
+	"""
+	local_seed = int(rng.integers(0, 2**31 - 1))
+	transform = A.Compose(
+		[
+			A.GaussNoise(var_limit=(5.0, 30.0), p=0.002),
+			A.HueSaturationValue(hue_shift_limit=5, sat_shift_limit=0, val_shift_limit=0, p=1.0),
+			A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
+			A.Blur(blur_limit=3, p=0.2),
+			A.RandomGamma(gamma_limit=(10, 10), p=1.0),
+		],
+		p=1.0,
+	)
+	out_arr = _apply_albumentations_deterministic(rgb_img, transform, local_seed)
+	out = Image.fromarray(np.clip(out_arr, 0, 255).astype(np.uint8))
+	meta = {"type": "photometric_rgb", "albumentations": True, "seed": local_seed}
+	return out, meta
+
+
+def _apply_tactile_augmentation(
+	digit_img: Image.Image,
+	rng: np.random.Generator,
+	aug_config: Dict = None,
+) -> Tuple[Image.Image, Dict]:
+	"""Tactile-specific photometric augmentation.
+	Gaussian noise p=0.002, brightness ±10%, contrast ±10%, blur p=0.2, per-channel scaling ±5%.
+	
+	Args:
+		aug_config: dict with keys: enabled_noise, enabled_brightness, enabled_contrast, enabled_blur, enabled_channel_scaling
+		  Each defaults to True if not specified (full augmentation by default).
+	"""
+	if aug_config is None:
+		aug_config = {}
+
+	# Defaults: all augmentations enabled
+	enabled_noise = aug_config.get("enabled_noise", True)
+	enabled_brightness = aug_config.get("enabled_brightness", True)
+	enabled_contrast = aug_config.get("enabled_contrast", True)
+	enabled_blur = aug_config.get("enabled_blur", True)
+	enabled_channel_scaling = aug_config.get("enabled_channel_scaling", True)
+
+	local_seed = int(rng.integers(0, 2**31 - 1))
+	transforms = []
+
+	if enabled_noise:
+		transforms.append(A.GaussNoise(var_limit=(5.0, 20.0), p=0.002))
+	if enabled_brightness or enabled_contrast:
+		transforms.append(A.RandomBrightnessContrast(
+			brightness_limit=0.1 if enabled_brightness else 0.0,
+			contrast_limit=0.1 if enabled_contrast else 0.0,
+			p=1.0
+		))
+	if enabled_blur:
+		transforms.append(A.Blur(blur_limit=3, p=0.2))
+
+	transform = A.Compose(transforms, p=1.0) if transforms else A.Compose([A.NoOp()], p=1.0)
+	out_arr = _apply_albumentations_deterministic(digit_img, transform, local_seed).astype(np.float32)
+
+	# Apply deterministic per-channel scaling using the same local RNG chain.
+	if enabled_channel_scaling:
+		channel_scales = rng.uniform(0.95, 1.05, size=out_arr.shape[-1])
+		for c in range(out_arr.shape[-1]):
+			out_arr[:, :, c] *= channel_scales[c]
+
+	out_arr = np.clip(out_arr, 0, 255)
+	out = Image.fromarray(out_arr.astype(np.uint8))
+	meta = {
+		"type": "photometric_tactile",
+		"albumentations": True,
+		"seed": local_seed,
+		"config": aug_config,
+	}
+	return out, meta
+
+
+def _copy_original(triplet: Triplet, output_dir: Path, overwrite: bool) -> str:
+	out_ts = triplet.timestamp
+	out_rgb = output_dir / f"{out_ts}.png"
+	out_digit = output_dir / f"{out_ts}_digit.png"
+	out_json = output_dir / f"{out_ts}.json"
+
+	if overwrite or not out_rgb.exists():
+		shutil.copy2(triplet.rgb_path, out_rgb)
+	if overwrite or not out_digit.exists():
+		shutil.copy2(triplet.digit_path, out_digit)
+	if overwrite or not out_json.exists():
+		shutil.copy2(triplet.json_path, out_json)
+
+	return out_ts
+
+
+def _save_augmented(
+	out_ts: str,
+	output_dir: Path,
+	rgb_img: Image.Image,
+	digit_img: Image.Image,
+	source_pose_json: Dict,
+	pos: np.ndarray,
+	quat: np.ndarray,
+	overwrite: bool,
+) -> None:
+	out_rgb = output_dir / f"{out_ts}.png"
+	out_digit = output_dir / f"{out_ts}_digit.png"
+	out_json = output_dir / f"{out_ts}.json"
+
+	if overwrite or not out_rgb.exists():
+		rgb_img.save(out_rgb)
+	if overwrite or not out_digit.exists():
+		digit_img.save(out_digit)
+	if overwrite or not out_json.exists():
+		_write_pose(out_json, source_pose_json, pos, quat)
+
+
+def augment_offline(
+	input_dir: Path,
+	output_dir: Path,
+	seed: int,
+	geo_count: int,
+	photo_count: int,
+	rotation_deg: float,
+	copy_originals: bool,
+	overwrite: bool,
+	dry_run: bool,
+	strict: bool,
+	tactile_aug_config: Dict = None,
+) -> None:
+	triplets = list_triplets(input_dir)
+	if not triplets:
+		raise ValueError(f"No valid triplets found in {input_dir}")
+
+	requested_geo_count = geo_count
+	if requested_geo_count > 0:
+		print("Geometric augmentation is disabled; ignoring --geo-count.")
+	geo_count = 0
+
+	output_dir.mkdir(parents=True, exist_ok=True)
+
+	failed: List[Dict] = []
+	generated: Dict[str, List[Dict]] = {}
+	total_new_per_sample = photo_count + (1 if copy_originals else 0)
+
+	print(f"Found {len(triplets)} source samples in {input_dir}")
+	print(f"Will generate {total_new_per_sample} samples per source in {output_dir}")
+
+	for triplet in tqdm(triplets, desc="Offline augmentation"):
+		try:
+			rgb_img = Image.open(triplet.rgb_path).convert("RGB")
+			digit_img = Image.open(triplet.digit_path).convert("RGB")
+			pos, quat, source_json = _read_pose(triplet.json_path)
+
+			generated[triplet.timestamp] = []
+
+			if copy_originals:
+				if not dry_run:
+					original_ts = _copy_original(triplet, output_dir, overwrite=overwrite)
+				else:
+					original_ts = triplet.timestamp
+				generated[triplet.timestamp].append(
+					{"timestamp": original_ts, "kind": "original", "params": {}}
+				)
+
+			for idx in range(photo_count):
+				local_rng = _rng_for(seed, triplet.timestamp, "photo", idx)
+				rgb_aug, rgb_meta = _apply_rgb_augmentation(rgb_img, local_rng)
+				digit_aug, tactile_meta = _apply_tactile_augmentation(digit_img, local_rng, aug_config=tactile_aug_config)
+				out_ts = f"{triplet.timestamp}__photo{idx}"
+				if not dry_run:
+					_save_augmented(
+						out_ts,
+						output_dir,
+						rgb_aug,
+						digit_aug,
+						source_json,
+						pos,
+						quat,
+						overwrite=overwrite,
+					)
+				generated[triplet.timestamp].append(
+					{"timestamp": out_ts, "kind": "photometric", "params": {"rgb": rgb_meta, "tactile": tactile_meta}}
+				)
+
+		except Exception as exc:
+			failed_item = {
+				"timestamp": triplet.timestamp,
+				"error": str(exc),
+			}
+			failed.append(failed_item)
+			if strict:
+				raise
+
+	manifest = {
+		"seed": seed,
+		"input_dir": str(input_dir),
+		"output_dir": str(output_dir),
+		"copy_originals": copy_originals,
+		"geo_count": geo_count,
+		"photo_count": photo_count,
+		"geometric": {
+			"enabled": False,
+			"requested_geo_count": requested_geo_count,
+			"requested_rotation_deg": rotation_deg,
+		},
+		"photometric": {
+			"rgb_augmentation": {
+				"gaussian_noise_p": 0.002,
+				"hue_range_degrees": [-5.0, 5.0],
+				"brightness_range": [0.7, 1.3],
+				"contrast_range": [0.7, 1.3],
+				"blur_p": 0.2,
+				"gamma": 0.1,
+			},
+			"tactile_augmentation": {
+				"gaussian_noise_p": 0.002,
+				"brightness_range": [0.9, 1.1],
+				"contrast_range": [0.9, 1.1],
+				"blur_p": 0.2,
+				"channel_scaling_range": [0.95, 1.05],
+			},
+		},
+		"num_source_samples": len(triplets),
+		"num_failed_samples": len(failed),
+		"generated": generated,
+	}
+
+	if not dry_run:
+		manifest_path = output_dir / "augmentation_manifest.json"
+		with manifest_path.open("w", encoding="utf-8") as fh:
+			json.dump(manifest, fh, indent=2)
+
+		failed_path = output_dir / "failed_samples.json"
+		with failed_path.open("w", encoding="utf-8") as fh:
+			json.dump(failed, fh, indent=2)
+
+	print(f"Done. Failed samples: {len(failed)}")
+	if dry_run:
+		print("Dry run enabled: no files were written.")
+
+
+def parse_args() -> argparse.Namespace:
+	parser = argparse.ArgumentParser(
+		description="Offline data augmentation for train split benchmarking"
+	)
+	parser.add_argument(
+		"--input-dir",
+		type=str,
+		default="Data/Data_split/train",
+		help="Input split folder with triplets (*.png, *_digit.png, *.json)",
+	)
+	parser.add_argument(
+		"--output-dir",
+		type=str,
+		default="Data/Data_split/train_augmented",
+		help="Output folder for augmented samples",
+	)
+	parser.add_argument("--seed", type=int, default=42, help="Random seed")
+	parser.add_argument(
+		"--geo-count",
+		type=int,
+		default=0,
+		help="Ignored: geometric augmentation is disabled",
+	)
+	parser.add_argument(
+		"--photo-count",
+		type=int,
+		default=1,
+		help="Photometric variants per source sample",
+	)
+	parser.add_argument(
+		"--rotation-deg",
+		type=float,
+		default=8.0,
+		help="Ignored: geometric augmentation is disabled",
+	)
+	parser.add_argument(
+		"--no-copy-originals",
+		action="store_true",
+		help="Do not copy original samples into output folder",
+	)
+	parser.add_argument(
+		"--overwrite",
+		action="store_true",
+		help="Overwrite existing output files",
+	)
+	parser.add_argument(
+		"--dry-run",
+		action="store_true",
+		help="Preview run without writing files",
+	)
+	parser.add_argument(
+		"--strict",
+		action="store_true",
+		help="Fail fast on first sample error",
+	)
+	return parser.parse_args()
+
+
+if __name__ == "__main__":
+	args = parse_args()
+	augment_offline(
+		input_dir=Path(args.input_dir),
+		output_dir=Path(args.output_dir),
+		seed=args.seed,
+		geo_count=args.geo_count,
+		photo_count=args.photo_count,
+		rotation_deg=args.rotation_deg,
+		copy_originals=not args.no_copy_originals,
+		overwrite=args.overwrite,
+		dry_run=args.dry_run,
+		strict=args.strict,
+	)
