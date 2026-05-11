@@ -172,3 +172,119 @@ def compute_total_loss(pred_t, target_t, pred_q, target_q, w_t=1.0, w_q=0.5):
     
     return total_loss, l_mse, l_lie
 
+
+# --- SE(3) Direct Optimization via Lie Algebra ---
+def quaternion_to_rotation_vector(quat, eps=1e-7):
+    """
+    Convert quaternion to rotation vector (axis-angle) using exponential map.
+    Input: quat tensor shape (B, 4) in [x, y, z, w] format
+    Output: rotation_vector shape (B, 3)
+    """
+    # Normalize
+    quat = F.normalize(quat, p=2, dim=-1)
+    
+    # Extract components
+    x, y, z, w = quat[:, 0:1], quat[:, 1:2], quat[:, 2:3], quat[:, 3:4]
+    
+    # Log map: compute the axis-angle representation
+    # For quaternion q = [sin(θ/2) * axis, cos(θ/2)]
+    # The rotation vector is θ * axis
+    
+    # Clamp w to valid range for numerical stability
+    w = torch.clamp(w, -1.0 + eps, 1.0 - eps)
+    
+    # θ = 2 * acos(w)
+    theta = 2.0 * torch.acos(w)
+    
+    # sin(θ/2) = ||[x, y, z]||
+    sin_half_theta = torch.sqrt(x**2 + y**2 + z**2)
+    
+    # Numerically stable scale computation
+    # As theta -> 0, scale -> 2.0 (from Taylor expansion)
+    # Otherwise scale = theta / sin_half_theta
+    scale = torch.where(
+        sin_half_theta > eps,
+        theta / sin_half_theta,
+        2.0 * torch.ones_like(sin_half_theta)
+    )
+    
+    rotation_vector = scale * torch.cat([x, y, z], dim=-1)
+    return rotation_vector
+
+
+def rotation_vector_to_quaternion(rot_vec, eps=1e-7):
+    """
+    Convert rotation vector (axis-angle) to quaternion via exponential map.
+    Input: rot_vec tensor shape (B, 3)
+    Output: quat tensor shape (B, 4) in [x, y, z, w] format
+    """
+    # θ = ||ω||
+    theta = torch.norm(rot_vec, p=2, dim=-1, keepdim=True)
+    
+    # Normalized axis
+    # For small angles, use Taylor expansion to avoid division by zero
+    scale = torch.where(
+        theta > eps,
+        torch.sin(theta / 2.0) / theta,
+        0.5 * torch.ones_like(theta)
+    )
+    
+    xyz = scale * rot_vec
+    w = torch.cos(theta / 2.0)
+    
+    quat = torch.cat([xyz, w], dim=-1)
+    return quat
+
+
+class SE3DirectLoss(nn.Module):
+    """
+    Direct SE(3) loss in Lie algebra space.
+    Optimizes the complete SE(3) pose as a unified 6D vector,
+    where the distance is measured in the tangent space of SE(3).
+    
+    The loss treats translation and rotation symmetrically in the Lie algebra,
+    allowing the optimization to directly optimize SE(3) geodesics.
+    """
+    def __init__(self, eps=1e-7):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, pred_se3, target_se3):
+        """
+        Calculates L2 loss for SE(3) Lie algebra elements.
+        
+        Args:
+            pred_se3: [B, 6] predicted SE(3) in Lie algebra (3 translation + 3 rotation)
+            target_se3: [B, 6] target SE(3) in Lie algebra (3 translation + 3 rotation)
+        
+        Returns:
+            loss: scalar tensor representing the SE(3) geodesic distance
+        """
+        # Compute relative SE(3) element in the Lie algebra
+        # δ_se3 = target^-1 * pred (in Lie algebra approximation)
+        # For small perturbations, this is approximately: target - pred
+        delta_se3 = pred_se3 - target_se3
+        
+        # Compute the norm (geodesic distance in SE(3))
+        # This treats translation and rotation uniformly in the Lie algebra
+        se3_norm = torch.norm(delta_se3, p=2, dim=-1)
+        
+        # Return mean L2 norm
+        return torch.mean(se3_norm)
+
+
+def se3_direct_loss(pred_se3, target_se3, eps=1e-7):
+    """
+    Functional interface for SE(3) direct loss.
+    
+    Args:
+        pred_se3: [B, 6] predicted SE(3) in Lie algebra
+        target_se3: [B, 6] target SE(3) in Lie algebra
+    
+    Returns:
+        loss: scalar tensor
+    """
+    delta_se3 = pred_se3 - target_se3
+    se3_norm = torch.norm(delta_se3, p=2, dim=-1)
+    return torch.mean(se3_norm)
+

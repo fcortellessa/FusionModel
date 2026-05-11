@@ -37,6 +37,7 @@ METRICS_FIELDNAMES = [
     "lr_head_rot",
     "lr_head_y",
     "lr_head_z",
+    "lr_schedule_scale",
     "uncertainty_log_var_rot",
     "uncertainty_log_var_trans",
     "uncertainty_weight_rot",
@@ -192,6 +193,7 @@ def log_epoch_to_tensorboard(
     lr_head_rot,
     lr_head_y,
     lr_head_z,
+    lr_schedule_scale,
     param_groups_by_name,
     fusion_weights,
     fusion_weights_avg,
@@ -226,6 +228,7 @@ def log_epoch_to_tensorboard(
             "head_rot": lr_head_rot,
             "head_y": lr_head_y,
             "head_z": lr_head_z,
+            "schedule_scale": lr_schedule_scale,
         },
         global_step,
     )

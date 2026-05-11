@@ -14,9 +14,11 @@ sys.path.insert(0, parent_dir)
 
 from base_model.pose_estimation_model import PoseEstimationNet
 from data_processing.preprocess_data import preprocess_data
-from losses.se2_losses import mse_loss, total_loss_2D_vector
+from losses.se2_losses import mse_loss, total_loss_2D_vector, geodesic_loss_2d_unit_vector, normalized_mse_loss_2d_unit_vector, wrapped_angle_loss, axis_angle_to_quaternion
+from losses.se3_losses import se3_direct_loss, rotation_vector_to_quaternion, quaternion_to_rotation_vector
 from losses.absolute_pose_error import absolute_pose_error_x_rot
 from losses.original_loss import total_loss
+from utils.train_utils import quaternion_to_2d_unit_vector, _build_epoch_lr_scale_fn, _build_named_param_groups, _get_lr_by_group
 from utils.utils import (
     setup_logger,
     load_config,
@@ -45,13 +47,6 @@ logger = logging.getLogger("GripFusionNet")
 log_file = None
 
 
-def _get_lr_by_group(optimizer, group_name):
-    for group in optimizer.param_groups:
-        if group.get("name") == group_name:
-            return float(group["lr"])
-    return float(optimizer.param_groups[0]["lr"])
-
-
 def _to_float(value):
     if isinstance(value, torch.Tensor):
         return float(value.detach().item())
@@ -69,43 +64,6 @@ class UncertaintyWeighting(torch.nn.Module):
         weighted_trans = torch.exp(-self.log_var_trans) * loss_trans + self.log_var_trans
         return weighted_rot + weighted_trans
 
-
-def _build_named_param_groups(model, base_lr):
-    grouped_params = {
-        "base": [],
-        "head_rot": [],
-        "head_y": [],
-        "head_z": [],
-    }
-
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        if name.startswith("rot_head."):
-            grouped_params["head_rot"].append(param)
-        elif name.startswith("y_head."):
-            grouped_params["head_y"].append(param)
-        elif name.startswith("z_head."):
-            grouped_params["head_z"].append(param)
-        else:
-            grouped_params["base"].append(param)
-
-    param_groups = []
-    for group_name in ["base", "head_rot", "head_y", "head_z"]:
-        params = grouped_params[group_name]
-        if not params:
-            continue
-        param_groups.append(
-            {
-                "name": group_name,
-                "params": params,
-                "lr": float(base_lr),
-            }
-        )
-
-    return param_groups
-
-
 def train_loop(
     model,
     num_epochs,
@@ -122,6 +80,8 @@ def train_loop(
     run_metadata=None,
     tensorboard_log_dir=None,
     head_lr_decay_cfg=None,
+    lr_schedule_cfg=None,
+    rotation_loss_type="geodesic",
 ):
     best_val_loss = float("inf")
     csv_file = None
@@ -136,6 +96,7 @@ def train_loop(
     head_patience = int(head_lr_decay_cfg.get("patience", 3))
     head_reduce_factor = float(head_lr_decay_cfg.get("factor", 0.3))
     head_min_lr_mult = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
+    lr_scale_fn = _build_epoch_lr_scale_fn(num_epochs, lr_schedule_cfg)
     base_group = next((g for g in optimizer.param_groups if g.get("name") == "base"), optimizer.param_groups[0])
     base_lr = float(base_group["lr"])
     head_min_lrs = {
@@ -143,6 +104,12 @@ def train_loop(
         "y": base_lr * head_min_lr_mult,
         "z": base_lr * head_min_lr_mult,
     }
+
+    base_group_lrs = {
+        group.get("name", f"group_{idx}"): float(group["lr"])
+        for idx, group in enumerate(optimizer.param_groups)
+    }
+    group_lr_multipliers = {group_name: 1.0 for group_name in base_group_lrs}
 
     param_groups_by_name = {
         group.get("name", f"group_{idx}"): group
@@ -159,6 +126,13 @@ def train_loop(
 
     try:
         for epoch in range(last_epoch, num_epochs):
+            current_lr_scale = lr_scale_fn(epoch)
+            for group_idx, group in enumerate(optimizer.param_groups):
+                group_name = group.get("name", f"group_{group_idx}")
+                base_group_lr = base_group_lrs.get(group_name, float(group["lr"]))
+                group_multiplier = group_lr_multipliers.get(group_name, 1.0)
+                group["lr"] = base_group_lr * current_lr_scale * group_multiplier
+
             epoch_start = time.perf_counter()
             model.train()
             train_metrics = {
@@ -184,13 +158,168 @@ def train_loop(
 
                 pose_pred, fusion_weights = model(batch)    # fusion_weights is only returned for logging/debugging purposes
 
-                base_loss, loss_q, loss_y, loss_z = criterion(pose, pose_pred["pose"])
-                loss_trans = loss_y + loss_z
-                if uncertainty_module is not None:
-                    loss = uncertainty_module(loss_q, loss_trans)
+                # Support both quaternion and 2D-unit-vector rotation parametrisations
+                if getattr(model, "rotation_parametrisation", "") == "2D_unit_vector":
+                    rot_scaling_factor = 2000.0
+                    pred_trans = pose_pred["trans"][:, 1:3]
+                    target_trans = pose[:, 1:3]
+                    pred_vec = pose_pred["rotation"]
+                    target_vec = quaternion_to_2d_unit_vector(pose[:, 3:])
+
+                    loss_y = torch.nn.functional.mse_loss(pred_trans[:, 0], target_trans[:, 0])
+                    loss_z = torch.nn.functional.mse_loss(pred_trans[:, 1], target_trans[:, 1])
+                    
+                    # Use selected rotation loss type
+                    if rotation_loss_type == "normalized_mse":
+                        loss_q = normalized_mse_loss_2d_unit_vector(pred_vec, target_vec)
+                    else:  # default to geodesic
+                        loss_q = geodesic_loss_2d_unit_vector(pred_vec, target_vec)
+                    
+                    loss_q_scaled = loss_q * rot_scaling_factor
+                    base_loss = loss_q_scaled + loss_y + loss_z
+                    loss_trans = loss_y + loss_z
+
+                    if uncertainty_module is not None:
+                        loss = uncertainty_module(loss_q_scaled, loss_trans)
+                    else:
+                        loss = base_loss
+
+                    # Absolute errors for logging
+                    abs_trans_y = torch.abs(pred_trans[:, 0] - target_trans[:, 0]).mean()
+                    abs_trans_z = torch.abs(pred_trans[:, 1] - target_trans[:, 1]).mean()
+                    abs_trans = torch.norm(pred_trans - target_trans, dim=1).mean()
+                    pred_angle = torch.atan2(pred_vec[:, 0], pred_vec[:, 1])
+                    target_angle = torch.atan2(target_vec[:, 0], target_vec[:, 1])
+                    rot_diff = torch.abs(pred_angle - target_angle)
+                    rot_diff = torch.min(rot_diff, 2 * torch.pi - rot_diff)
+                    abs_rot_x = torch.rad2deg(rot_diff).mean()
+                elif getattr(model, "rotation_parametrisation", "") == "angle":
+                    rot_scaling_factor = 200.0
+                    pred_trans = pose_pred["trans"][:, 1:3]
+                    target_trans = pose[:, 1:3]
+                    pred_angle = pose_pred["rotation"]  # shape: [B, 1]
+                    
+                    # Extract target roll from quaternion
+                    target_roll = quaternion_to_2d_unit_vector(pose[:, 3:])  # [B, 2] as (sin, cos)
+                    target_angle = torch.atan2(target_roll[:, 0], target_roll[:, 1])  # [B]
+                    target_angle = target_angle.unsqueeze(-1)  # [B, 1]
+
+                    loss_y = torch.nn.functional.mse_loss(pred_trans[:, 0], target_trans[:, 0])
+                    loss_z = torch.nn.functional.mse_loss(pred_trans[:, 1], target_trans[:, 1])
+                    loss_q = wrapped_angle_loss(pred_angle, target_angle)
+                    loss_q_scaled = loss_q * rot_scaling_factor
+                    base_loss = loss_q_scaled + loss_y + loss_z
+                    loss_trans = loss_y + loss_z
+
+                    if uncertainty_module is not None:
+                        loss = uncertainty_module(loss_q_scaled, loss_trans)
+                    else:
+                        loss = base_loss
+
+                    # Absolute errors for logging
+                    abs_trans_y = torch.abs(pred_trans[:, 0] - target_trans[:, 0]).mean()
+                    abs_trans_z = torch.abs(pred_trans[:, 1] - target_trans[:, 1]).mean()
+                    abs_trans = torch.norm(pred_trans - target_trans, dim=1).mean()
+                    # Normalize angles for metric computation
+                    pred_angle_norm = torch.atan2(torch.sin(pred_angle), torch.cos(pred_angle))
+                    target_angle_norm = torch.atan2(torch.sin(target_angle), torch.cos(target_angle))
+                    rot_diff = torch.abs(pred_angle_norm - target_angle_norm)
+                    rot_diff = torch.atan2(torch.sin(rot_diff), torch.cos(rot_diff))
+                    abs_rot_x = torch.rad2deg(torch.abs(rot_diff)).mean()
+                elif getattr(model, "rotation_parametrisation", "") == "lie_algebra":
+                    # Lie algebra (axis-angle) representation
+                    rot_scaling_factor = 200.0
+                    pred_trans = pose_pred["trans"][:, 1:3]
+                    target_trans = pose[:, 1:3]
+                    pred_axis_angle = pose_pred["rotation"]  # shape: [B, 3]
+                    
+                    # Convert predicted axis-angle to quaternion via exponential map
+                    pred_quat = axis_angle_to_quaternion(pred_axis_angle)
+                    target_quat = pose[:, 3:]  # ground truth quaternion [x,y,z,w]
+
+                    loss_y = torch.nn.functional.mse_loss(pred_trans[:, 0], target_trans[:, 0])
+                    loss_z = torch.nn.functional.mse_loss(pred_trans[:, 1], target_trans[:, 1])
+                    
+                    # Use quaternion geodesic loss (same as quaternion head for fair comparison)
+                    # Normalize quaternions
+                    pred_quat_norm = torch.nn.functional.normalize(pred_quat, p=2, dim=1, eps=1e-7)
+                    target_quat_norm = torch.nn.functional.normalize(target_quat, p=2, dim=1, eps=1e-7)
+                    
+                    # Geodesic distance: 2 * arccos(|dot product|)
+                    dot_prod = torch.sum(pred_quat_norm * target_quat_norm, dim=1)
+                    dot_prod = torch.clamp(torch.abs(dot_prod), 0.0, 1.0 - 1e-7)
+                    loss_q = 2.0 * torch.acos(dot_prod).mean()
+                    loss_q_scaled = loss_q * rot_scaling_factor
+                    base_loss = loss_q_scaled + loss_y + loss_z
+                    loss_trans = loss_y + loss_z
+
+                    if uncertainty_module is not None:
+                        loss = uncertainty_module(loss_q_scaled, loss_trans)
+                    else:
+                        loss = base_loss
+
+                    # Absolute errors for logging
+                    abs_trans_y = torch.abs(pred_trans[:, 0] - target_trans[:, 0]).mean()
+                    abs_trans_z = torch.abs(pred_trans[:, 1] - target_trans[:, 1]).mean()
+                    abs_trans = torch.norm(pred_trans - target_trans, dim=1).mean()
+                    
+                    # Extract roll for metric comparison (convert both quats to roll)
+                    pred_roll_vec = quaternion_to_2d_unit_vector(pred_quat_norm)
+                    target_roll_vec = quaternion_to_2d_unit_vector(target_quat_norm)
+                    pred_angle = torch.atan2(pred_roll_vec[:, 0], pred_roll_vec[:, 1])
+                    target_angle = torch.atan2(target_roll_vec[:, 0], target_roll_vec[:, 1])
+                    rot_diff = torch.abs(pred_angle - target_angle)
+                    rot_diff = torch.atan2(torch.sin(rot_diff), torch.cos(rot_diff))
+                    abs_rot_x = torch.rad2deg(torch.abs(rot_diff)).mean()
+                elif getattr(model, "rotation_parametrisation", "") == "se3_direct":
+                    # SE(3) direct optimization in Lie algebra space
+                    # pose format: [x, y, z, qx, qy, qz, qw]
+                    # pred_se3 format: [tx, ty, tz, ωx, ωy, ωz]
+                    
+                    pred_se3 = pose_pred["se3"]  # shape: [B, 6]
+                    
+                    # Target: extract translation and convert rotation to rotation vector
+                    target_trans = pose[:, 0:3]  # [x, y, z]
+                    target_quat = pose[:, 3:]   # [qx, qy, qz, qw]
+                    target_rot_vec = quaternion_to_rotation_vector(target_quat)  # Convert to axis-angle
+                    target_se3 = torch.cat([target_trans, target_rot_vec], dim=-1)  # [tx, ty, tz, ωx, ωy, ωz]
+                    
+                    # SE(3) direct loss - treats the complete pose uniformly
+                    loss = se3_direct_loss(pred_se3, target_se3)
+                    
+                    # For logging purposes, compute components
+                    loss_y = torch.nn.functional.mse_loss(pred_se3[:, 1:2], target_se3[:, 1:2])
+                    loss_z = torch.nn.functional.mse_loss(pred_se3[:, 2:3], target_se3[:, 2:3])
+                    loss_q = torch.norm(pred_se3[:, 3:6] - target_se3[:, 3:6], p=2, dim=-1).mean()
+                    loss_trans = torch.norm(pred_se3[:, 0:3] - target_se3[:, 0:3], p=2, dim=-1).mean()
+                    
+                    # Absolute errors for logging
+                    abs_trans = torch.norm(pred_se3[:, 0:3] - target_se3[:, 0:3], dim=1).mean()
+                    abs_trans_y = torch.abs(pred_se3[:, 1] - target_se3[:, 1]).mean()
+                    abs_trans_z = torch.abs(pred_se3[:, 2] - target_se3[:, 2]).mean()
+                    
+                    # For rotation error, convert predicted rotation vector to quaternion and compare
+                    pred_rot_vec = pred_se3[:, 3:6]
+                    pred_quat = rotation_vector_to_quaternion(pred_rot_vec)
+                    pred_quat_norm = torch.nn.functional.normalize(pred_quat, p=2, dim=1, eps=1e-7)
+                    target_quat_norm = torch.nn.functional.normalize(target_quat, p=2, dim=1, eps=1e-7)
+                    
+                    # Extract roll for metric comparison
+                    pred_roll_vec = quaternion_to_2d_unit_vector(pred_quat_norm)
+                    target_roll_vec = quaternion_to_2d_unit_vector(target_quat_norm)
+                    pred_angle = torch.atan2(pred_roll_vec[:, 0], pred_roll_vec[:, 1])
+                    target_angle = torch.atan2(target_roll_vec[:, 0], target_roll_vec[:, 1])
+                    rot_diff = torch.abs(pred_angle - target_angle)
+                    rot_diff = torch.atan2(torch.sin(rot_diff), torch.cos(rot_diff))
+                    abs_rot_x = torch.rad2deg(torch.abs(rot_diff)).mean()
                 else:
-                    loss = base_loss
-                abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = absolute_pose_error_x_rot(pose_pred["pose"].detach(), pose)
+                    base_loss, loss_q, loss_y, loss_z = criterion(pose, pose_pred["pose"])
+                    loss_trans = loss_y + loss_z
+                    if uncertainty_module is not None:
+                        loss = uncertainty_module(loss_q, loss_trans)
+                    else:
+                        loss = base_loss
+                    abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = absolute_pose_error_x_rot(pose_pred["pose"].detach(), pose)
 
                 if fusion_weights is not None:
                     fusion_weights_flat = fusion_weights.detach().cpu().flatten().float()
@@ -286,13 +415,159 @@ def train_loop(
                     batch = {k: v.to(device) for k, v in batch.items()}
                     pose = batch["pose"].to(device)
                     pose_pred, _ = model(batch)
-                    val_base_loss, val_q, val_y, val_z = criterion(pose, pose_pred["pose"])
-                    val_trans = val_y + val_z
-                    if uncertainty_module is not None:
-                        val_loss = uncertainty_module(val_q, val_trans)
+
+                    if getattr(model, "rotation_parametrisation", "") == "2D_unit_vector":
+                        rot_scaling_factor = 200.0
+                        pred_trans = pose_pred["trans"][:, 1:3]
+                        target_trans = pose[:, 1:3]
+                        pred_vec = pose_pred["rotation"]
+                        target_vec = quaternion_to_2d_unit_vector(pose[:, 3:])
+
+                        val_y = torch.nn.functional.mse_loss(pred_trans[:, 0], target_trans[:, 0])
+                        val_z = torch.nn.functional.mse_loss(pred_trans[:, 1], target_trans[:, 1])
+                        
+                        # Use selected rotation loss type
+                        if rotation_loss_type == "normalized_mse":
+                            val_q = normalized_mse_loss_2d_unit_vector(pred_vec, target_vec)
+                        else:  # default to geodesic
+                            val_q = geodesic_loss_2d_unit_vector(pred_vec, target_vec)
+                        
+                        val_q_scaled = val_q * rot_scaling_factor
+                        val_trans = val_y + val_z
+
+                        if uncertainty_module is not None:
+                            val_loss = uncertainty_module(val_q_scaled, val_trans)
+                        else:
+                            val_loss = val_q_scaled + val_y + val_z
+
+                        ay = torch.abs(pred_trans[:, 0] - target_trans[:, 0]).mean()
+                        az = torch.abs(pred_trans[:, 1] - target_trans[:, 1]).mean()
+                        at = torch.norm(pred_trans - target_trans, dim=1).mean()
+                        pred_angle = torch.atan2(pred_vec[:, 0], pred_vec[:, 1])
+                        target_angle = torch.atan2(target_vec[:, 0], target_vec[:, 1])
+                        rot_diff = torch.abs(pred_angle - target_angle)
+                        rot_diff = torch.min(rot_diff, 2 * torch.pi - rot_diff)
+                        arx = torch.rad2deg(rot_diff).mean()
+                    elif getattr(model, "rotation_parametrisation", "") == "angle":
+                        rot_scaling_factor = 200.0
+                        pred_trans = pose_pred["trans"][:, 1:3]
+                        target_trans = pose[:, 1:3]
+                        pred_angle = pose_pred["rotation"]  # shape: [B, 1]
+                        
+                        # Extract target roll from quaternion
+                        target_roll = quaternion_to_2d_unit_vector(pose[:, 3:])  # [B, 2] as (sin, cos)
+                        target_angle = torch.atan2(target_roll[:, 0], target_roll[:, 1])  # [B]
+                        target_angle = target_angle.unsqueeze(-1)  # [B, 1]
+
+                        val_y = torch.nn.functional.mse_loss(pred_trans[:, 0], target_trans[:, 0])
+                        val_z = torch.nn.functional.mse_loss(pred_trans[:, 1], target_trans[:, 1])
+                        val_q = wrapped_angle_loss(pred_angle, target_angle)
+                        val_q_scaled = val_q * rot_scaling_factor
+                        val_trans = val_y + val_z
+
+                        if uncertainty_module is not None:
+                            val_loss = uncertainty_module(val_q_scaled, val_trans)
+                        else:
+                            val_loss = val_q_scaled + val_y + val_z
+
+                        ay = torch.abs(pred_trans[:, 0] - target_trans[:, 0]).mean()
+                        az = torch.abs(pred_trans[:, 1] - target_trans[:, 1]).mean()
+                        at = torch.norm(pred_trans - target_trans, dim=1).mean()
+                        # Normalize angles for metric computation
+                        pred_angle_norm = torch.atan2(torch.sin(pred_angle), torch.cos(pred_angle))
+                        target_angle_norm = torch.atan2(torch.sin(target_angle), torch.cos(target_angle))
+                        rot_diff = torch.abs(pred_angle_norm - target_angle_norm)
+                        rot_diff = torch.atan2(torch.sin(rot_diff), torch.cos(rot_diff))
+                        arx = torch.rad2deg(torch.abs(rot_diff)).mean()
+                    elif getattr(model, "rotation_parametrisation", "") == "lie_algebra":
+                        # Lie algebra (axis-angle) representation
+                        rot_scaling_factor = 200.0
+                        pred_trans = pose_pred["trans"][:, 1:3]
+                        target_trans = pose[:, 1:3]
+                        pred_axis_angle = pose_pred["rotation"]  # shape: [B, 3]
+                        
+                        # Convert predicted axis-angle to quaternion via exponential map
+                        pred_quat = axis_angle_to_quaternion(pred_axis_angle)
+                        target_quat = pose[:, 3:]  # ground truth quaternion [x,y,z,w]
+
+                        val_y = torch.nn.functional.mse_loss(pred_trans[:, 0], target_trans[:, 0])
+                        val_z = torch.nn.functional.mse_loss(pred_trans[:, 1], target_trans[:, 1])
+                        
+                        # Use quaternion geodesic loss (same as quaternion head for fair comparison)
+                        # Normalize quaternions
+                        pred_quat_norm = torch.nn.functional.normalize(pred_quat, p=2, dim=1, eps=1e-7)
+                        target_quat_norm = torch.nn.functional.normalize(target_quat, p=2, dim=1, eps=1e-7)
+                        
+                        # Geodesic distance: 2 * arccos(|dot product|)
+                        dot_prod = torch.sum(pred_quat_norm * target_quat_norm, dim=1)
+                        dot_prod = torch.clamp(torch.abs(dot_prod), 0.0, 1.0 - 1e-7)
+                        val_q = 2.0 * torch.acos(dot_prod).mean()
+                        val_q_scaled = val_q * rot_scaling_factor
+                        val_trans = val_y + val_z
+
+                        if uncertainty_module is not None:
+                            val_loss = uncertainty_module(val_q_scaled, val_trans)
+                        else:
+                            val_loss = val_q_scaled + val_y + val_z
+
+                        ay = torch.abs(pred_trans[:, 0] - target_trans[:, 0]).mean()
+                        az = torch.abs(pred_trans[:, 1] - target_trans[:, 1]).mean()
+                        at = torch.norm(pred_trans - target_trans, dim=1).mean()
+                        
+                        # Extract roll for metric comparison (convert both quats to roll)
+                        pred_roll_vec = quaternion_to_2d_unit_vector(pred_quat_norm)
+                        target_roll_vec = quaternion_to_2d_unit_vector(target_quat_norm)
+                        pred_angle = torch.atan2(pred_roll_vec[:, 0], pred_roll_vec[:, 1])
+                        target_angle = torch.atan2(target_roll_vec[:, 0], target_roll_vec[:, 1])
+                        rot_diff = torch.abs(pred_angle - target_angle)
+                        rot_diff = torch.atan2(torch.sin(rot_diff), torch.cos(rot_diff))
+                        arx = torch.rad2deg(torch.abs(rot_diff)).mean()
+                    elif getattr(model, "rotation_parametrisation", "") == "se3_direct":
+                        # SE(3) direct optimization in validation
+                        pred_se3 = pose_pred["se3"]  # shape: [B, 6]
+                        
+                        # Target: extract translation and convert rotation to rotation vector
+                        target_trans = pose[:, 0:3]  # [x, y, z]
+                        target_quat = pose[:, 3:]   # [qx, qy, qz, qw]
+                        target_rot_vec = quaternion_to_rotation_vector(target_quat)
+                        target_se3 = torch.cat([target_trans, target_rot_vec], dim=-1)
+                        
+                        # SE(3) direct loss
+                        val_loss = se3_direct_loss(pred_se3, target_se3)
+                        
+                        # For logging purposes, compute components
+                        val_y = torch.nn.functional.mse_loss(pred_se3[:, 1:2], target_se3[:, 1:2])
+                        val_z = torch.nn.functional.mse_loss(pred_se3[:, 2:3], target_se3[:, 2:3])
+                        val_q = torch.norm(pred_se3[:, 3:6] - target_se3[:, 3:6], p=2, dim=-1).mean()
+                        
+                        # Absolute errors for logging
+                        at = torch.norm(pred_se3[:, 0:3] - target_se3[:, 0:3], dim=1).mean()
+                        ay = torch.abs(pred_se3[:, 1] - target_se3[:, 1]).mean()
+                        az = torch.abs(pred_se3[:, 2] - target_se3[:, 2]).mean()
+                        
+                        # For rotation error
+                        pred_rot_vec = pred_se3[:, 3:6]
+                        pred_quat = rotation_vector_to_quaternion(pred_rot_vec)
+                        pred_quat_norm = torch.nn.functional.normalize(pred_quat, p=2, dim=1, eps=1e-7)
+                        target_quat_norm = torch.nn.functional.normalize(target_quat, p=2, dim=1, eps=1e-7)
+                        
+                        # Extract roll for metric comparison
+                        pred_roll_vec = quaternion_to_2d_unit_vector(pred_quat_norm)
+                        target_roll_vec = quaternion_to_2d_unit_vector(target_quat_norm)
+                        pred_angle = torch.atan2(pred_roll_vec[:, 0], pred_roll_vec[:, 1])
+                        target_angle = torch.atan2(target_roll_vec[:, 0], target_roll_vec[:, 1])
+                        rot_diff = torch.abs(pred_angle - target_angle)
+                        rot_diff = torch.atan2(torch.sin(rot_diff), torch.cos(rot_diff))
+                        arx = torch.rad2deg(torch.abs(rot_diff)).mean()
                     else:
-                        val_loss = val_base_loss
-                    ay, az, at, arx = absolute_pose_error_x_rot(pose_pred["pose"], pose)
+                        val_base_loss, val_q, val_y, val_z = criterion(pose, pose_pred["pose"])
+                        val_trans = val_y + val_z
+                        if uncertainty_module is not None:
+                            val_loss = uncertainty_module(val_q, val_trans)
+                        else:
+                            val_loss = val_base_loss
+                        ay, az, at, arx = absolute_pose_error_x_rot(pose_pred["pose"], pose)
+
                     val_loss_total += val_loss.item()
                     val_loss_q += val_q.item()
                     val_loss_y += val_y.item()
@@ -356,7 +631,9 @@ def train_loop(
                         continue
 
                     old_lr = float(group["lr"])
-                    new_lr = max(old_lr * head_reduce_factor, head_min_lrs[head_key])
+                    new_multiplier = max(group_lr_multipliers.get(group_name, 1.0) * head_reduce_factor, head_min_lr_mult)
+                    group_lr_multipliers[group_name] = new_multiplier
+                    new_lr = max(base_group_lrs.get(group_name, old_lr) * current_lr_scale * new_multiplier, head_min_lrs[head_key])
                     if new_lr < old_lr:
                         group["lr"] = new_lr
                         logger.info(
@@ -417,6 +694,7 @@ def train_loop(
                 lr_head_rot=lr_head_rot,
                 lr_head_y=lr_head_y,
                 lr_head_z=lr_head_z,
+                lr_schedule_scale=current_lr_scale,
                 param_groups_by_name=param_groups_by_name,
                 fusion_weights=fw_str,
                 fusion_weights_avg=fusion_weights_avg,
@@ -467,6 +745,7 @@ def train_loop(
                     "lr_head_rot": f"{lr_head_rot:.8f}",
                     "lr_head_y": f"{lr_head_y:.8f}",
                     "lr_head_z": f"{lr_head_z:.8f}",
+                    "lr_schedule_scale": f"{current_lr_scale:.8f}",
                     "uncertainty_log_var_rot": "" if uncertainty_log_var_rot == "" else f"{uncertainty_log_var_rot:.8f}",
                     "uncertainty_log_var_trans": "" if uncertainty_log_var_trans == "" else f"{uncertainty_log_var_trans:.8f}",
                     "uncertainty_weight_rot": "" if uncertainty_weight_rot == "" else f"{uncertainty_weight_rot:.8f}",
@@ -554,6 +833,7 @@ def main(
     ).to(device)
 
     head_lr_cfg = cfg.get("training", {}).get("head_lr_decay", {})
+    lr_schedule_cfg = cfg.get("training", {}).get("lr_schedule", {})
     uncertainty_cfg = cfg.get("training", {}).get("uncertainty_weighting", {})
     use_uncertainty_weighting = bool(uncertainty_cfg.get("enabled", False))
     uncertainty_module = None
@@ -597,6 +877,7 @@ def main(
         "batch_size": batch_size,
         "seed": cfg.get("training", {}).get("seed", ""),
         "head_lr_decay": resolved_head_lr_cfg,
+        "lr_schedule": lr_schedule_cfg if lr_schedule_cfg else {"enabled": False},
         "uncertainty_weighting": uncertainty_cfg if use_uncertainty_weighting else {"enabled": False},
     }
 
@@ -616,6 +897,14 @@ def main(
             f"init_log_var_rot={uncertainty_cfg.get('init_log_var_rot', 0.0)} "
             f"init_log_var_trans={uncertainty_cfg.get('init_log_var_trans', 0.0)} "
             f"lr_mult={uncertainty_cfg.get('lr_mult', 1.0)}"
+        )
+    if bool(lr_schedule_cfg.get("enabled", False)):
+        logger.info(
+            "lr_schedule enabled=true "
+            f"type={lr_schedule_cfg.get('type', 'one_cycle')} "
+            f"start_lr_mult={lr_schedule_cfg.get('start_lr_mult', 0.2)} "
+            f"max_lr_mult={lr_schedule_cfg.get('max_lr_mult', 3.0)} "
+            f"final_lr_mult={lr_schedule_cfg.get('final_lr_mult', 0.05)}"
         )
     if is_port_in_use(tb_port):
         logger.info(f"TensorBoard already running on port {tb_port}. Logging to existing instance.")
@@ -652,7 +941,15 @@ def main(
 
 
     # Training
-    loss_function = total_loss
+    # Choose loss function according to rotation parametrisation
+    head_type = cfg.get("model", {}).get("head_type", "quaternion")
+    if head_type == "2D_unit_vector":
+        loss_function = total_loss_2D_vector
+    else:
+        loss_function = total_loss
+    
+    # Get rotation loss type for 2D branch
+    rotation_loss_type = cfg.get("model", {}).get("rotation_loss_type", "geodesic")
 
     try:
         train_loop(
@@ -670,6 +967,8 @@ def main(
             run_metadata=run_metadata,
             tensorboard_log_dir=tensorboard_log_dir,
             head_lr_decay_cfg=resolved_head_lr_cfg,
+            lr_schedule_cfg=lr_schedule_cfg,
+            rotation_loss_type=rotation_loss_type,
         )
     finally:
         pass

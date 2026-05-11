@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from ast import literal_eval
 
 # Load your CSV (replace with your file path)
-df = pd.read_csv("logs/train_20260415_122920_metrics.csv")
+df = pd.read_csv(r"runs\20260511_115750_bs16_gated\metrics.csv")
 
 # Ensure numeric columns
 numeric_cols = [

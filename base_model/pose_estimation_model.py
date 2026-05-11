@@ -30,7 +30,7 @@ parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.insert(0, parent_dir)
 
 from base_model.yolo_trunk import load_yolo_trunk, get_p345_indices, align_channels, extract_features_raw
-from base_model.mlp_head import MLPHead, PoseHead_with_quaternion, PoseHead_with_2D_unitVector, SE3_lie_group_PoseHead
+from base_model.mlp_head import MLPHead, PoseHead_with_quaternion, PoseHead_with_2D_unitVector, SE3_lie_group_PoseHead, PoseHead_with_angle, PoseHead_with_lie_algebra, SE3_lie_algebra_direct_PoseHead
 from fusion.registry import build_fusion
 
 
@@ -100,7 +100,7 @@ class PoseEstimationNet(nn.Module):
         rot_hidden = to_list(rotation_layers)
         trans_hidden = to_list(translation_layers)
 
-        # Rotation Head (4D output)
+        # Rotation Head
         if rotation_parametrisation == "quaternion":
             self.rot_head = MLPHead(
                 in_dim=fused_dim,
@@ -119,26 +119,50 @@ class PoseEstimationNet(nn.Module):
                 bn=use_batchnorm,
                 activation=self.activation
             )
+        elif rotation_parametrisation == "angle":
+            self.rot_head = MLPHead(
+                in_dim=fused_dim,
+                out_dim=1,
+                hidden_dims=rot_hidden,
+                dropout=dropout_rot,
+                bn=use_batchnorm,
+                activation=self.activation
+            )
+        elif rotation_parametrisation == "lie_algebra":
+            self.rot_head = MLPHead(
+                in_dim=fused_dim,
+                out_dim=3,
+                hidden_dims=rot_hidden,
+                dropout=dropout_rot,
+                bn=use_batchnorm,
+                activation=self.activation
+            )
+        elif rotation_parametrisation == "se3_direct":
+            # SE(3) direct head outputs complete 6D SE(3) Lie algebra element
+            self.se3_direct_head = SE3_lie_algebra_direct_PoseHead(
+                in_dim=fused_dim
+            )
         else:
             raise ValueError(f"Unsupported rotation parametrisation: {rotation_parametrisation}")
         
-        # Translation Heads
-        self.y_head = MLPHead(
-            in_dim=fused_dim,
-            out_dim=1,
-            hidden_dims=trans_hidden,
-            dropout=dropout_trans,
-            bn=use_batchnorm,
-            activation=self.activation
-        )
-        self.z_head = MLPHead(
-            in_dim=fused_dim,
-            out_dim=1,
-            hidden_dims=trans_hidden,
-            dropout=dropout_trans,
-            bn=use_batchnorm,
-            activation=self.activation
-        )
+        # Translation Heads (only for non-SE3-direct modes)
+        if rotation_parametrisation != "se3_direct":
+            self.y_head = MLPHead(
+                in_dim=fused_dim,
+                out_dim=1,
+                hidden_dims=trans_hidden,
+                dropout=dropout_trans,
+                bn=use_batchnorm,
+                activation=self.activation
+            )
+            self.z_head = MLPHead(
+                in_dim=fused_dim,
+                out_dim=1,
+                hidden_dims=trans_hidden,
+                dropout=dropout_trans,
+                bn=use_batchnorm,
+                activation=self.activation
+            )
 
 
 
@@ -170,18 +194,34 @@ class PoseEstimationNet(nn.Module):
             fused = fusion_out
             avg_fusion_weights = None
 
-        # Run through separate heads
-        rotation = self.rot_head(fused)
-        y = self.y_head(fused)
-        z = self.z_head(fused)
+        # Handle SE(3) direct optimization
+        if self.rotation_parametrisation == "se3_direct":
+            # SE(3) direct: outputs 6D [tx, ty, tz, ωx, ωy, ωz]
+            se3_pose = self.se3_direct_head(fused)
+            
+            # Extract translation and rotation for compatibility
+            translation = se3_pose[:, 0:3]  # [x, y, z]
+            rotation = se3_pose[:, 3:6]      # [ωx, ωy, ωz] - rotation vector
+            
+            return {
+                "se3": se3_pose,             # Shape: [B, 6] complete SE(3)
+                "rotation": rotation,        # Shape: [B, 3] rotation vector
+                "trans": translation,        # Shape: [B, 3]
+                "pose": se3_pose             # Shape: [B, 6] for SE(3)
+            }, avg_fusion_weights
+        else:
+            # Run through separate heads
+            rotation = self.rot_head(fused)
+            y = self.y_head(fused)
+            z = self.z_head(fused)
 
-        # Return as a dictionary or concatenated vector, x=0
-        x_coord = torch.zeros_like(y)
-        translation = torch.cat([x_coord, y, z], dim=-1)
+            # Return as a dictionary or concatenated vector, x=0
+            x_coord = torch.zeros_like(y)
+            translation = torch.cat([x_coord, y, z], dim=-1)
 
-        return {
-            "rotation": rotation,   # Shape: [B, 4] for quat
-            "trans": translation,    # Shape: [B, 3]
-            "pose": torch.cat([translation, rotation], dim=-1)  # Shape: [B, 7]
-        }, avg_fusion_weights  # return mean fusion weights for logging
+            return {
+                "rotation": rotation,   # Shape: [B, 4] for quat
+                "trans": translation,    # Shape: [B, 3]
+                "pose": torch.cat([translation, rotation], dim=-1)  # Shape: [B, 7]
+            }, avg_fusion_weights  # return mean fusion weights for logging
         

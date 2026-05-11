@@ -33,7 +33,7 @@ training:
     min_lr_mult: 0.00001
 
 data:
-  root: "D:/MA/USB_TCP_combined"
+  root: "D:/MA/FusionModel/data"
   streams: ["mono_cam", "tactile"]
   image_size: 640
   use_rgb: true
