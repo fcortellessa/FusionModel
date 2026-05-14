@@ -15,7 +15,7 @@ model:
 training:
   lr: 0.001
   batch_size: 16
-  epochs: 150
+  epochs: 50
   num_workers: 4
   optimizer: Adam
   uncertainty_weighting:
@@ -26,6 +26,18 @@ training:
   dropout_rot: 0.3
   dropout_trans: 0.1
   use_batchnorm: True
+  lr_schedule:
+    enabled: true
+    type: one_cycle
+    pct_start: 0.2
+    start_lr_mult: 0.2
+    max_lr_mult: 3.0
+    final_lr_mult: 0.05
+  head_lr_decay:
+    enabled: false
+    patience: 5
+    factor: 0.2
+    min_lr_mult: 0.00001
 
 data:
   root: ""

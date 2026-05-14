@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from ast import literal_eval
 
 # Load your CSV (replace with your file path)
-df = pd.read_csv(r"runs\20260511_115750_bs16_gated\metrics.csv")
+df = pd.read_csv(r"runs\20260511_182856_bs16_concat\metrics.csv")
 
 # Ensure numeric columns
 numeric_cols = [
@@ -14,6 +14,43 @@ numeric_cols = [
 ]
 existing_numeric_cols = [col for col in numeric_cols if col in df.columns]
 df[existing_numeric_cols] = df[existing_numeric_cols].apply(pd.to_numeric, errors='coerce')
+
+
+def format_metadata_value(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def get_run_metadata_text(frame):
+    metadata_fields = ["fusion", "head_type", "batch_size"]
+    parts = []
+    for field in metadata_fields:
+        if field not in frame.columns:
+            continue
+        series = frame[field].dropna()
+        if series.empty:
+            continue
+        value = format_metadata_value(series.iloc[0])
+        if value is not None:
+            parts.append(f"{field}={value}")
+    return " | ".join(parts) if parts else None
+
+
+def add_run_metadata(fig, frame):
+    metadata_text = get_run_metadata_text(frame)
+    if metadata_text:
+        fig.text(
+            0.01,
+            0.01,
+            metadata_text,
+            ha="left",
+            va="bottom",
+            fontsize=8,
+            alpha=0.75,
+        )
 
 
 def plot_train_val(ax, epoch_col, train_col, val_col, title, ylabel, train_label=None, val_label=None, train_color="#1f77b4", val_color="#ff7f0e"):
@@ -59,7 +96,8 @@ if "train_loss" in df.columns:
         (df.loc[best_idx, "epoch"], df.loc[best_idx, "train_loss"]),
     )
 ax.set_xlabel("Epoch")
-plt.tight_layout()
+add_run_metadata(fig, df)
+fig.tight_layout(rect=[0, 0.05, 1, 1])
 plt.show()
 
 
@@ -73,7 +111,7 @@ plot_train_val(
     "train_abs_trans",
     "val_abs_trans",
     "Translation Error",
-    "Translation Error (m)",
+    "Translation Error (mm)",
     train_label="Train Translation",
     val_label="Val Translation",
 )
@@ -91,7 +129,8 @@ plot_train_val(
 )
 ax2.set_xlabel("Epoch")
 
-plt.tight_layout()
+add_run_metadata(fig, df)
+fig.tight_layout(rect=[0, 0.05, 1, 1])
 plt.show()
 
 
@@ -103,7 +142,8 @@ if "train_abs_y" in df.columns or "val_abs_y" in df.columns or "train_abs_z" in 
     plot_train_val(ax1, "epoch", "train_abs_y", "val_abs_y", "Y-axis Error", "Abs Error (m)", train_label="Train Y", val_label="Val Y")
     plot_train_val(ax2, "epoch", "train_abs_z", "val_abs_z", "Z-axis Error", "Abs Error (m)", train_label="Train Z", val_label="Val Z", train_color="#2ca02c", val_color="#9467bd")
     ax2.set_xlabel("Epoch")
-    plt.tight_layout()
+    add_run_metadata(fig, df)
+    fig.tight_layout(rect=[0, 0.05, 1, 1])
     plt.show()
 
 # =========================
@@ -121,7 +161,8 @@ ax.set_xlabel("Epoch")
 ax.set_ylabel("Loss Value")
 ax.legend()
 ax.grid(True)
-plt.tight_layout()
+add_run_metadata(fig, df)
+fig.tight_layout(rect=[0, 0.05, 1, 1])
 plt.show()
 
 
@@ -144,7 +185,8 @@ if "fusion_weights" in df.columns:
             ax.set_ylabel("Weight")
             ax.legend()
             ax.grid(True)
-            plt.tight_layout()
+            add_run_metadata(fig, df)
+            fig.tight_layout(rect=[0, 0.05, 1, 1])
             plt.show()
 
 
@@ -161,7 +203,8 @@ if lr_columns:
     ax.set_ylabel("Learning Rate")
     ax.legend()
     ax.grid(True)
-    plt.tight_layout()
+    add_run_metadata(fig, df)
+    fig.tight_layout(rect=[0, 0.05, 1, 1])
     plt.show()
 
 
@@ -173,7 +216,11 @@ print(f"Initial Loss: {df['train_loss'].iloc[0]:.3f}")
 print(f"Final Loss: {df['train_loss'].iloc[-1]:.3f}")
 print(f"Best Loss: {df['train_loss'].min():.3f} (epoch {df.loc[df['train_loss'].idxmin(), 'epoch']})")
 
-if "val_abs_trans" in df.columns:
-    print(f"\nFinal Val Translation: {df['val_abs_trans'].iloc[-1]:.6f}")
+if "val_abs_y" in df.columns:
+    print(f"\nFinal Val Translation in y: {df['val_abs_y'].iloc[-1]:.6f}")
+if "val_abs_z" in df.columns:
+    print(f"Final Val Translation in z: {df['val_abs_z'].iloc[-1]:.6f}")
+elif "val_abs_trans" in df.columns:
+    print(f"Final Val Translation: {df['val_abs_trans'].iloc[-1]:.6f}")
 if "val_abs_rot_x" in df.columns:
-    print(f"Final Val Rotation: {df['val_abs_rot_x'].iloc[-1]:.6f}")
+    print(f"Final Val Rotation around x: {df['val_abs_rot_x'].iloc[-1]:.6f}")

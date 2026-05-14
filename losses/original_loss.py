@@ -1,10 +1,6 @@
 import torch
 import torch.nn.functional as F
 
-def compute_mse_loss(tensor1, tensor2):
-    """Compute mean squared error (MSE) between two tensors."""
-    return F.mse_loss(tensor1, tensor2, reduction='mean')
-
 def quaternion_geodesic_distance(q1, q2, eps=1e-7):
     """
     Compute geodesic distance between two quaternions.

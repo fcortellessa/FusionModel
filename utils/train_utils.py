@@ -2,25 +2,6 @@ import torch
 import math
 
 
-def quaternion_to_2d_unit_vector(quat):
-    """
-    Convert quaternion (x,y,z,w) to a 2D unit vector (sin, cos) representing rotation around the X-axis (roll).
-    Input: quat tensor shape (B,4)
-    Output: tensor shape (B,2) with [sin(roll), cos(roll)]
-    """
-    # Ensure shape
-    if quat.dim() == 1:
-        quat = quat.unsqueeze(0)
-
-    q = torch.nn.functional.normalize(quat, p=2, dim=1, eps=1e-7)
-    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-
-    sinr_cosp = 2 * (w * x + y * z)
-    cosr_cosp = 1 - 2 * (x**2 + y**2)
-    roll = torch.atan2(sinr_cosp, cosr_cosp)
-
-    return torch.stack([torch.sin(roll), torch.cos(roll)], dim=1)
-
 
 def _get_lr_by_group(optimizer, group_name):
     for group in optimizer.param_groups:
@@ -104,4 +85,491 @@ def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
         return final_lr_mult + (target_peak - final_lr_mult) * cosine
 
     return lr_scale
+
+
+# ============================================================================
+# Manager Classes for Training Organization
+# ============================================================================
+
+class HeadLRDecayManager:
+    """Manages per-head learning rate decay based on validation performance."""
+    
+    def __init__(self, head_lr_decay_cfg, base_lr, optimizer, param_groups_by_name):
+        """
+        Args:
+            head_lr_decay_cfg: Config dict with 'enabled', 'patience', 'factor', 'min_lr_mult'
+            base_lr: Base learning rate
+            optimizer: PyTorch optimizer
+            param_groups_by_name: Dict mapping group names to param groups
+        """
+        self.enabled = bool(head_lr_decay_cfg.get("enabled", True))
+        self.patience = int(head_lr_decay_cfg.get("patience", 3))
+        self.reduce_factor = float(head_lr_decay_cfg.get("factor", 0.3))
+        self.min_lr_mult = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
+        
+        self.optimizer = optimizer
+        self.param_groups_by_name = param_groups_by_name
+        self.base_lr = base_lr
+        
+        # Track base LRs for each group
+        self.base_group_lrs = {
+            group_name: float(group["lr"])
+            for group_name, group in param_groups_by_name.items()
+        }
+        
+        # Track multipliers for each group
+        self.group_lr_multipliers = {group_name: 1.0 for group_name in self.base_group_lrs}
+        
+        # Per-head tracking state
+        self.head_state = {
+            "q": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_rot"},
+            "y": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_y"},
+            "z": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_z"},
+        }
+        
+        self.min_lrs = {
+            "q": base_lr * self.min_lr_mult,
+            "y": base_lr * self.min_lr_mult,
+            "z": base_lr * self.min_lr_mult,
+        }
+    
+    def update(self, train_metrics, val_metrics, current_lr_scale, logger=None):
+        """
+        Update head LR multipliers based on training and validation metrics.
+        
+        Args:
+            train_metrics: Dict with 'loss_q', 'loss_y', 'loss_z'
+            val_metrics: Dict with 'loss_q', 'loss_y', 'loss_z'
+            current_lr_scale: Current LR schedule scale factor
+            logger: Optional logger for decay notifications
+        """
+        if not self.enabled:
+            return
+        
+        per_head_losses = {
+            "q": {"train": train_metrics["loss_q"], "val": val_metrics["loss_q"]},
+            "y": {"train": train_metrics["loss_y"], "val": val_metrics["loss_y"]},
+            "z": {"train": train_metrics["loss_z"], "val": val_metrics["loss_z"]},
+        }
+        
+        for head_key, head_vals in per_head_losses.items():
+            state = self.head_state[head_key]
+            best_val = state["best_val"]
+            val_head = head_vals["val"]
+            train_head = head_vals["train"]
+            
+            # Check if validation improved
+            if val_head < best_val:
+                state["best_val"] = val_head
+                state["bad_epochs"] = 0
+                continue
+            
+            # Check for overfitting
+            overfit_detected = val_head > train_head
+            if overfit_detected:
+                state["bad_epochs"] += 1
+            else:
+                state["bad_epochs"] = 0
+            
+            # Apply decay if patience exceeded
+            if state["bad_epochs"] < self.patience:
+                continue
+            
+            group_name = state["group_name"]
+            group = self.param_groups_by_name.get(group_name)
+            if group is None:
+                continue
+            
+            old_lr = float(group["lr"])
+            new_multiplier = max(
+                self.group_lr_multipliers.get(group_name, 1.0) * self.reduce_factor,
+                self.min_lr_mult
+            )
+            self.group_lr_multipliers[group_name] = new_multiplier
+            new_lr = max(
+                self.base_group_lrs.get(group_name, old_lr) * current_lr_scale * new_multiplier,
+                self.min_lrs[head_key]
+            )
+            
+            if new_lr < old_lr:
+                group["lr"] = new_lr
+                if logger:
+                    logger.info(
+                        f"head_lr_reduce head={head_key} group={group_name} "
+                        f"old_lr={old_lr:.8f} new_lr={new_lr:.8f} train_head={train_head:.6f} "
+                        f"val_head={val_head:.6f} bad_epochs={state['bad_epochs']}"
+                    )
+            
+            state["bad_epochs"] = 0
+    
+    def apply_lr_scale(self, current_lr_scale):
+        """Apply global LR schedule scale to all groups."""
+        for group_idx, group in enumerate(self.optimizer.param_groups):
+            group_name = group.get("name", f"group_{group_idx}")
+            base_group_lr = self.base_group_lrs.get(group_name, float(group["lr"]))
+            group_multiplier = self.group_lr_multipliers.get(group_name, 1.0)
+            group["lr"] = base_group_lr * current_lr_scale * group_multiplier
+
+
+class EpochMetricsAggregator:
+    """Aggregates and provides easy access to epoch metrics."""
+    
+    def __init__(self, metrics_dict, num_batches):
+        """
+        Args:
+            metrics_dict: Dict with accumulated metrics
+            num_batches: Number of batches in the epoch
+        """
+        self.metrics_dict = metrics_dict
+        self.num_batches = num_batches
+    
+    @property
+    def avg_loss(self):
+        return self.metrics_dict["loss"] / self.num_batches
+    
+    @property
+    def avg_loss_q(self):
+        return self.metrics_dict["loss_q"] / self.num_batches
+    
+    @property
+    def avg_loss_y(self):
+        return self.metrics_dict["loss_y"] / self.num_batches
+    
+    @property
+    def avg_loss_z(self):
+        return self.metrics_dict["loss_z"] / self.num_batches
+    
+    @property
+    def avg_abs_y(self):
+        return self.metrics_dict["abs_y"] / self.num_batches
+    
+    @property
+    def avg_abs_z(self):
+        return self.metrics_dict["abs_z"] / self.num_batches
+    
+    @property
+    def avg_abs_trans(self):
+        return self.metrics_dict["abs_trans"] / self.num_batches
+    
+    @property
+    def avg_abs_rot_x(self):
+        return self.metrics_dict["abs_rot_x"] / self.num_batches
+    
+    def to_dict(self):
+        """Return all averaged metrics as a dict."""
+        return {
+            "loss": self.avg_loss,
+            "loss_q": self.avg_loss_q,
+            "loss_y": self.avg_loss_y,
+            "loss_z": self.avg_loss_z,
+            "abs_y": self.avg_abs_y,
+            "abs_z": self.avg_abs_z,
+            "abs_trans": self.avg_abs_trans,
+            "abs_rot_x": self.avg_abs_rot_x,
+        }
+
+
+class TrainingConfigBuilder:
+    """Builds training components (model, optimizer, loss, uncertainty) from config."""
+    
+    def __init__(self, cfg, device, logger=None):
+        """
+        Args:
+            cfg: Config dict
+            device: torch device
+            logger: Optional logger
+        """
+        self.cfg = cfg
+        self.device = device
+        self.logger = logger
+    
+    def build_model(self):
+        """Build model from config."""
+        from base_model.pose_estimation_model import PoseEstimationNet
+        
+        model = PoseEstimationNet(
+            model_name=self.cfg["model"]["backbone"],
+            streams=self.cfg["model"]["streams"],
+            fusion=self.cfg["model"]["fusion"],
+            freeze_backbone=self.cfg["model"]["freeze_backbone"],
+            rotation_parametrisation=self.cfg["model"]["head_type"],
+            activation=self.cfg["model"]["activation"],
+            rotation_layers=[
+                self.cfg["model"]["mlp_quat_1"],
+                self.cfg["model"]["mlp_quat_2"],
+                self.cfg["model"]["mlp_quat_3"]
+            ],
+            translation_layers=[
+                self.cfg["model"]["mlp_trans_1"],
+                self.cfg["model"]["mlp_trans_2"],
+                self.cfg["model"]["mlp_trans_3"]
+            ],
+            dropout_rot=self.cfg["training"]["dropout_rot"],
+            dropout_trans=self.cfg["training"]["dropout_trans"],
+            use_batchnorm=self.cfg["training"]["use_batchnorm"]
+        )
+        return model.to(self.device)
+    
+    def build_loss_function(self):
+        """Build loss function from config."""
+        from losses.original_loss import total_loss
+        from losses.se2_losses import total_loss_2D_vector
+        
+        head_type = self.cfg.get("model", {}).get("head_type", "quaternion")
+        if head_type == "2D_unit_vector":
+            return total_loss_2D_vector
+        else:
+            return total_loss
+    
+    def build_optimizer(self, model, param_groups=None):
+        """Build optimizer from config."""
+        from utils.utils import get_optimizer
+        
+        if param_groups is None:
+            param_groups = _build_named_param_groups(model, base_lr=float(self.cfg["training"]["lr"]))
+        
+        optimizer_name = self.cfg["training"]["optimizer"]
+        base_lr = float(self.cfg["training"]["lr"])
+        
+        return get_optimizer(param_groups, optimizer_name=optimizer_name, lr=base_lr)
+    
+    def build_uncertainty_module(self, optimizer, base_lr):
+        """Build uncertainty weighting module if enabled."""
+        from torch import nn
+        
+        uncertainty_cfg = self.cfg.get("training", {}).get("uncertainty_weighting", {})
+        use_uncertainty_weighting = bool(uncertainty_cfg.get("enabled", False))
+        
+        if not use_uncertainty_weighting:
+            return None
+        
+        class UncertaintyWeighting(nn.Module):
+            def __init__(self, init_log_var_rot=0.0, init_log_var_trans=0.0):
+                super().__init__()
+                self.log_var_rot = nn.Parameter(torch.tensor(float(init_log_var_rot), dtype=torch.float32))
+                self.log_var_trans = nn.Parameter(torch.tensor(float(init_log_var_trans), dtype=torch.float32))
+            
+            def forward(self, loss_rot, loss_trans):
+                weighted_rot = torch.exp(-self.log_var_rot) * loss_rot + self.log_var_rot
+                weighted_trans = torch.exp(-self.log_var_trans) * loss_trans + self.log_var_trans
+                return weighted_rot + weighted_trans
+        
+        uncertainty_module = UncertaintyWeighting(
+            init_log_var_rot=float(uncertainty_cfg.get("init_log_var_rot", 0.0)),
+            init_log_var_trans=float(uncertainty_cfg.get("init_log_var_trans", 0.0)),
+        ).to(self.device)
+        
+        uncertainty_lr_mult = float(uncertainty_cfg.get("lr_mult", 1.0))
+        optimizer.add_param_group({
+            "name": "uncertainty",
+            "params": uncertainty_module.parameters(),
+            "lr": base_lr * uncertainty_lr_mult,
+        })
+        
+        return uncertainty_module
+    
+    def build(self):
+        """Build all training components.
+        
+        Returns:
+            Tuple of (model, optimizer, uncertainty_module, loss_function, param_groups)
+        """
+        model = self.build_model()
+        param_groups = _build_named_param_groups(model, base_lr=float(self.cfg["training"]["lr"]))
+        optimizer = self.build_optimizer(model, param_groups=param_groups)
+        base_lr = float(self.cfg["training"]["lr"])
+        uncertainty_module = self.build_uncertainty_module(optimizer, base_lr)
+        loss_function = self.build_loss_function()
+        
+        if self.logger:
+            self.logger.info(f"Built model: {self.cfg['model']['backbone']}")
+            self.logger.info(f"Built optimizer: {self.cfg['training']['optimizer']}")
+            if uncertainty_module is not None:
+                self.logger.info("Built uncertainty weighting module")
+        
+        return model, optimizer, uncertainty_module, loss_function, param_groups
+
+
+class DataPipelineManager:
+    """Manages data loading and preprocessing pipeline."""
+    
+    def __init__(self, cfg, base_dir, force_preprocess=False, logger=None):
+        """
+        Args:
+            cfg: Config dict
+            base_dir: Base directory for relative paths
+            force_preprocess: Force reprocessing of data
+            logger: Optional logger
+        """
+        self.cfg = cfg
+        self.base_dir = base_dir
+        self.force_preprocess = force_preprocess
+        self.logger = logger
+    
+    def _get_data_dir(self):
+        """Resolve data directory from config."""
+        import os
+        
+        configured_data_root = self.cfg.get("data", {}).get("root", "")
+        if configured_data_root:
+            return os.path.abspath(configured_data_root)
+        else:
+            return os.path.abspath(os.path.join(self.base_dir, "../Data"))
+    
+    def preprocess_if_needed(self):
+        """Preprocess data if needed."""
+        import os
+        from data_processing.preprocess_data import preprocess_data
+        
+        data_dir = self._get_data_dir()
+        preprocessed_dir = os.path.join(data_dir, "Data_split/train_preprocessed")
+        
+        aug_cfg = self.cfg.get("data", {}).get("augmentation", {})
+        use_photo_aug = bool(aug_cfg.get("enabled", False))
+        should_preprocess = self.force_preprocess or (not os.path.exists(preprocessed_dir))
+        
+        if should_preprocess:
+            if self.logger:
+                self.logger.info(f"Preprocessing data from {data_dir}")
+            
+            preprocess_data(
+                root_dir=data_dir,
+                use_photometric_augmentation=use_photo_aug,
+                aug_seed=int(aug_cfg.get("seed", 42)),
+                aug_photo_count=int(aug_cfg.get("photo_count", 1)),
+                aug_overwrite=bool(aug_cfg.get("overwrite", False)),
+            )
+        elif use_photo_aug:
+            if self.logger:
+                self.logger.info(
+                    "Photometric augmentation enabled but using existing preprocessed data. "
+                    "Use --force_preprocess to regenerate with augmentation."
+                )
+    
+    def get_loaders(self, batch_size):
+        """Get train, val, test dataloaders.
+        
+        Args:
+            batch_size: Batch size
+            
+        Returns:
+            Tuple of (train_loader, val_loader, test_loader)
+        """
+        import os
+        from data_processing.dataloader_preprocessed import get_dataloaders
+        
+        self.preprocess_if_needed()
+        
+        data_dir = self._get_data_dir()
+        train_loader, val_loader, test_loader = get_dataloaders(
+            root_dir=os.path.join(data_dir, "Data_split"),
+            batch_size=batch_size,
+            shuffle=True
+        )
+        
+        if self.logger:
+            self.logger.info(f"Loaded dataloaders with batch_size={batch_size}")
+        
+        return train_loader, val_loader, test_loader
+
+
+class RunSetupManager:
+    """Manages run setup: logging, artifacts, tensorboard, manifests."""
+    
+    def __init__(self, config_path, cfg, batch_size, logger=None):
+        """
+        Args:
+            config_path: Path to config file
+            cfg: Config dict
+            batch_size: Batch size
+            logger: Optional logger
+        """
+        self.config_path = config_path
+        self.cfg = cfg
+        self.batch_size = batch_size
+        self.logger = logger
+        self.artifacts = None
+    
+    def setup_artifacts(self):
+        """Build run artifacts directory structure."""
+        from utils.utils import build_run_artifacts, save_yaml
+        
+        self.artifacts = build_run_artifacts(
+            self.config_path,
+            self.cfg,
+            self.batch_size,
+            output_root="runs"
+        )
+        save_yaml(self.cfg, self.artifacts["config_snapshot_path"])
+        
+        if self.logger:
+            self.logger.info(f"Created run directory: {self.artifacts['run_dir']}")
+        
+        return self.artifacts
+    
+    def setup_tensorboard(self, tb_port, tb_root=None):
+        """Setup tensorboard logging.
+        
+        Args:
+            tb_port: TensorBoard port
+            tb_root: Optional override for TB root directory
+            
+        Returns:
+            Tuple of (tensorboard_log_dir, tensorboard_process)
+        """
+        import os
+        from utils.logging_utils import is_port_in_use, start_tensorboard
+        
+        if self.artifacts is None:
+            raise ValueError("Must call setup_artifacts() first")
+        
+        tb_root = tb_root or self.artifacts["tensorboard_root_dir"]
+        tensorboard_log_dir = os.path.join(tb_root, self.artifacts["run_name"])
+        
+        tensorboard_process = None
+        if is_port_in_use(tb_port):
+            if self.logger:
+                self.logger.info(f"TensorBoard already running on port {tb_port}")
+        else:
+            tensorboard_process = start_tensorboard(tb_root, logger=self.logger, port=tb_port)
+            if self.logger:
+                self.logger.info(f"Started TensorBoard on port {tb_port}")
+        
+        if self.logger:
+            self.logger.info(f"TensorBoard log dir: {tensorboard_log_dir}")
+        
+        return tensorboard_log_dir, tensorboard_process
+    
+    def save_manifest(self, run_metadata):
+        """Save run manifest file."""
+        import os
+        from utils.utils import save_json
+        
+        if self.artifacts is None:
+            raise ValueError("Must call setup_artifacts() first")
+        
+        run_manifest = {
+            "config_path": os.path.abspath(self.config_path),
+            "config_snapshot_path": os.path.abspath(self.artifacts["config_snapshot_path"]),
+            "run_root_dir": os.path.abspath(self.artifacts["run_root_dir"]),
+            "run_dir": os.path.abspath(self.artifacts["run_dir"]),
+            "run_name": self.artifacts["run_name"],
+            "checkpoint_path": os.path.abspath(self.artifacts["checkpoint_path"]),
+            "metrics_csv_path": os.path.abspath(self.artifacts["metrics_csv_path"]),
+            "tensorboard_run_dir": os.path.abspath(self.artifacts["tensorboard_run_dir"]),
+            **run_metadata,
+        }
+        
+        save_json(run_manifest, self.artifacts["manifest_path"])
+        
+        if self.logger:
+            self.logger.info(f"Saved run manifest to {self.artifacts['manifest_path']}")
+        
+        return run_manifest
+    
+    def get_artifacts(self):
+        """Get artifacts dict (setup_artifacts must be called first)."""
+        if self.artifacts is None:
+            self.setup_artifacts()
+        return self.artifacts
 

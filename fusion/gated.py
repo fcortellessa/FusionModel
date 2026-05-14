@@ -30,7 +30,7 @@ class SimpleGatedFusion(BaseFusion):
 
 @register_fusion("gated")
 class GatedFusion(BaseFusion):
-    def __init__(self, dim, num_streams, temperature=100.0):
+    def __init__(self, dim, num_streams, temperature=50.0):
         super().__init__(dim, num_streams)
         self.temperature = temperature
         self.gate = nn.Sequential(

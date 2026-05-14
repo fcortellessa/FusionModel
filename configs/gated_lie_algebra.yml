@@ -3,6 +3,7 @@ model:
   freeze_backbone: false
   streams: ["rgb_image", "digit_image"]
   fusion: "gated"
+  fusion_temperature: 50.0
   head_type: lie_algebra
   rotation_loss_type: geodesic
   activation: GELU

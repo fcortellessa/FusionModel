@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import random
 import shutil
@@ -32,59 +33,28 @@ def list_triplets(input_dir: Path) -> List[Triplet]:
 
 
 def _rng_for(seed: int, timestamp: str, mode: str, variant_idx: int) -> np.random.Generator:
-	# Use a deterministic per-sample seed so ordering changes do not affect outputs.
+	# Set a fixed random number generator: a deterministic per-sample seed so ordering changes do not affect outputs.
 	token = f"{seed}|{timestamp}|{mode}|{variant_idx}"
-	local_seed = int(np.frombuffer(token.encode("utf-8"), dtype=np.uint8).sum()) % (2**32 - 1)
+	digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+	local_seed = int.from_bytes(digest, byteorder="little", signed=False) % (2**32 - 1)
 	return np.random.default_rng(local_seed)
-
-
-def _read_pose(json_path: Path) -> Tuple[np.ndarray, np.ndarray, Dict]:
-	with json_path.open("r", encoding="utf-8") as fh:
-		data = json.load(fh)
-
-	pos = np.array([data["position"][k] for k in ("x", "y", "z")], dtype=np.float64)
-	quat = np.array([data["orientation"][k] for k in ("x", "y", "z", "w")], dtype=np.float64)
-	return pos, quat, data
-
-
-def _write_pose(json_out: Path, source_data: Dict, pos: np.ndarray, quat: np.ndarray) -> None:
-	payload = dict(source_data)
-	payload["position"] = {
-		"x": float(pos[0]),
-		"y": float(pos[1]),
-		"z": float(pos[2]),
-	}
-	payload["orientation"] = {
-		"x": float(quat[0]),
-		"y": float(quat[1]),
-		"z": float(quat[2]),
-		"w": float(quat[3]),
-	}
-
-	with json_out.open("w", encoding="utf-8") as fh:
-		json.dump(payload, fh, indent=2)
 
 
 def _apply_albumentations_deterministic(
 	img: Image.Image,
 	transform: A.Compose,
-	seed: int,
+	rng: np.random.Generator,
 ) -> np.ndarray:
-	"""Run an albumentations transform deterministically without leaking global RNG state."""
-	np_state = np.random.get_state()
-	py_state = random.getstate()
-	try:
-		np.random.seed(seed)
-		random.seed(seed)
-		if hasattr(A, "set_seed"):
-			A.set_seed(seed)
-		elif hasattr(A, "seed"):
-			A.seed(seed)
-		result = transform(image=np.asarray(img))
-		return result["image"]
-	finally:
-		np.random.set_state(np_state)
-		random.setstate(py_state)
+	"""Run an albumentations transform deterministically with local RNG objects."""
+	seed = int(rng.integers(0, 2**32 - 1))
+	local_rng = np.random.default_rng(seed)
+	local_py_random = random.Random(seed)
+	if hasattr(transform, "set_random_state"):
+		transform.set_random_state(local_rng, local_py_random)
+	elif hasattr(transform, "set_random_seed"):
+		transform.set_random_seed(seed)
+	result = transform(image=np.asarray(img))
+	return result["image"]
 
 
 def _apply_rgb_augmentation(
@@ -94,10 +64,9 @@ def _apply_rgb_augmentation(
 	"""RGB-specific photometric augmentation.
 	Gaussian noise p=0.002, hue ±5°, brightness ±30%, contrast ±30%, blur p=0.2, gamma=0.1.
 	"""
-	local_seed = int(rng.integers(0, 2**31 - 1))
 	transform = A.Compose(
 		[
-			A.GaussNoise(var_limit=(5.0, 30.0), p=0.002),
+			A.GaussNoise(std_range=(0.01, 0.02), p=0.002),
 			A.HueSaturationValue(hue_shift_limit=5, sat_shift_limit=0, val_shift_limit=0, p=1.0),
 			A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
 			A.Blur(blur_limit=3, p=0.2),
@@ -105,9 +74,9 @@ def _apply_rgb_augmentation(
 		],
 		p=1.0,
 	)
-	out_arr = _apply_albumentations_deterministic(rgb_img, transform, local_seed)
+	out_arr = _apply_albumentations_deterministic(rgb_img, transform, rng)
 	out = Image.fromarray(np.clip(out_arr, 0, 255).astype(np.uint8))
-	meta = {"type": "photometric_rgb", "albumentations": True, "seed": local_seed}
+	meta = {"type": "photometric_rgb", "albumentations": True}
 	return out, meta
 
 
@@ -133,11 +102,10 @@ def _apply_tactile_augmentation(
 	enabled_blur = aug_config.get("enabled_blur", True)
 	enabled_channel_scaling = aug_config.get("enabled_channel_scaling", True)
 
-	local_seed = int(rng.integers(0, 2**31 - 1))
 	transforms = []
 
 	if enabled_noise:
-		transforms.append(A.GaussNoise(var_limit=(5.0, 20.0), p=0.002))
+		transforms.append(A.GaussNoise(std_range=(0.01, 0.018), p=0.002))
 	if enabled_brightness or enabled_contrast:
 		transforms.append(A.RandomBrightnessContrast(
 			brightness_limit=0.1 if enabled_brightness else 0.0,
@@ -148,7 +116,7 @@ def _apply_tactile_augmentation(
 		transforms.append(A.Blur(blur_limit=3, p=0.2))
 
 	transform = A.Compose(transforms, p=1.0) if transforms else A.Compose([A.NoOp()], p=1.0)
-	out_arr = _apply_albumentations_deterministic(digit_img, transform, local_seed).astype(np.float32)
+	out_arr = _apply_albumentations_deterministic(digit_img, transform, rng).astype(np.float32)
 
 	# Apply deterministic per-channel scaling using the same local RNG chain.
 	if enabled_channel_scaling:
@@ -161,7 +129,6 @@ def _apply_tactile_augmentation(
 	meta = {
 		"type": "photometric_tactile",
 		"albumentations": True,
-		"seed": local_seed,
 		"config": aug_config,
 	}
 	return out, meta
@@ -188,9 +155,7 @@ def _save_augmented(
 	output_dir: Path,
 	rgb_img: Image.Image,
 	digit_img: Image.Image,
-	source_pose_json: Dict,
-	pos: np.ndarray,
-	quat: np.ndarray,
+	source_json_path: Path,
 	overwrite: bool,
 ) -> None:
 	out_rgb = output_dir / f"{out_ts}.png"
@@ -202,16 +167,14 @@ def _save_augmented(
 	if overwrite or not out_digit.exists():
 		digit_img.save(out_digit)
 	if overwrite or not out_json.exists():
-		_write_pose(out_json, source_pose_json, pos, quat)
+		shutil.copy2(source_json_path, out_json)
 
 
 def augment_offline(
 	input_dir: Path,
 	output_dir: Path,
 	seed: int,
-	geo_count: int,
-	photo_count: int,
-	rotation_deg: float,
+	augmentation_count: int,
 	copy_originals: bool,
 	overwrite: bool,
 	dry_run: bool,
@@ -222,16 +185,12 @@ def augment_offline(
 	if not triplets:
 		raise ValueError(f"No valid triplets found in {input_dir}")
 
-	requested_geo_count = geo_count
-	if requested_geo_count > 0:
-		print("Geometric augmentation is disabled; ignoring --geo-count.")
-	geo_count = 0
 
 	output_dir.mkdir(parents=True, exist_ok=True)
 
 	failed: List[Dict] = []
 	generated: Dict[str, List[Dict]] = {}
-	total_new_per_sample = photo_count + (1 if copy_originals else 0)
+	total_new_per_sample = augmentation_count + (1 if copy_originals else 0)
 
 	print(f"Found {len(triplets)} source samples in {input_dir}")
 	print(f"Will generate {total_new_per_sample} samples per source in {output_dir}")
@@ -240,7 +199,6 @@ def augment_offline(
 		try:
 			rgb_img = Image.open(triplet.rgb_path).convert("RGB")
 			digit_img = Image.open(triplet.digit_path).convert("RGB")
-			pos, quat, source_json = _read_pose(triplet.json_path)
 
 			generated[triplet.timestamp] = []
 
@@ -253,20 +211,18 @@ def augment_offline(
 					{"timestamp": original_ts, "kind": "original", "params": {}}
 				)
 
-			for idx in range(photo_count):
-				local_rng = _rng_for(seed, triplet.timestamp, "photo", idx)
+			for idx in range(augmentation_count):
+				local_rng = _rng_for(seed, triplet.timestamp, "augm", idx)
 				rgb_aug, rgb_meta = _apply_rgb_augmentation(rgb_img, local_rng)
 				digit_aug, tactile_meta = _apply_tactile_augmentation(digit_img, local_rng, aug_config=tactile_aug_config)
-				out_ts = f"{triplet.timestamp}__photo{idx}"
+				out_ts = f"{triplet.timestamp}__augm{idx}"
 				if not dry_run:
 					_save_augmented(
 						out_ts,
 						output_dir,
 						rgb_aug,
 						digit_aug,
-						source_json,
-						pos,
-						quat,
+						triplet.json_path,
 						overwrite=overwrite,
 					)
 				generated[triplet.timestamp].append(
@@ -287,13 +243,7 @@ def augment_offline(
 		"input_dir": str(input_dir),
 		"output_dir": str(output_dir),
 		"copy_originals": copy_originals,
-		"geo_count": geo_count,
-		"photo_count": photo_count,
-		"geometric": {
-			"enabled": False,
-			"requested_geo_count": requested_geo_count,
-			"requested_rotation_deg": rotation_deg,
-		},
+		"augmentation_count": augmentation_count,
 		"photometric": {
 			"rgb_augmentation": {
 				"gaussian_noise_p": 0.002,
@@ -346,24 +296,11 @@ def parse_args() -> argparse.Namespace:
 		default="Data/Data_split/train_augmented",
 		help="Output folder for augmented samples",
 	)
-	parser.add_argument("--seed", type=int, default=42, help="Random seed")
 	parser.add_argument(
-		"--geo-count",
-		type=int,
-		default=0,
-		help="Ignored: geometric augmentation is disabled",
-	)
-	parser.add_argument(
-		"--photo-count",
+		"--augmentation-count",
 		type=int,
 		default=1,
 		help="Photometric variants per source sample",
-	)
-	parser.add_argument(
-		"--rotation-deg",
-		type=float,
-		default=8.0,
-		help="Ignored: geometric augmentation is disabled",
 	)
 	parser.add_argument(
 		"--no-copy-originals",
@@ -373,7 +310,7 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument(
 		"--overwrite",
 		action="store_true",
-		help="Overwrite existing output files",
+		help="Overwrite existing output files. Useful if re-running augmentation.",
 	)
 	parser.add_argument(
 		"--dry-run",
@@ -394,9 +331,7 @@ if __name__ == "__main__":
 		input_dir=Path(args.input_dir),
 		output_dir=Path(args.output_dir),
 		seed=args.seed,
-		geo_count=args.geo_count,
-		photo_count=args.photo_count,
-		rotation_deg=args.rotation_deg,
+		augmentation_count=args.augmentation_count,
 		copy_originals=not args.no_copy_originals,
 		overwrite=args.overwrite,
 		dry_run=args.dry_run,

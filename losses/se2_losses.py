@@ -13,6 +13,25 @@ This loss directly measures the angular difference in the plane, ensuring that t
 import torch
 import torch.nn.functional as F
 
+def quaternion_to_2d_unit_vector(quat):
+    """
+    Convert quaternion (x,y,z,w) to a 2D unit vector (sin, cos) representing rotation around the X-axis (roll).
+    Input: quat tensor shape (B,4)
+    Output: tensor shape (B,2) with [sin(roll), cos(roll)]
+    """
+    # Ensure shape
+    if quat.dim() == 1:
+        quat = quat.unsqueeze(0)
+
+    q = torch.nn.functional.normalize(quat, p=2, dim=1, eps=1e-7)
+    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+
+    sinr_cosp = 2 * (w * x + y * z)
+    cosr_cosp = 1 - 2 * (x**2 + y**2)
+    roll = torch.atan2(sinr_cosp, cosr_cosp)
+
+    return torch.stack([torch.sin(roll), torch.cos(roll)], dim=1)
+
 def axis_angle_to_quaternion(axis_angle):
     """
     Convert axis-angle representation (Lie algebra so(3)) to quaternion (SO(3)).
@@ -42,13 +61,6 @@ def axis_angle_to_quaternion(axis_angle):
     
     return quat
 
-
-def mse_loss(pred_trans, target_trans):
-    """
-    Standard Mean Squared Error for (y, z) coordinates.
-    Returns a scalar tensor.
-    """
-    return F.mse_loss(pred_trans, target_trans)
 
 def geodesic_loss_2d_unit_vector(pred_vec, target_vec, eps=1e-7):
     """
@@ -117,7 +129,7 @@ def total_loss_2D_vector(pred_trans, target_trans, pred_vec, target_vec, lambda_
 - target_vec: Target rotation unit vector tensor of shape (batch_size, 2)
 - lambda_rot: Weighting factor for the rotation loss
     """
-    loss_trans = mse_loss(pred_trans, target_trans)
+    loss_trans = F.mse_loss(pred_trans, target_trans)
     loss_rot = geodesic_loss_2d_unit_vector(pred_vec, target_vec)
     return loss_trans + lambda_rot * loss_rot
 

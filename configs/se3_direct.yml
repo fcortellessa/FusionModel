@@ -3,6 +3,7 @@ model:
   freeze_backbone: false
   streams: ["rgb_image", "digit_image"]
   fusion: "gated"
+  fusion_temperature: 50.0
   head_type: se3_direct
   activation: GELU
   mlp_quat_1: 1024
@@ -15,7 +16,7 @@ model:
 training:
   lr: 0.001
   batch_size: 16
-  epochs: 150
+  epochs: 50
   num_workers: 4
   optimizer: Adam
   uncertainty_weighting:
