@@ -9,4 +9,4 @@ logs/
 checkpoints/
 runs/
 results/results.csv
-archived*
+*archived*
