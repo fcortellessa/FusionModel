@@ -49,10 +49,7 @@ def _apply_albumentations_deterministic(
 	seed = int(rng.integers(0, 2**32 - 1))
 	local_rng = np.random.default_rng(seed)
 	local_py_random = random.Random(seed)
-	if hasattr(transform, "set_random_state"):
-		transform.set_random_state(local_rng, local_py_random)
-	elif hasattr(transform, "set_random_seed"):
-		transform.set_random_seed(seed)
+	transform.set_random_seed(seed)
 	result = transform(image=np.asarray(img))
 	return result["image"]
 
@@ -61,16 +58,14 @@ def _apply_rgb_augmentation(
 	rgb_img: Image.Image,
 	rng: np.random.Generator,
 ) -> Tuple[Image.Image, Dict]:
-	"""RGB-specific photometric augmentation.
-	Gaussian noise p=0.002, hue ±5°, brightness ±30%, contrast ±30%, blur p=0.2, gamma=0.1.
-	"""
+	"""RGB-specific photometric augmentation."""
 	transform = A.Compose(
 		[
-			A.GaussNoise(std_range=(0.01, 0.02), p=0.002),
-			A.HueSaturationValue(hue_shift_limit=5, sat_shift_limit=0, val_shift_limit=0, p=1.0),
-			A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
-			A.Blur(blur_limit=3, p=0.2),
-			A.RandomGamma(gamma_limit=(10, 10), p=1.0),
+			A.OneOf([A.GaussNoise(var_limit=(10.0, 50.0), p=1.0),
+					A.MotionBlur(blur_limit=7, p=1.0),], 
+					p=0.2,),
+			A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=0, p=0.5),
+			A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
 		],
 		p=1.0,
 	)
@@ -81,57 +76,56 @@ def _apply_rgb_augmentation(
 
 
 def _apply_tactile_augmentation(
-	digit_img: Image.Image,
-	rng: np.random.Generator,
-	aug_config: Dict = None,
+    digit_img: Image.Image,
+    rng: np.random.Generator,
+    aug_config: Dict = None,
 ) -> Tuple[Image.Image, Dict]:
-	"""Tactile-specific photometric augmentation.
-	Gaussian noise p=0.002, brightness ±10%, contrast ±10%, blur p=0.2, per-channel scaling ±5%.
-	
-	Args:
-		aug_config: dict with keys: enabled_noise, enabled_brightness, enabled_contrast, enabled_blur, enabled_channel_scaling
-		  Each defaults to True if not specified (full augmentation by default).
-	"""
-	if aug_config is None:
-		aug_config = {}
+    """Tactile-specific photometric augmentation engineered for clean ablation studies."""
+    if aug_config is None:
+        aug_config = {}
 
-	# Defaults: all augmentations enabled
-	enabled_noise = aug_config.get("enabled_noise", True)
-	enabled_brightness = aug_config.get("enabled_brightness", True)
-	enabled_contrast = aug_config.get("enabled_contrast", True)
-	enabled_blur = aug_config.get("enabled_blur", True)
-	enabled_channel_scaling = aug_config.get("enabled_channel_scaling", True)
+    # Extract configs with default fallback to True
+    enabled = {k: aug_config.get(k, True) for k in [
+        "enabled_noise", "enabled_brightness", "enabled_contrast", 
+        "enabled_blur", "enabled_channel_scaling"
+    ]}
 
-	transforms = []
+    transforms = []
 
-	if enabled_noise:
-		transforms.append(A.GaussNoise(std_range=(0.01, 0.018), p=0.002))
-	if enabled_brightness or enabled_contrast:
-		transforms.append(A.RandomBrightnessContrast(
-			brightness_limit=0.1 if enabled_brightness else 0.0,
-			contrast_limit=0.1 if enabled_contrast else 0.0,
-			p=1.0
-		))
-	if enabled_blur:
-		transforms.append(A.Blur(blur_limit=3, p=0.2))
+    if enabled["enabled_noise"]:
+        transforms.append(A.GaussNoise(var_limit=(10.0, 50.0), p=1.0)) 
 
-	transform = A.Compose(transforms, p=1.0) if transforms else A.Compose([A.NoOp()], p=1.0)
-	out_arr = _apply_albumentations_deterministic(digit_img, transform, rng).astype(np.float32)
+    if enabled["enabled_brightness"] or enabled["enabled_contrast"]:
+        transforms.append(A.RandomBrightnessContrast(
+            brightness_range=(-0.2, 0.2) if enabled["enabled_brightness"] else 0.0,
+            contrast_range=(-0.2, 0.2) if enabled["enabled_contrast"] else 0.0,
+            p=1.0
+        ))
 
-	# Apply deterministic per-channel scaling using the same local RNG chain.
-	if enabled_channel_scaling:
-		channel_scales = rng.uniform(0.95, 1.05, size=out_arr.shape[-1])
-		for c in range(out_arr.shape[-1]):
-			out_arr[:, :, c] *= channel_scales[c]
+    if enabled["enabled_blur"]:
+        transforms.append(A.MotionBlur(blur_limit=7, p=1.0))
 
-	out_arr = np.clip(out_arr, 0, 255)
-	out = Image.fromarray(out_arr.astype(np.uint8))
-	meta = {
-		"type": "photometric_tactile",
-		"albumentations": True,
-		"config": aug_config,
-	}
-	return out, meta
+    if enabled["enabled_channel_scaling"]:
+        transforms.append(A.RGBShift(
+            r_shift_limit=20, 
+            g_shift_limit=20, 
+            b_shift_limit=20, 
+            p=1.0
+        ))
+
+    # Fallback to NoOp if everything is disabled
+    transform = A.Compose(transforms, p=1.0) if transforms else A.Compose([A.NoOp()], p=1.0)
+    
+    # Run pipeline deterministically
+    out_arr = _apply_albumentations_deterministic(digit_img, transform, rng)
+    
+    out = Image.fromarray(out_arr)
+    meta = {
+        "type": "photometric_tactile",
+        "albumentations": True,
+        "config": aug_config,
+    }
+    return out, meta
 
 
 def _copy_original(triplet: Triplet, output_dir: Path, overwrite: bool) -> str:
