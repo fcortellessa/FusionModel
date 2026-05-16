@@ -29,21 +29,21 @@ config_map[all]="tactile_ablation_all.yml"
 
 base_folder="Data/Data_split"
 seeds=(42 43 44)
-train_augmented="$base_folder/train_augmented"
+train_augmented_folder="$base_folder/train_augmented"
 
 PYTHON=${PYTHON:-python3}
 
 echo "Repository root: $REPO_ROOT"
 
 for v in "${variants[@]}"; do
-  variant_folder="$base_folder/train_augmented_tactile_${v}"
+  variant_folder="$train_augmented_folder/tactile_${v}"
   if [[ ! -d "$variant_folder" ]]; then
     echo "WARNING: variant folder not found: $variant_folder -- skipping"
     continue
   fi
 
   echo "\n=== Running variant: $v ==="
-  echo "Copying $variant_folder -> $train_augmented"
+  echo "Copying $variant_folder -> $train_augmented_folder"
 
   # Clean / create destination
   rm -rf "$train_augmented"

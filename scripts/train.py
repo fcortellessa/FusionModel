@@ -12,15 +12,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.insert(0, parent_dir)
 
-from base_model.pose_estimation_model import PoseEstimationNet
-from data_processing.preprocess_data import preprocess_data
-from losses.se2_losses import geodesic_loss_2d_unit_vector, normalized_mse_loss_2d_unit_vector, wrapped_angle_loss, axis_angle_to_quaternion, quaternion_to_2d_unit_vector
-from losses.se3_losses import se3_direct_loss, rotation_vector_to_quaternion, quaternion_to_rotation_vector
-from losses.absolute_pose_error import absolute_pose_error_x_rot
-from losses.original_loss import total_loss
-from losses.uncertainty_weighting import UncertaintyWeighting
 from utils.train_utils import (
-    _build_epoch_lr_scale_fn, _build_named_param_groups, _get_lr_by_group,
+    _build_epoch_lr_scale_fn, _get_lr_by_group,
     DataPipelineManager, TrainingConfigBuilder, RunSetupManager, HeadLRDecayManager, EpochMetricsAggregator 
 )
 from utils.utils import (
@@ -44,8 +37,6 @@ from utils.logging_utils import (
     log_hparams_to_tensorboard,
     write_epoch_metrics_csv,
 )
-
-from data_processing.dataloader_preprocessed import get_dataloaders
 from losses.rotation_loss_handlers import get_rotation_handler
 
 logger = logging.getLogger("GripFusionNet")
@@ -130,7 +121,6 @@ def train_loop(
     device,
     uncertainty_module=None,
     last_epoch=0,
-    checkpointing=False,
     checkpoint_path=None,
     metrics_csv_path=None,
     run_metadata=None,
@@ -452,7 +442,6 @@ def train_loop(
 
 def main(
     config_path,
-    checkpointing=False,
     batch_size=None,
     optimizer_name=None,
     tensorboard_root_dir=None,
@@ -568,7 +557,6 @@ def main(
             criterion=loss_function,
             device=device,
             uncertainty_module=uncertainty_module,
-            checkpointing=checkpointing,
             checkpoint_path=artifacts["checkpoint_path"],
             metrics_csv_path=artifacts["metrics_csv_path"],
             run_metadata=run_metadata,
@@ -609,7 +597,6 @@ if __name__ == "__main__":
 
     main(
         args.config,
-        checkpointing=False,
         batch_size=args.batch_size,
         optimizer_name=args.optimizer,
         tensorboard_root_dir=args.tensorboard_root,

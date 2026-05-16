@@ -33,7 +33,7 @@ training:
     min_lr_mult: 0.00001
 
 data:
-  root: "D:/MA/USB_TCP_combined"
+  root: "/home/MA_Flavia/Documents/FusionModel/Data"
   streams: ["mono_cam", "tactile"]
   image_size: 640
   use_rgb: true
@@ -43,6 +43,7 @@ data:
   # NOTE: Tactile ablation baseline - NO augmentation
   # This config uses standard preprocessing with no tactical augmentation
   augmentation:
+    output_folder: "train_augmented"
     enabled: false
     seed: 42
     photo_count: 0

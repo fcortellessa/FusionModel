@@ -32,9 +32,9 @@ def get_dataloaders(
     shuffle=True,
     num_workers=2
 ):
-    train_set = PreprocessedTactileDataset(os.path.join(root_dir, 'train_preprocessed'))
-    val_set = PreprocessedTactileDataset(os.path.join(root_dir, 'val_preprocessed'))
-    test_set = PreprocessedTactileDataset(os.path.join(root_dir, 'test_preprocessed'))
+    train_set = PreprocessedTactileDataset(os.path.join(root_dir, 'train', 'train_preprocessed'))
+    val_set = PreprocessedTactileDataset(os.path.join(root_dir, 'val', 'val_preprocessed'))
+    test_set = PreprocessedTactileDataset(os.path.join(root_dir, 'test', 'test_preprocessed'))
 
     loader_args = dict(
         num_workers=num_workers,
@@ -55,7 +55,7 @@ def get_test_dataloader(
     shuffle=True,
     num_workers=2
 ):
-    test_set = PreprocessedTactileDataset(os.path.join(root_dir, 'test_preprocessed'))
+    test_set = PreprocessedTactileDataset(os.path.join(root_dir, 'test', 'test_preprocessed'))
 
     loader_args = dict(
         num_workers=num_workers,

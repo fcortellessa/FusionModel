@@ -30,7 +30,7 @@ from data_processing.augment_data import augment_offline
 # ----------------------------
 # SETTINGS
 # ----------------------------
-DEBUG = True          # 🔥 Set True to disable multiprocessing (recommended first run)
+DEBUG = True          # Set True to disable multiprocessing (recommended first run)
 NUM_WORKERS = 4        # safer than cpu_count()
 
 
@@ -303,7 +303,8 @@ def preprocess_data(
 
     print("Preprocessing all splits")
     for split in ["train", "val", "test"]:
-        split_output_dir = os.path.join(output_path, f"{split}_preprocessed")
+        # Data/Data_split/train/ -> Data/Data_split/train/train_preprocessed/ (or train_augmented/train_preprocessed/)
+        split_output_dir = os.path.join(output_path, split, f"{split}_preprocessed")
         if os.path.exists(split_output_dir):
             shutil.rmtree(split_output_dir)
         preprocess_and_save(root_dir, transf_matrix,
