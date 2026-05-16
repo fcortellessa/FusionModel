@@ -39,6 +39,7 @@ data:
   use_rgb: true
   use_tactile: true
   use_depth: false
+  use_preaugmented_train_dir: true
   # NOTE: Tactile ablation - BLUR ONLY
   # This config uses pre-augmented data from: Data/Data_split/train_augmented_tactile_blur_only
   augmentation:

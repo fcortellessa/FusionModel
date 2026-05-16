@@ -426,11 +426,14 @@ class DataPipelineManager:
         
         aug_cfg = self.cfg.get("data", {}).get("augmentation", {})
         use_photo_aug = bool(aug_cfg.get("enabled", False))
+        use_preaugmented = bool(self.cfg.get("data", {}).get("use_preaugmented_train_dir", False))
         should_preprocess = self.force_preprocess or (not os.path.exists(preprocessed_dir))
         
         if should_preprocess:
             if self.logger:
                 self.logger.info(f"Preprocessing data from {data_dir}")
+                if use_preaugmented:
+                    self.logger.info("Using pre-augmented training data from train_augmented")
             
             preprocess_data(
                 root_dir=data_dir,
@@ -438,6 +441,7 @@ class DataPipelineManager:
                 aug_seed=int(aug_cfg.get("seed", 42)),
                 aug_photo_count=int(aug_cfg.get("photo_count", 1)),
                 aug_overwrite=bool(aug_cfg.get("overwrite", False)),
+                use_preaugmented_train_dir=use_preaugmented,
             )
         elif use_photo_aug:
             if self.logger:
