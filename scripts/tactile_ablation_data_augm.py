@@ -3,13 +3,13 @@
 Generate tactile ablation augmentation datasets expected by training scripts.
 
 Creates the following folders under Data/Data_split by default:
-  - train_augmented_tactile_no_aug
-  - train_augmented_tactile_noise_only
-  - train_augmented_tactile_brightness_only
-  - train_augmented_tactile_contrast_only
-  - train_augmented_tactile_blur_only
-  - train_augmented_tactile_channel_scaling_only
-  - train_augmented_tactile_all
+    - train_augmentation_no_aug
+    - train_augmentation_noise_only
+    - train_augmentation_brightness_only
+    - train_augmentation_contrast_only
+    - train_augmentation_blur_only
+    - train_augmentation_channel_scaling_only
+    - train_augmentation_all
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ def parse_args() -> argparse.Namespace:
         "--output-base",
         type=Path,
         default=Path("Data/Data_split"),
-        help="Base output folder where train_augmented_tactile_* folders are created",
+        help="Base output folder where train_augmentation_* folders are created",
     )
     parser.add_argument(
         "--seed",
@@ -145,7 +145,7 @@ def main() -> None:
     print("=" * 80)
 
     for variant_name, tactile_aug_config in ABLATION_VARIANTS.items():
-        out_dir = args.output_base / f"train_augmented_tactile_{variant_name}"
+        out_dir = args.output_base / f"train_augmentation_{variant_name}"
         print(f"\n[Variant: {variant_name}] -> {out_dir}")
 
         augment_offline(

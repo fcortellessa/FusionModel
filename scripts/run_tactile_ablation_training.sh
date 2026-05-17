@@ -27,30 +27,31 @@ config_map[blur_only]="tactile_ablation_blur_only.yml"
 config_map[channel_scaling_only]="tactile_ablation_channel_scaling_only.yml"
 config_map[all]="tactile_ablation_all.yml"
 
-base_folder="Data/Data_split"
 seeds=(42 43 44)
-train_augmented_folder="$base_folder/train_augmented"
 
-PYTHON=${PYTHON:-python3}
+DEFAULT_PYTHON="python3"
+if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+  DEFAULT_PYTHON="$REPO_ROOT/.venv/bin/python"
+fi
+PYTHON=${PYTHON:-$DEFAULT_PYTHON}
 
 echo "Repository root: $REPO_ROOT"
 
+# base_folder="${DATA_SPLIT_FOLDER:-data_a_test/Data_split}"
+base_folder="${DATA_SPLIT_FOLDER:-Data/Data_split}"
+
+echo "Using data split folder: $base_folder"
+
 for v in "${variants[@]}"; do
-  variant_folder="$train_augmented_folder/tactile_${v}"
+  variant_folder="$base_folder/train_augmentation_${v}"
   if [[ ! -d "$variant_folder" ]]; then
     echo "WARNING: variant folder not found: $variant_folder -- skipping"
+    echo "         Hint: generate variants first with scripts/tactile_ablation_data_augm.py"
     continue
   fi
 
   echo "\n=== Running variant: $v ==="
-  echo "Copying $variant_folder -> $train_augmented_folder"
-
-  # Clean / create destination
-  rm -rf "$train_augmented"
-  mkdir -p "$train_augmented"
-
-  # Use rsync for reliable copy (preserves permissions, symlinks, etc.)
-  rsync -a --delete "$variant_folder/" "$train_augmented/"
+  echo "Using folder: $variant_folder"
 
   config=${config_map[$v]}
   if [[ -z "$config" ]]; then
@@ -71,8 +72,6 @@ for v in "${variants[@]}"; do
     fi
   done
 
-  # Clean up
-  rm -rf "$train_augmented"
   echo "Completed variant: $v"
 done
 

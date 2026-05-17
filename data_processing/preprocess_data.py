@@ -229,14 +229,18 @@ def preprocess_and_save(data_path, transf_matrix, folder_path, output_dir):
 # ----------------------------
 
 def _get_train_source_dir(output_path, use_preaugmented_train_dir, use_photometric_augmentation,
-                          aug_seed, aug_photo_count, aug_overwrite, train_split_dir):
+                          aug_seed, aug_photo_count, aug_overwrite, aug_output_folder,
+                          train_split_dir):
     """Determine which train folder to use as preprocessing source."""
-    train_augmented_dir = os.path.join(output_path, "train_augmented")
+    train_augmented_dir = os.path.join(output_path, aug_output_folder)
     
     # Priority: use_preaugmented_train_dir > use_photometric_augmentation
-    if use_preaugmented_train_dir and os.path.exists(train_augmented_dir):
-        # Use pre-augmented data if explicitly requested and exists
-        print("Using pre-augmented training data from train_augmented")
+    if use_preaugmented_train_dir:
+        if not os.path.exists(train_augmented_dir):
+            raise FileNotFoundError(
+                f"Configured pre-augmented folder not found: {train_augmented_dir}"
+            )
+        print(f"Using pre-augmented training data from {aug_output_folder}")
         return train_augmented_dir
     
     elif use_photometric_augmentation:
@@ -270,6 +274,7 @@ def preprocess_data(
     aug_seed=42,
     aug_photo_count=1,
     aug_overwrite=False,
+    aug_output_folder="train_augmentation_default",
     use_preaugmented_train_dir=False,
 ):
     """Main preprocessing pipeline: split, augment (if needed), and preprocess all splits."""
@@ -284,7 +289,7 @@ def preprocess_data(
     # ---- Stage 2: Determine train source (original, augmented, or pre-augmented) ----
     train_source_dir = _get_train_source_dir(
         output_path, use_preaugmented_train_dir, use_photometric_augmentation,
-        aug_seed, aug_photo_count, aug_overwrite, train_split_dir
+        aug_seed, aug_photo_count, aug_overwrite, aug_output_folder, train_split_dir
     )
 
     # ---- Stage 3: Preprocess all splits ----
@@ -303,8 +308,10 @@ def preprocess_data(
 
     print("Preprocessing all splits")
     for split in ["train", "val", "test"]:
-        # Data/Data_split/train/ -> Data/Data_split/train/train_preprocessed/ (or train_augmented/train_preprocessed/)
-        split_output_dir = os.path.join(output_path, split, f"{split}_preprocessed")
+        if split == "train":
+            split_output_dir = os.path.join(train_source_dir, "train_preprocessing")
+        else:
+            split_output_dir = os.path.join(output_path, split, f"{split}_preprocessing")
         if os.path.exists(split_output_dir):
             shutil.rmtree(split_output_dir)
         preprocess_and_save(root_dir, transf_matrix,

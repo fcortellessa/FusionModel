@@ -26,14 +26,21 @@ training:
   dropout_rot: 0.3
   dropout_trans: 0.1
   use_batchnorm: True
-  head_lr_decay:
+  lr_schedule:
     enabled: true
+    type: one_cycle
+    pct_start: 0.2
+    start_lr_mult: 0.2
+    max_lr_mult: 3.0
+    final_lr_mult: 0.05
+  head_lr_decay:
+    enabled: false
     patience: 5
     factor: 0.2
     min_lr_mult: 0.00001
 
 data:
-  root: "D:/MA/USB_TCP_combined"
+  root: "/home/MA_Flavia/Documents/FusionModel/Data"
   streams: ["mono_cam", "tactile"]
   image_size: 640
   use_rgb: true
@@ -41,8 +48,9 @@ data:
   use_depth: false
   use_preaugmented_train_dir: true
   # NOTE: Tactile ablation - BRIGHTNESS ONLY
-  # This config uses pre-augmented data from: Data/Data_split/train_augmented_tactile_brightness_only
+  # This config uses pre-augmented data from: Data/Data_split/train_augmentation_brightness_only
   augmentation:
+    output_folder: "train_augmentation_brightness_only"
     enabled: false
     seed: 42
     photo_count: 0

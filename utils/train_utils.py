@@ -422,18 +422,20 @@ class DataPipelineManager:
         from data_processing.preprocess_data import preprocess_data
         
         data_dir = self._get_data_dir()
-        preprocessed_dir = os.path.join(data_dir, "Data_split/train_preprocessed")
         
         aug_cfg = self.cfg.get("data", {}).get("augmentation", {})
+        aug_output_folder = str(aug_cfg.get("output_folder", "train_augmentation_default"))
         use_photo_aug = bool(aug_cfg.get("enabled", False))
         use_preaugmented = bool(self.cfg.get("data", {}).get("use_preaugmented_train_dir", False))
+        train_folder = aug_output_folder if use_preaugmented else "train"
+        preprocessed_dir = os.path.join(data_dir, "Data_split", train_folder, "train_preprocessing")
         should_preprocess = self.force_preprocess or (not os.path.exists(preprocessed_dir))
         
         if should_preprocess:
             if self.logger:
                 self.logger.info(f"Preprocessing data from {data_dir}")
                 if use_preaugmented:
-                    self.logger.info("Using pre-augmented training data from train_augmented")
+                    self.logger.info(f"Using pre-augmented training data from {aug_output_folder}")
             
             preprocess_data(
                 root_dir=data_dir,
@@ -441,6 +443,7 @@ class DataPipelineManager:
                 aug_seed=int(aug_cfg.get("seed", 42)),
                 aug_photo_count=int(aug_cfg.get("photo_count", 1)),
                 aug_overwrite=bool(aug_cfg.get("overwrite", False)),
+                aug_output_folder=aug_output_folder,
                 use_preaugmented_train_dir=use_preaugmented,
             )
         elif use_photo_aug:
@@ -465,10 +468,14 @@ class DataPipelineManager:
         self.preprocess_if_needed()
         
         data_dir = self._get_data_dir()
+        aug_cfg = self.cfg.get("data", {}).get("augmentation", {})
+        use_preaugmented = bool(self.cfg.get("data", {}).get("use_preaugmented_train_dir", False))
+        train_folder = str(aug_cfg.get("output_folder", "train_augmentation_default")) if use_preaugmented else "train"
         train_loader, val_loader, test_loader = get_dataloaders(
             root_dir=os.path.join(data_dir, "Data_split"),
             batch_size=batch_size,
-            shuffle=True
+            shuffle=True,
+            train_folder=train_folder,
         )
         
         if self.logger:

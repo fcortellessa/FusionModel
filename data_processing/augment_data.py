@@ -47,10 +47,17 @@ def _apply_albumentations_deterministic(
 ) -> np.ndarray:
 	"""Run an albumentations transform deterministically with local RNG objects."""
 	seed = int(rng.integers(0, 2**32 - 1))
-	local_rng = np.random.default_rng(seed)
-	local_py_random = random.Random(seed)
-	transform.set_random_seed(seed)
-	result = transform(image=np.asarray(img))
+	# Albumentations 1.x does not expose Compose.set_random_seed.
+	# Seed NumPy and Python RNG around the transform call for reproducibility.
+	np_state = np.random.get_state()
+	py_state = random.getstate()
+	np.random.seed(seed)
+	random.seed(seed)
+	try:
+		result = transform(image=np.asarray(img))
+	finally:
+		np.random.set_state(np_state)
+		random.setstate(py_state)
 	return result["image"]
 
 
@@ -97,8 +104,8 @@ def _apply_tactile_augmentation(
 
     if enabled["enabled_brightness"] or enabled["enabled_contrast"]:
         transforms.append(A.RandomBrightnessContrast(
-            brightness_range=(-0.2, 0.2) if enabled["enabled_brightness"] else 0.0,
-            contrast_range=(-0.2, 0.2) if enabled["enabled_contrast"] else 0.0,
+			brightness_limit=(-0.2, 0.2) if enabled["enabled_brightness"] else 0.0,
+			contrast_limit=(-0.2, 0.2) if enabled["enabled_contrast"] else 0.0,
             p=1.0
         ))
 

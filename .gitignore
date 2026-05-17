@@ -10,3 +10,4 @@ checkpoints/
 runs/
 results/results.csv
 *archived*
+data_subset/

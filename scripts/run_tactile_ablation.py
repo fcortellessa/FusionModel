@@ -96,7 +96,7 @@ def generate_ablation_variants(
     print(f"{'='*80}\n")
     
     for variant_name, variant_config in ABLATION_VARIANTS.items():
-        output_dir = base_path / f"train_augmented_tactile_{variant_name}"
+        output_dir = base_path / f"train_augmentation_{variant_name}"
         
         print(f"\nGenerating variant: {variant_name}")
         print(f"  Config: {variant_config}")
