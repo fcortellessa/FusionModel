@@ -4,6 +4,7 @@ __pychache__/
 .github/
 *.pyc
 yolo26n.pt
+*.egg-info/
 Data/
 logs/
 checkpoints/

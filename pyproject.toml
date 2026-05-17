@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fusionmodel"
+version = "0.1.0"
+description = "Multi-stream pose estimation and tactile fusion models"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "albumentations==2.0.8",
+    "matplotlib==3.10.8",
+    "numpy==2.4.4",
+    "opencv-python-headless==4.13.0.92",
+    "pandas==3.0.2",
+    "Pillow==12.2.0",
+    "scipy==1.17.1",
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "tqdm==4.67.3",
+    "ultralytics==8.4.37",
+    "PyYAML==6.0.3",
+]
+
+[tool.setuptools]
+include-package-data = true
+py-modules = ["yolo26_adaptive_input"]
+
+[tool.setuptools.packages.find]
+include = ["base_model*", "data_processing*", "fusion*", "losses*", "results*", "scripts*", "utils*"]
