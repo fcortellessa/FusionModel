@@ -14,28 +14,26 @@ sys.path.insert(0, parent_dir)
 
 from utils.train_utils import (
     _build_epoch_lr_scale_fn, _get_lr_by_group,
-    DataPipelineManager, TrainingConfigBuilder, RunSetupManager, HeadLRDecayManager, EpochMetricsAggregator 
+    DataPipelineManager, TrainingConfigBuilder, RunSetupManager, HeadLRDecayManager, EpochMetricsAggregator
 )
 from utils.utils import (
-    setup_logger,
     load_config,
     save_checkpoint,
-    load_checkpoint,
     get_optimizer,
-    build_run_artifacts,
-    save_yaml,
-    save_json,
 )
 from utils.logging_utils import (
-    is_port_in_use,
-    start_tensorboard,
     format_fusion_weights,
     init_metrics_csv,
     init_tensorboard_writer,
     log_train_step_to_tensorboard,
     log_epoch_to_tensorboard,
     log_hparams_to_tensorboard,
+    configure_run_logging,
+    log_epoch_summary,
     write_epoch_metrics_csv,
+    _apply_metric_accumulation,
+    _init_epoch_metrics, 
+    _compute_uncertainty_stats,
 )
 from losses.rotation_loss_handlers import get_rotation_handler
 
@@ -43,10 +41,99 @@ logger = logging.getLogger("GripFusionNet")
 log_file = None
 
 
-def _to_float(value):
-    if isinstance(value, torch.Tensor):
-        return float(value.detach().item())
-    return float(value)
+
+def _train_single_epoch(
+    model,
+    train_loader,
+    optimizer,
+    rotation_handler,
+    device,
+    tb_writer,
+    param_groups_by_name,
+    uncertainty_module,
+    global_batch_step,
+    epoch,
+    num_epochs,
+):
+    model.train()
+    train_metrics = _init_epoch_metrics()
+    fusion_weights = None
+    fusion_weight_sums = None
+    fusion_weight_count = 0
+    tqdm_bar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)", leave=False, mininterval=1.0)
+
+    for batch in tqdm_bar:
+        optimizer.zero_grad()
+
+        batch = {k: v.to(device) for k, v in batch.items()}
+        pose = batch["pose"].to(device)
+        pose_pred, fusion_weights = model(batch)
+
+        loss, loss_q, loss_y, loss_z, _ = rotation_handler.compute_loss(
+            pose_pred, pose, uncertainty_module
+        )
+        abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = rotation_handler.compute_metrics(
+            pose_pred, pose
+        )
+
+        if fusion_weights is not None:
+            fusion_weights_flat = fusion_weights.detach().cpu().flatten().float()
+            if fusion_weight_sums is None:
+                fusion_weight_sums = fusion_weights_flat.clone()
+            else:
+                fusion_weight_sums += fusion_weights_flat
+            fusion_weight_count += 1
+
+        _apply_metric_accumulation(
+            train_metrics,
+            {
+                "loss": loss.item(),
+                "loss_q": loss_q.item(),
+                "loss_y": loss_y.item(),
+                "loss_z": loss_z.item(),
+                "abs_y": abs_trans_y.item(),
+                "abs_z": abs_trans_z.item(),
+                "abs_trans": abs_trans.item(),
+                "abs_rot_x": abs_rot_x.item(),
+            },
+        )
+
+        t_loss = train_metrics["loss"] / (tqdm_bar.n + 1)
+        tqdm_bar.set_postfix(avg_loss=f"{t_loss:.4f}", q_wt=f"{loss_q.item():.4f}")
+
+        loss.backward()
+
+        log_train_step_to_tensorboard(
+            tb_writer=tb_writer,
+            global_batch_step=global_batch_step,
+            optimizer=optimizer,
+            model=model,
+            param_groups_by_name=param_groups_by_name,
+            loss=loss,
+            loss_q=loss_q,
+            loss_y=loss_y,
+            loss_z=loss_z,
+            abs_trans=abs_trans,
+            abs_rot_x=abs_rot_x,
+            fusion_weights=fusion_weights,
+        )
+
+        optimizer.step()
+        global_batch_step += 1
+
+        tqdm_bar.set_postfix(loss=f"{loss.item():.4f}")
+
+    train_avg = EpochMetricsAggregator(train_metrics, len(train_loader)).to_dict()
+    fusion_weights_avg = None
+    if fusion_weight_sums is not None and fusion_weight_count > 0:
+        fusion_weights_avg = fusion_weight_sums / float(fusion_weight_count)
+
+    return {
+        "train_avg": train_avg,
+        "fusion_weights": fusion_weights,
+        "fusion_weights_avg": fusion_weights_avg,
+        "global_batch_step": global_batch_step,
+    }
 
 
 def validation_loop(
@@ -70,16 +157,7 @@ def validation_loop(
         Dictionary with validation metrics
     """
     model.eval()
-    val_metrics = {
-        "loss": 0.0,
-        "loss_q": 0.0,
-        "loss_y": 0.0,
-        "loss_z": 0.0,
-        "abs_y": 0.0,
-        "abs_z": 0.0,
-        "abs_trans": 0.0,
-        "abs_rot_x": 0.0,
-    }
+    val_metrics = _init_epoch_metrics()
     
     num_val = len(val_loader)
     with torch.no_grad():
@@ -96,19 +174,21 @@ def validation_loop(
                 pose_pred, pose
             )
             
-            # Accumulate metrics
-            val_metrics["loss"] += loss.item()
-            val_metrics["loss_q"] += loss_q.item()
-            val_metrics["loss_y"] += loss_y.item()
-            val_metrics["loss_z"] += loss_z.item()
-            val_metrics["abs_y"] += abs_trans_y.item()
-            val_metrics["abs_z"] += abs_trans_z.item()
-            val_metrics["abs_trans"] += abs_trans.item()
-            val_metrics["abs_rot_x"] += abs_rot_x.item()
+            _apply_metric_accumulation(
+                val_metrics,
+                {
+                    "loss": loss.item(),
+                    "loss_q": loss_q.item(),
+                    "loss_y": loss_y.item(),
+                    "loss_z": loss_z.item(),
+                    "abs_y": abs_trans_y.item(),
+                    "abs_z": abs_trans_z.item(),
+                    "abs_trans": abs_trans.item(),
+                    "abs_rot_x": abs_rot_x.item(),
+                },
+            )
     
-    # Average metrics
-    val_metrics_avg = {key: val / num_val for key, val in val_metrics.items()}
-    return val_metrics_avg
+    return EpochMetricsAggregator(val_metrics, num_val).to_dict()
 
 
 def train_loop(
@@ -160,7 +240,7 @@ def train_loop(
     
     # Create rotation loss handler for both training and validation
     rotation_handler = get_rotation_handler(
-        getattr(model, "rotation_parametrisation", "quaternion"),
+        model.rotation_parametrisation,
         criterion=criterion,
         rotation_loss_type=rotation_loss_type
     )
@@ -171,199 +251,121 @@ def train_loop(
             head_lr_manager.apply_lr_scale(current_lr_scale)
 
             epoch_start = time.perf_counter()
-            model.train()
-            train_metrics = {
-                "loss": 0.0,
-                "loss_q": 0.0,
-                "loss_y": 0.0,
-                "loss_z": 0.0,
-                "abs_y": 0.0,
-                "abs_z": 0.0,
-                "abs_trans": 0.0,
-                "abs_rot_x": 0.0,
-            }
-
-            fusion_weights = None
-            fusion_weight_sums = None
-            fusion_weight_count = 0
-            tqdm_bar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)", leave=False, mininterval=1.0)
-            for batch in tqdm_bar:
-                optimizer.zero_grad()
-
-                batch = {k: v.to(device) for k, v in batch.items()}
-                pose = batch["pose"].to(device)
-
-                pose_pred, fusion_weights = model(batch)    # fusion_weights is only returned for logging/debugging purposes
-
-                # Compute loss and metrics using rotation handler
-                loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(
-                    pose_pred, pose, uncertainty_module
-                )
-                abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = rotation_handler.compute_metrics(
-                    pose_pred, pose
-                )
-
-                if fusion_weights is not None:
-                    fusion_weights_flat = fusion_weights.detach().cpu().flatten().float()
-                    if fusion_weight_sums is None:
-                        fusion_weight_sums = fusion_weights_flat.clone()
-                    else:
-                        fusion_weight_sums += fusion_weights_flat
-                    fusion_weight_count += 1
-
-                # Update metrics
-                current_vals = {
-                    "loss": loss.item(),
-                    "loss_q": loss_q.item(),
-                    "loss_y": loss_y.item(),
-                    "loss_z": loss_z.item(),
-                    "abs_y": abs_trans_y.item(),
-                    "abs_z": abs_trans_z.item(),
-                    "abs_trans": abs_trans.item(),
-                    "abs_rot_x": abs_rot_x.item(),
-                }
-
-                for key, value in current_vals.items():
-                    train_metrics[key] += value
-
-                # Display key weights/losses in the bar itself
-                t_loss = train_metrics["loss"] / (tqdm_bar.n + 1)
-                tqdm_bar.set_postfix(avg_loss=f"{t_loss:.4f}", q_wt=f"{loss_q.item():.4f}")
-
-                loss.backward()
-
-                log_train_step_to_tensorboard(
-                    tb_writer=tb_writer,
-                    global_batch_step=global_batch_step,
-                    optimizer=optimizer,
-                    model=model,
-                    param_groups_by_name=param_groups_by_name,
-                    loss=loss,
-                    loss_q=loss_q,
-                    loss_y=loss_y,
-                    loss_z=loss_z,
-                    abs_trans=abs_trans,
-                    abs_rot_x=abs_rot_x,
-                    fusion_weights=fusion_weights,
-                )
-
-                optimizer.step()
-                global_batch_step += 1
-
-                tqdm_bar.set_postfix(loss=f"{loss.item():.4f}")
-
-            num_train = len(train_loader)
-            num_val = len(val_loader)
-            fw_str = format_fusion_weights(fusion_weights)
-
-            epoch_avg_loss = train_metrics["loss"] / num_train
-            avg_q = train_metrics["loss_q"] / num_train
-            avg_y = train_metrics["loss_y"] / num_train
-            avg_z = train_metrics["loss_z"] / num_train
-            train_abs_y = train_metrics["abs_y"] / num_train
-            train_abs_z = train_metrics["abs_z"] / num_train
-            train_abs_trans = train_metrics["abs_trans"] / num_train
-            train_abs_rot_x = train_metrics["abs_rot_x"] / num_train
+            train_epoch = _train_single_epoch(
+                model=model,
+                train_loader=train_loader,
+                optimizer=optimizer,
+                rotation_handler=rotation_handler,
+                device=device,
+                tb_writer=tb_writer,
+                param_groups_by_name=param_groups_by_name,
+                uncertainty_module=uncertainty_module,
+                global_batch_step=global_batch_step,
+                epoch=epoch,
+                num_epochs=num_epochs,
+            )
+            global_batch_step = train_epoch["global_batch_step"]
+            train_avg = train_epoch["train_avg"]
+            fusion_weights = train_epoch["fusion_weights"]
+            fusion_weights_avg = train_epoch["fusion_weights_avg"]
             epoch_time = time.perf_counter() - epoch_start
 
-            fusion_weights_avg = None
-            if fusion_weight_sums is not None and fusion_weight_count > 0:
-                fusion_weights_avg = fusion_weight_sums / float(fusion_weight_count)
-
+            fw_str = format_fusion_weights(fusion_weights)
             fw_epoch_str = format_fusion_weights(fusion_weights_avg) if fusion_weights_avg is not None else fw_str
 
-            logger.info(
-                f"epoch={epoch+1} train_loss={epoch_avg_loss:.4f} loss_q={avg_q:.4f} "
-                f"loss_y={avg_y:.4f} loss_z={avg_z:.4f} train_abs_trans={train_abs_trans:.4f} "
-                f"train_abs_rot_x={train_abs_rot_x:.4f} fusion_weights={fw_epoch_str} epoch_time_sec={epoch_time:.2f}"
+            log_epoch_summary(
+                logger=logger,
+                epoch=epoch,
+                num_epochs=num_epochs,
+                train_avg=train_avg,
+                val_avg={"loss": 0.0, "loss_q": 0.0, "loss_y": 0.0, "loss_z": 0.0, "abs_y": 0.0, "abs_z": 0.0, "abs_trans": 0.0, "abs_rot_x": 0.0},
+                lr_base=0.0,
+                lr_head_rot=0.0,
+                lr_head_y=0.0,
+                lr_head_z=0.0,
+                fusion_weights_str=fw_str,
+                fusion_weights_epoch_str=fw_epoch_str,
+                epoch_time=epoch_time,
+                uncertainty_stats={},
+                best_val_loss=best_val_loss,
             )
 
-            # Validation phase - uses separate function to avoid duplication
-            val_metrics_avg = validation_loop(
+            val_avg = validation_loop(
                 model=model,
                 val_loader=val_loader,
                 rotation_handler=rotation_handler,
                 device=device,
                 uncertainty_module=uncertainty_module,
             )
-            
-            val_loss_avg = val_metrics_avg["loss"]
-            val_q_avg = val_metrics_avg["loss_q"]
-            val_y_avg = val_metrics_avg["loss_y"]
-            val_z_avg = val_metrics_avg["loss_z"]
-            val_abs_y_avg = val_metrics_avg["abs_y"]
-            val_abs_z_avg = val_metrics_avg["abs_z"]
-            val_abs_trans_avg = val_metrics_avg["abs_trans"]
-            val_abs_rot_x_avg = val_metrics_avg["abs_rot_x"]
 
             lr_base = _get_lr_by_group(optimizer, "base")
             lr_head_rot = _get_lr_by_group(optimizer, "head_rot")
             lr_head_y = _get_lr_by_group(optimizer, "head_y")
             lr_head_z = _get_lr_by_group(optimizer, "head_z")
-            uncertainty_log_var_rot = ""
-            uncertainty_log_var_trans = ""
-            uncertainty_weight_rot = ""
-            uncertainty_weight_trans = ""
-            if uncertainty_module is not None:
-                uncertainty_log_var_rot = _to_float(uncertainty_module.log_var_rot)
-                uncertainty_log_var_trans = _to_float(uncertainty_module.log_var_trans)
-                uncertainty_weight_rot = float(torch.exp(-uncertainty_module.log_var_rot.detach()).item())
-                uncertainty_weight_trans = float(torch.exp(-uncertainty_module.log_var_trans.detach()).item())
+            uncertainty_stats = _compute_uncertainty_stats(uncertainty_module)
 
-            # Update head learning rates based on validation performance
             head_lr_manager.update(
-                train_metrics={"loss_q": avg_q, "loss_y": avg_y, "loss_z": avg_z},
-                val_metrics={"loss_q": val_q_avg, "loss_y": val_y_avg, "loss_z": val_z_avg},
+                train_metrics={
+                    "loss_q": train_avg["loss_q"],
+                    "loss_y": train_avg["loss_y"],
+                    "loss_z": train_avg["loss_z"],
+                },
+                val_metrics={
+                    "loss_q": val_avg["loss_q"],
+                    "loss_y": val_avg["loss_y"],
+                    "loss_z": val_avg["loss_z"],
+                },
                 current_lr_scale=current_lr_scale,
                 logger=logger,
             )
 
-            # Save checkpoint when validation improves; keep only the current best.
-            if val_loss_avg < best_val_loss:
-                best_val_loss = val_loss_avg
+            if val_avg["loss"] < best_val_loss:
+                best_val_loss = val_avg["loss"]
                 saved_checkpoint_path = save_checkpoint(
                     model,
                     optimizer,
                     epoch,
-                    val_loss_avg,
+                    val_avg["loss"],
                     checkpoint_path,
                 )
 
-            logger.info(
-                f"epoch={epoch+1}/{num_epochs} train_loss={epoch_avg_loss:.4f} val_loss={val_loss_avg:.4f} "
-                f"train_abs_y={train_abs_y:.4f} train_abs_z={train_abs_z:.4f} "
-                f"train_abs_trans={train_abs_trans:.4f} train_abs_rot_x={train_abs_rot_x:.4f} "
-                f"val_abs_y={val_abs_y_avg:.4f} val_abs_z={val_abs_z_avg:.4f} "
-                f"val_abs_trans={val_abs_trans_avg:.4f} val_abs_rot_x={val_abs_rot_x_avg:.4f} lr_base={lr_base:.8f} "
-                f"lr_head_rot={lr_head_rot:.8f} lr_head_y={lr_head_y:.8f} "
-                f"lr_head_z={lr_head_z:.8f} fusion_weights={fw_str}"
+            log_epoch_summary(
+                logger=logger,
+                epoch=epoch,
+                num_epochs=num_epochs,
+                train_avg=train_avg,
+                val_avg=val_avg,
+                lr_base=lr_base,
+                lr_head_rot=lr_head_rot,
+                lr_head_y=lr_head_y,
+                lr_head_z=lr_head_z,
+                fusion_weights_str=fw_str,
+                fusion_weights_epoch_str=fw_epoch_str,
+                epoch_time=epoch_time,
+                uncertainty_stats=uncertainty_stats,
+                best_val_loss=best_val_loss,
             )
-            if uncertainty_module is not None:
-                logger.info(
-                    f"uncertainty rot_log_var={uncertainty_log_var_rot:.6f} trans_log_var={uncertainty_log_var_trans:.6f} "
-                    f"rot_weight={uncertainty_weight_rot:.6f} trans_weight={uncertainty_weight_trans:.6f}"
-                )
 
             global_step = epoch + 1
             log_epoch_to_tensorboard(
                 tb_writer=tb_writer,
                 global_step=global_step,
-                epoch_avg_loss=epoch_avg_loss,
-                val_loss_avg=val_loss_avg,
-                avg_q=avg_q,
-                val_q_avg=val_q_avg,
-                avg_y=avg_y,
-                val_y_avg=val_y_avg,
-                avg_z=avg_z,
-                val_z_avg=val_z_avg,
-                train_abs_y=train_abs_y,
-                val_abs_y_avg=val_abs_y_avg,
-                train_abs_z=train_abs_z,
-                val_abs_z_avg=val_abs_z_avg,
-                train_abs_trans=train_abs_trans,
-                val_abs_trans_avg=val_abs_trans_avg,
-                train_abs_rot_x=train_abs_rot_x,
-                val_abs_rot_x_avg=val_abs_rot_x_avg,
+                epoch_avg_loss=train_avg["loss"],
+                val_loss_avg=val_avg["loss"],
+                avg_q=train_avg["loss_q"],
+                val_q_avg=val_avg["loss_q"],
+                avg_y=train_avg["loss_y"],
+                val_y_avg=val_avg["loss_y"],
+                avg_z=train_avg["loss_z"],
+                val_z_avg=val_avg["loss_z"],
+                train_abs_y=train_avg["abs_y"],
+                val_abs_y_avg=val_avg["abs_y"],
+                train_abs_z=train_avg["abs_z"],
+                val_abs_z_avg=val_avg["abs_z"],
+                train_abs_trans=train_avg["abs_trans"],
+                val_abs_trans_avg=val_avg["abs_trans"],
+                train_abs_rot_x=train_avg["abs_rot_x"],
+                val_abs_rot_x_avg=val_avg["abs_rot_x"],
                 best_val_loss=best_val_loss,
                 epoch_time=epoch_time,
                 lr_base=lr_base,
@@ -375,10 +377,10 @@ def train_loop(
                 fusion_weights=fw_str,
                 fusion_weights_avg=fusion_weights_avg,
                 uncertainty_module=uncertainty_module,
-                uncertainty_log_var_rot=uncertainty_log_var_rot,
-                uncertainty_log_var_trans=uncertainty_log_var_trans,
-                uncertainty_weight_rot=uncertainty_weight_rot,
-                uncertainty_weight_trans=uncertainty_weight_trans,
+                uncertainty_log_var_rot=uncertainty_stats["uncertainty_log_var_rot"],
+                uncertainty_log_var_trans=uncertainty_stats["uncertainty_log_var_trans"],
+                uncertainty_weight_rot=uncertainty_stats["uncertainty_weight_rot"],
+                uncertainty_weight_trans=uncertainty_stats["uncertainty_weight_trans"],
             )
 
             if epoch == num_epochs - 1:
@@ -387,30 +389,32 @@ def train_loop(
                     metadata=metadata,
                     optimizer=optimizer,
                     train_loader=train_loader,
-                    val_loss_avg=val_loss_avg,
-                    val_abs_trans_avg=val_abs_trans_avg,
-                    val_abs_rot_x_avg=val_abs_rot_x_avg,
+                    val_loss_avg=val_avg["loss"],
+                    val_abs_trans_avg=val_avg["abs_trans"],
+                    val_abs_rot_x_avg=val_avg["abs_rot_x"],
                 )
 
-            logger.debug(f"Epoch {epoch+1} detailed: q={avg_q:.4f}, y={avg_y:.4f}")
+            logger.debug(
+                f"Epoch {epoch+1} detailed: q={train_avg['loss_q']:.4f}, y={train_avg['loss_y']:.4f}"
+            )
 
             write_epoch_metrics_csv(
                 csv_writer,
                 {
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "epoch": epoch + 1,
-                    "train_loss": f"{epoch_avg_loss:.6f}",
-                    "loss_q": f"{avg_q:.6f}",
-                    "loss_y": f"{avg_y:.6f}",
-                    "loss_z": f"{avg_z:.6f}",
-                    "train_abs_y": f"{train_abs_y:.6f}",
-                    "train_abs_z": f"{train_abs_z:.6f}",
-                    "train_abs_trans": f"{train_abs_trans:.6f}",
-                    "train_abs_rot_x": f"{train_abs_rot_x:.6f}",
-                    "val_abs_y": f"{val_abs_y_avg:.6f}",
-                    "val_abs_z": f"{val_abs_z_avg:.6f}",
-                    "val_abs_trans": f"{val_abs_trans_avg:.6f}",
-                    "val_abs_rot_x": f"{val_abs_rot_x_avg:.6f}",
+                    "train_loss": f"{train_avg['loss']:.6f}",
+                    "loss_q": f"{train_avg['loss_q']:.6f}",
+                    "loss_y": f"{train_avg['loss_y']:.6f}",
+                    "loss_z": f"{train_avg['loss_z']:.6f}",
+                    "train_abs_y": f"{train_avg['abs_y']:.6f}",
+                    "train_abs_z": f"{train_avg['abs_z']:.6f}",
+                    "train_abs_trans": f"{train_avg['abs_trans']:.6f}",
+                    "train_abs_rot_x": f"{train_avg['abs_rot_x']:.6f}",
+                    "val_abs_y": f"{val_avg['abs_y']:.6f}",
+                    "val_abs_z": f"{val_avg['abs_z']:.6f}",
+                    "val_abs_trans": f"{val_avg['abs_trans']:.6f}",
+                    "val_abs_rot_x": f"{val_avg['abs_rot_x']:.6f}",
                     "fusion_weights": fw_str,
                     "best_loss": f"{best_val_loss:.6f}",
                     "epoch_time_sec": f"{epoch_time:.2f}",
@@ -426,10 +430,18 @@ def train_loop(
                     "lr_head_y": f"{lr_head_y:.8f}",
                     "lr_head_z": f"{lr_head_z:.8f}",
                     "lr_schedule_scale": f"{current_lr_scale:.8f}",
-                    "uncertainty_log_var_rot": "" if uncertainty_log_var_rot == "" else f"{uncertainty_log_var_rot:.8f}",
-                    "uncertainty_log_var_trans": "" if uncertainty_log_var_trans == "" else f"{uncertainty_log_var_trans:.8f}",
-                    "uncertainty_weight_rot": "" if uncertainty_weight_rot == "" else f"{uncertainty_weight_rot:.8f}",
-                    "uncertainty_weight_trans": "" if uncertainty_weight_trans == "" else f"{uncertainty_weight_trans:.8f}",
+                    "uncertainty_log_var_rot": ""
+                    if uncertainty_stats["uncertainty_log_var_rot"] == ""
+                    else f"{uncertainty_stats['uncertainty_log_var_rot']:.8f}",
+                    "uncertainty_log_var_trans": ""
+                    if uncertainty_stats["uncertainty_log_var_trans"] == ""
+                    else f"{uncertainty_stats['uncertainty_log_var_trans']:.8f}",
+                    "uncertainty_weight_rot": ""
+                    if uncertainty_stats["uncertainty_weight_rot"] == ""
+                    else f"{uncertainty_stats['uncertainty_weight_rot']:.8f}",
+                    "uncertainty_weight_trans": ""
+                    if uncertainty_stats["uncertainty_weight_trans"] == ""
+                    else f"{uncertainty_stats['uncertainty_weight_trans']:.8f}",
                     "batch_size": metadata.get("batch_size", ""),
                     "seed": metadata.get("seed", ""),
                 },
@@ -462,7 +474,7 @@ def main(
     # Setup run artifacts, logging, and tensorboard
     run_setup = RunSetupManager(config_path, cfg, batch_size)
     artifacts = run_setup.setup_artifacts()
-    logger, log_file = setup_logger(artifacts["run_dir"])
+    logger, log_file = configure_run_logging(artifacts, tensorboard_root_dir or artifacts["tensorboard_root_dir"], {}, logger=None, log_file=None)
     run_setup.logger = logger  # Update logger after creation
     
     tensorboard_log_dir, _ = run_setup.setup_tensorboard(tensorboard_port, tensorboard_root_dir)
@@ -472,7 +484,7 @@ def main(
     
     # Load data
     data_pipeline = DataPipelineManager(cfg, base_dir, force_preprocess=force_preprocess, logger=logger)
-    train_loader, val_loader, test_loader = data_pipeline.get_loaders(batch_size)
+    train_loader, val_loader, _ = data_pipeline.get_loaders(batch_size)
     
     # Build training components from config
     config_builder = TrainingConfigBuilder(cfg, device, logger=logger)
@@ -480,7 +492,6 @@ def main(
     
     # Override optimizer if specified via CLI
     if optimizer_name is not None:
-        from utils.utils import get_optimizer
         base_lr = float(cfg["training"]["lr"])
         optimizer = get_optimizer(param_groups, optimizer_name=optimizer_name, lr=base_lr)
         if uncertainty_module is not None:
@@ -517,28 +528,7 @@ def main(
         "uncertainty_weighting": uncertainty_cfg if uncertainty_module is not None else {"enabled": False},
     }
     
-    # Log configuration
-    logger.info(
-        f"run_start log_file={log_file} metrics_csv={artifacts['metrics_csv_path']} "
-        f"tensorboard_dir={tensorboard_log_dir} "
-        f"model={run_metadata['model_name']} fusion={run_metadata['fusion']} "
-        f"head_type={run_metadata['head_type']} batch_size={run_metadata['batch_size']} lr={run_metadata['lr']}"
-    )
-    if uncertainty_module is not None:
-        logger.info(
-            "uncertainty_weighting enabled=true "
-            f"init_log_var_rot={uncertainty_cfg.get('init_log_var_rot', 0.0)} "
-            f"init_log_var_trans={uncertainty_cfg.get('init_log_var_trans', 0.0)} "
-            f"lr_mult={uncertainty_cfg.get('lr_mult', 1.0)}"
-        )
-    if bool(lr_schedule_cfg.get("enabled", False)):
-        logger.info(
-            "lr_schedule enabled=true "
-            f"type={lr_schedule_cfg.get('type', 'one_cycle')} "
-            f"start_lr_mult={lr_schedule_cfg.get('start_lr_mult', 0.2)} "
-            f"max_lr_mult={lr_schedule_cfg.get('max_lr_mult', 3.0)} "
-            f"final_lr_mult={lr_schedule_cfg.get('final_lr_mult', 0.05)}"
-        )
+    # Configuration already logged when logger was configured.
     
     # Save manifest
     run_setup.save_manifest(run_metadata)
@@ -547,26 +537,23 @@ def main(
     rotation_loss_type = cfg.get("model", {}).get("rotation_loss_type", "geodesic")
 
     # Train
-    try:
-        train_loop(
-            model=model,
-            num_epochs=cfg["training"]["epochs"],
-            train_loader=train_loader,
-            val_loader=val_loader,
-            optimizer=optimizer,
-            criterion=loss_function,
-            device=device,
-            uncertainty_module=uncertainty_module,
-            checkpoint_path=artifacts["checkpoint_path"],
-            metrics_csv_path=artifacts["metrics_csv_path"],
-            run_metadata=run_metadata,
-            tensorboard_log_dir=tensorboard_log_dir,
-            head_lr_decay_cfg=resolved_head_lr_cfg,
-            lr_schedule_cfg=lr_schedule_cfg,
-            rotation_loss_type=rotation_loss_type,
-        )
-    finally:
-        pass
+    train_loop(
+        model=model,
+        num_epochs=cfg["training"]["epochs"],
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=optimizer,
+        criterion=loss_function,
+        device=device,
+        uncertainty_module=uncertainty_module,
+        checkpoint_path=artifacts["checkpoint_path"],
+        metrics_csv_path=artifacts["metrics_csv_path"],
+        run_metadata=run_metadata,
+        tensorboard_log_dir=tensorboard_log_dir,
+        head_lr_decay_cfg=resolved_head_lr_cfg,
+        lr_schedule_cfg=lr_schedule_cfg,
+        rotation_loss_type=rotation_loss_type,
+    )
 
 
 

@@ -6,6 +6,8 @@ import socket
 import subprocess
 import sys
 
+import torch
+
 try:
     from torch.utils.tensorboard import SummaryWriter
 except ImportError:  # pragma: no cover - optional dependency
@@ -291,3 +293,161 @@ def write_epoch_metrics_csv(csv_writer, row):
     if csv_writer is None:
         return
     csv_writer.writerow(row)
+
+
+def log_run_start(logger, log_file, artifacts, tensorboard_log_dir, run_metadata, uncertainty_enabled, uncertainty_cfg, lr_schedule_cfg):
+    """Log standardized run start information.
+
+    Args:
+        logger: Logger instance
+        log_file: Path to the active log file
+        artifacts: Artifacts dict produced by build_run_artifacts
+        tensorboard_log_dir: TensorBoard log directory for this run
+        run_metadata: Metadata dict for this run
+        uncertainty_enabled: Bool indicating if uncertainty module is enabled
+        uncertainty_cfg: Uncertainty config dict
+        lr_schedule_cfg: LR schedule config dict
+    """
+    logger.info(
+        f"run_start log_file={log_file} metrics_csv={artifacts.get('metrics_csv_path')} "
+        f"tensorboard_dir={tensorboard_log_dir} "
+        f"model={run_metadata.get('model_name')} fusion={run_metadata.get('fusion')} "
+        f"head_type={run_metadata.get('head_type')} batch_size={run_metadata.get('batch_size')} lr={run_metadata.get('lr')}"
+    )
+
+    if uncertainty_enabled:
+        logger.info(
+            "uncertainty_weighting enabled=true "
+            f"init_log_var_rot={uncertainty_cfg.get('init_log_var_rot', 0.0)} "
+            f"init_log_var_trans={uncertainty_cfg.get('init_log_var_trans', 0.0)} "
+            f"lr_mult={uncertainty_cfg.get('lr_mult', 1.0)}"
+        )
+
+    if bool(lr_schedule_cfg.get("enabled", False)):
+        logger.info(
+            "lr_schedule enabled=true "
+            f"type={lr_schedule_cfg.get('type', 'one_cycle')} "
+            f"start_lr_mult={lr_schedule_cfg.get('start_lr_mult', 0.2)} "
+            f"max_lr_mult={lr_schedule_cfg.get('max_lr_mult', 3.0)} "
+            f"final_lr_mult={lr_schedule_cfg.get('final_lr_mult', 0.05)}"
+        )
+
+
+def configure_run_logging(artifacts, tensorboard_root, run_metadata, uncertainty_enabled=False, uncertainty_cfg=None, lr_schedule_cfg=None, logger=None, log_file=None):
+    """Configure logger and emit run-start logs.
+
+    This wraps the existing `setup_logger` (from utils.utils) and `log_run_start`.
+    Args:
+        artifacts: Artifacts dict from `build_run_artifacts`
+        tensorboard_root: Root tensorboard directory (may be None)
+        run_metadata: Run metadata dict
+        uncertainty_enabled: Whether uncertainty weighting is enabled
+        uncertainty_cfg: Uncertainty cfg dict
+        lr_schedule_cfg: LR schedule cfg dict
+
+    Returns:
+        (logger, log_file)
+    """
+    from utils.utils import setup_logger
+    import os
+
+    if logger is None or log_file is None:
+        logger, log_file = setup_logger(artifacts.get("run_dir", "logs"))
+
+    tb_root = tensorboard_root or artifacts.get("tensorboard_root_dir")
+    tensorboard_log_dir = os.path.join(tb_root, artifacts.get("run_name")) if tb_root is not None else None
+
+    # Emit the standardized run-start logs using the provided or newly-created logger
+    log_run_start(
+        logger=logger,
+        log_file=log_file,
+        artifacts=artifacts,
+        tensorboard_log_dir=tensorboard_log_dir,
+        run_metadata=run_metadata,
+        uncertainty_enabled=uncertainty_enabled,
+        uncertainty_cfg=uncertainty_cfg or {},
+        lr_schedule_cfg=lr_schedule_cfg or {},
+    )
+
+    return logger, log_file
+def _to_float(value):
+    if isinstance(value, torch.Tensor):
+        return float(value.detach().item())
+    return float(value)
+
+
+def _init_epoch_metrics():
+    return {
+        "loss": 0.0,
+        "loss_q": 0.0,
+        "loss_y": 0.0,
+        "loss_z": 0.0,
+        "abs_y": 0.0,
+        "abs_z": 0.0,
+        "abs_trans": 0.0,
+        "abs_rot_x": 0.0,
+    }
+
+
+def _apply_metric_accumulation(metric_sums, batch_values):
+    for key, value in batch_values.items():
+        metric_sums[key] += value
+
+
+def _compute_uncertainty_stats(uncertainty_module):
+    if uncertainty_module is None:
+        return {
+            "uncertainty_log_var_rot": "",
+            "uncertainty_log_var_trans": "",
+            "uncertainty_weight_rot": "",
+            "uncertainty_weight_trans": "",
+        }
+
+    return {
+        "uncertainty_log_var_rot": _to_float(uncertainty_module.log_var_rot),
+        "uncertainty_log_var_trans": _to_float(uncertainty_module.log_var_trans),
+        "uncertainty_weight_rot": float(torch.exp(-uncertainty_module.log_var_rot.detach()).item()),
+        "uncertainty_weight_trans": float(torch.exp(-uncertainty_module.log_var_trans.detach()).item()),
+    }
+
+
+def log_epoch_summary(
+    logger,
+    epoch,
+    num_epochs,
+    train_avg,
+    val_avg,
+    lr_base,
+    lr_head_rot,
+    lr_head_y,
+    lr_head_z,
+    fusion_weights_str,
+    fusion_weights_epoch_str,
+    epoch_time,
+    uncertainty_stats,
+    best_val_loss,
+):
+    logger.info(
+        f"epoch={epoch+1} train_loss={train_avg['loss']:.4f} loss_q={train_avg['loss_q']:.4f} "
+        f"loss_y={train_avg['loss_y']:.4f} loss_z={train_avg['loss_z']:.4f} "
+        f"train_abs_trans={train_avg['abs_trans']:.4f} train_abs_rot_x={train_avg['abs_rot_x']:.4f} "
+        f"fusion_weights={fusion_weights_epoch_str} epoch_time_sec={epoch_time:.2f}"
+    )
+
+    logger.info(
+        f"epoch={epoch+1}/{num_epochs} train_loss={train_avg['loss']:.4f} val_loss={val_avg['loss']:.4f} "
+        f"train_abs_y={train_avg['abs_y']:.4f} train_abs_z={train_avg['abs_z']:.4f} "
+        f"train_abs_trans={train_avg['abs_trans']:.4f} train_abs_rot_x={train_avg['abs_rot_x']:.4f} "
+        f"val_abs_y={val_avg['abs_y']:.4f} val_abs_z={val_avg['abs_z']:.4f} "
+        f"val_abs_trans={val_avg['abs_trans']:.4f} val_abs_rot_x={val_avg['abs_rot_x']:.4f} "
+        f"lr_base={lr_base:.8f} lr_head_rot={lr_head_rot:.8f} lr_head_y={lr_head_y:.8f} "
+        f"lr_head_z={lr_head_z:.8f} fusion_weights={fusion_weights_str}"
+    )
+
+    if uncertainty_stats and any(isinstance(uncertainty_stats.get(k), (int, float)) for k in ["uncertainty_log_var_rot", "uncertainty_log_var_trans"]):
+        logger.info(
+            f"uncertainty rot_log_var={uncertainty_stats['uncertainty_log_var_rot']:.6f} "
+            f"trans_log_var={uncertainty_stats['uncertainty_log_var_trans']:.6f} "
+            f"rot_weight={uncertainty_stats['uncertainty_weight_rot']:.6f} "
+            f"trans_weight={uncertainty_stats['uncertainty_weight_trans']:.6f}"
+        )

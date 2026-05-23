@@ -109,7 +109,6 @@ class HeadLRDecayManager:
         
         self.optimizer = optimizer
         self.param_groups_by_name = param_groups_by_name
-        self.base_lr = base_lr
         
         # Track base LRs for each group
         self.base_group_lrs = {
