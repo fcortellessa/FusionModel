@@ -12,3 +12,5 @@ runs/
 results/results.csv
 *archived*
 data_subset/
+results/
+runs_dataAugm/

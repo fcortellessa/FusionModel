@@ -1,5 +1,9 @@
-import torch
 import math
+from datetime import datetime
+
+import os
+
+import torch
 
 
 
@@ -86,6 +90,67 @@ def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
 
     return lr_scale
 
+def _apply_metric_accumulation(metric_sums, batch_values):
+    for key, value in batch_values.items():
+        metric_sums[key] += value
+
+
+def build_epoch_metrics_row(
+    metadata,
+    epoch,
+    train_avg,
+    val_avg,
+    fusion_weights_str,
+    best_val_loss,
+    epoch_time,
+    lr_base,
+    lr_head_rot,
+    lr_head_y,
+    lr_head_z,
+    current_lr_scale,
+    uncertainty_stats,
+    checkpoint_path="",
+):
+    metadata = metadata or {}
+    uncertainty_stats = uncertainty_stats or {}
+
+    return {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "epoch": epoch + 1,
+        "train_loss": train_avg["loss"],
+        "loss_q": train_avg["loss_q"],
+        "loss_y": train_avg["loss_y"],
+        "loss_z": train_avg["loss_z"],
+        "train_abs_y": train_avg["abs_y"],
+        "train_abs_z": train_avg["abs_z"],
+        "train_abs_trans": train_avg["abs_trans"],
+        "train_abs_rot_x": train_avg["abs_rot_x"],
+        "val_abs_y": val_avg["abs_y"],
+        "val_abs_z": val_avg["abs_z"],
+        "val_abs_trans": val_avg["abs_trans"],
+        "val_abs_rot_x": val_avg["abs_rot_x"],
+        "fusion_weights": fusion_weights_str,
+        "best_loss": best_val_loss,
+        "epoch_time_sec": epoch_time,
+        "checkpoint_path": os.path.abspath(checkpoint_path) if checkpoint_path else "",
+        "model_name": metadata.get("model_name", ""),
+        "streams": metadata.get("streams", ""),
+        "fusion": metadata.get("fusion", ""),
+        "head_type": metadata.get("head_type", ""),
+        "freeze_backbone": metadata.get("freeze_backbone", ""),
+        "lr": lr_base,
+        "lr_base": lr_base,
+        "lr_head_rot": lr_head_rot,
+        "lr_head_y": lr_head_y,
+        "lr_head_z": lr_head_z,
+        "lr_schedule_scale": current_lr_scale,
+        "uncertainty_log_var_rot": uncertainty_stats.get("uncertainty_log_var_rot", ""),
+        "uncertainty_log_var_trans": uncertainty_stats.get("uncertainty_log_var_trans", ""),
+        "uncertainty_weight_rot": uncertainty_stats.get("uncertainty_weight_rot", ""),
+        "uncertainty_weight_trans": uncertainty_stats.get("uncertainty_weight_trans", ""),
+        "batch_size": metadata.get("batch_size", ""),
+        "seed": metadata.get("seed", ""),
+    }
 
 # ============================================================================
 # Manager Classes for Training Organization

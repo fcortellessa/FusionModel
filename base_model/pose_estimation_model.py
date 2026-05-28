@@ -18,6 +18,7 @@ ToDo:
 """
 import os
 import sys
+import inspect
 # import yaml
 from logging import config
 
@@ -86,7 +87,9 @@ class PoseEstimationNet(nn.Module):
 
         # build_fusion returns a single fusion module instance as specified by the config
         self.fusion = build_fusion(fusion, feat_dim, len(streams))
+        self._fusion_accepts_aux_losses = "aux_losses" in inspect.signature(self.fusion.forward).parameters
         self.weights = None
+        self.last_fusion_targets = None
 
         fused_dim = feat_dim * len(streams) if fusion == "concat" else feat_dim
 
@@ -176,7 +179,7 @@ class PoseEstimationNet(nn.Module):
         return torch.cat([p.flatten(1) for p in [p3, p4, p5]], dim=1)
 
 
-    def forward(self, x_dict):
+    def forward(self, x_dict, aux_losses=None):
         features = []
 
         for stream in self.streams:
@@ -186,13 +189,28 @@ class PoseEstimationNet(nn.Module):
             features.append(feat)
 
         # Fuse features (Shape: [Batch, Fused_Dim])
-        fusion_out = self.fusion(features)
+        if aux_losses is not None and self._fusion_accepts_aux_losses:
+            fusion_out = self.fusion(features, aux_losses=aux_losses)
+        else:
+            fusion_out = self.fusion(features)
+
+        fusion_targets = None
         if isinstance(fusion_out, tuple):
-            fused, fusion_weights = fusion_out
-            avg_fusion_weights = fusion_weights.mean(dim=0)  # Average weights across batch for logging
+            if len(fusion_out) == 2:
+                fused, fusion_weights = fusion_out
+            elif len(fusion_out) == 3:
+                fused, fusion_weights, fusion_targets = fusion_out
+            else:
+                raise ValueError(
+                    f"Fusion module '{self.fusion_type}' returned {len(fusion_out)} values; expected 1, 2, or 3."
+                )
+
+            avg_fusion_weights = fusion_weights.mean(dim=0) if fusion_weights is not None else None
         else:
             fused = fusion_out
             avg_fusion_weights = None
+
+        self.last_fusion_targets = fusion_targets
 
         # Handle SE(3) direct optimization
         if self.rotation_parametrisation == "se3_direct":

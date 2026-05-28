@@ -6,8 +6,6 @@ import socket
 import subprocess
 import sys
 
-import torch
-
 try:
     from torch.utils.tensorboard import SummaryWriter
 except ImportError:  # pragma: no cover - optional dependency
@@ -177,82 +175,52 @@ def log_train_step_to_tensorboard(
 def log_epoch_to_tensorboard(
     tb_writer,
     global_step,
-    epoch_avg_loss,
-    val_loss_avg,
-    avg_q,
-    val_q_avg,
-    avg_y,
-    val_y_avg,
-    avg_z,
-    val_z_avg,
-    train_abs_y,
-    val_abs_y_avg,
-    train_abs_z,
-    val_abs_z_avg,
-    train_abs_trans,
-    val_abs_trans_avg,
-    train_abs_rot_x,
-    val_abs_rot_x_avg,
-    best_val_loss,
-    epoch_time,
-    lr_base,
-    lr_head_rot,
-    lr_head_y,
-    lr_head_z,
+    train_avg,
+    val_avg,
+    lr_stats,
     lr_schedule_scale,
     param_groups_by_name,
     fusion_weights,
     fusion_weights_avg,
     uncertainty_module,
-    uncertainty_log_var_rot,
-    uncertainty_log_var_trans,
-    uncertainty_weight_rot,
-    uncertainty_weight_trans,
+    uncertainty_stats,
+    best_val_loss,
+    epoch_time,
 ):
     if tb_writer is None:
         return
 
-    tb_writer.add_scalars("loss/total", {"train": epoch_avg_loss, "val": val_loss_avg}, global_step)
-    tb_writer.add_scalars("loss/q", {"train": avg_q, "val": val_q_avg}, global_step)
-    tb_writer.add_scalars("loss/y", {"train": avg_y, "val": val_y_avg}, global_step)
-    tb_writer.add_scalars("loss/z", {"train": avg_z, "val": val_z_avg}, global_step)
-    tb_writer.add_scalars("metrics/abs_y", {"train": train_abs_y, "val": val_abs_y_avg}, global_step)
-    tb_writer.add_scalars("metrics/abs_z", {"train": train_abs_z, "val": val_abs_z_avg}, global_step)
-    tb_writer.add_scalars("metrics/abs_trans", {"train": train_abs_trans, "val": val_abs_trans_avg}, global_step)
-    tb_writer.add_scalars("metrics/abs_rot_x", {"train": train_abs_rot_x, "val": val_abs_rot_x_avg}, global_step)
-    tb_writer.add_scalar("diagnostics/loss_gap", epoch_avg_loss - val_loss_avg, global_step)
-    tb_writer.add_scalar("diagnostics/abs_y_gap", train_abs_y - val_abs_y_avg, global_step)
-    tb_writer.add_scalar("diagnostics/abs_z_gap", train_abs_z - val_abs_z_avg, global_step)
-    tb_writer.add_scalar("diagnostics/abs_trans_gap", train_abs_trans - val_abs_trans_avg, global_step)
-    tb_writer.add_scalar("diagnostics/abs_rot_x_gap", train_abs_rot_x - val_abs_rot_x_avg, global_step)
+    tb_writer.add_scalars("loss/total", {"train": train_avg["loss"], "val": val_avg["loss"]}, global_step)
+    tb_writer.add_scalars("loss/q", {"train": train_avg["loss_q"], "val": val_avg["loss_q"]}, global_step)
+    tb_writer.add_scalars("loss/y", {"train": train_avg["loss_y"], "val": val_avg["loss_y"]}, global_step)
+    tb_writer.add_scalars("loss/z", {"train": train_avg["loss_z"], "val": val_avg["loss_z"]}, global_step)
+    tb_writer.add_scalars("metrics/abs_y", {"train": train_avg["abs_y"], "val": val_avg["abs_y"]}, global_step)
+    tb_writer.add_scalars("metrics/abs_z", {"train": train_avg["abs_z"], "val": val_avg["abs_z"]}, global_step)
+    tb_writer.add_scalars("metrics/abs_trans", {"train": train_avg["abs_trans"], "val": val_avg["abs_trans"]}, global_step)
+    tb_writer.add_scalars("metrics/abs_rot_x", {"train": train_avg["abs_rot_x"], "val": val_avg["abs_rot_x"]}, global_step)
+    tb_writer.add_scalar("diagnostics/loss_gap", train_avg["loss"] - val_avg["loss"], global_step)
+    tb_writer.add_scalar("diagnostics/abs_y_gap", train_avg["abs_y"] - val_avg["abs_y"], global_step)
+    tb_writer.add_scalar("diagnostics/abs_z_gap", train_avg["abs_z"] - val_avg["abs_z"], global_step)
+    tb_writer.add_scalar("diagnostics/abs_trans_gap", train_avg["abs_trans"] - val_avg["abs_trans"], global_step)
+    tb_writer.add_scalar("diagnostics/abs_rot_x_gap", train_avg["abs_rot_x"] - val_avg["abs_rot_x"], global_step)
     tb_writer.add_scalar("training/best_val_loss", best_val_loss, global_step)
     tb_writer.add_scalar("training/epoch_time_sec", epoch_time, global_step)
-    tb_writer.add_scalars(
-        "training/lr",
-        {
-            "base": lr_base,
-            "head_rot": lr_head_rot,
-            "head_y": lr_head_y,
-            "head_z": lr_head_z,
-            "schedule_scale": lr_schedule_scale,
-        },
-        global_step,
-    )
+    tb_writer.add_scalars("training/lr", {**lr_stats, "schedule_scale": lr_schedule_scale}, global_step)
 
-    if uncertainty_module is not None:
+    if uncertainty_module is not None and uncertainty_stats:
         tb_writer.add_scalars(
             "uncertainty/log_var",
             {
-                "rot": uncertainty_log_var_rot,
-                "trans": uncertainty_log_var_trans,
+                "rot": uncertainty_stats["uncertainty_log_var_rot"],
+                "trans": uncertainty_stats["uncertainty_log_var_trans"],
             },
             global_step,
         )
         tb_writer.add_scalars(
             "uncertainty/weight",
             {
-                "rot": uncertainty_weight_rot,
-                "trans": uncertainty_weight_trans,
+                "rot": uncertainty_stats["uncertainty_weight_rot"],
+                "trans": uncertainty_stats["uncertainty_weight_trans"],
             },
             global_step,
         )
@@ -293,6 +261,15 @@ def write_epoch_metrics_csv(csv_writer, row):
     if csv_writer is None:
         return
     csv_writer.writerow(row)
+
+
+def close_run_writers(csv_file, tb_writer):
+    if csv_file is not None:
+        csv_file.close()
+
+    if tb_writer is not None:
+        tb_writer.flush()
+        tb_writer.close()
 
 
 def log_run_start(logger, log_file, artifacts, tensorboard_log_dir, run_metadata, uncertainty_enabled, uncertainty_cfg, lr_schedule_cfg):
@@ -370,10 +347,6 @@ def configure_run_logging(artifacts, tensorboard_root, run_metadata, uncertainty
     )
 
     return logger, log_file
-def _to_float(value):
-    if isinstance(value, torch.Tensor):
-        return float(value.detach().item())
-    return float(value)
 
 
 def _init_epoch_metrics():
@@ -387,29 +360,6 @@ def _init_epoch_metrics():
         "abs_trans": 0.0,
         "abs_rot_x": 0.0,
     }
-
-
-def _apply_metric_accumulation(metric_sums, batch_values):
-    for key, value in batch_values.items():
-        metric_sums[key] += value
-
-
-def _compute_uncertainty_stats(uncertainty_module):
-    if uncertainty_module is None:
-        return {
-            "uncertainty_log_var_rot": "",
-            "uncertainty_log_var_trans": "",
-            "uncertainty_weight_rot": "",
-            "uncertainty_weight_trans": "",
-        }
-
-    return {
-        "uncertainty_log_var_rot": _to_float(uncertainty_module.log_var_rot),
-        "uncertainty_log_var_trans": _to_float(uncertainty_module.log_var_trans),
-        "uncertainty_weight_rot": float(torch.exp(-uncertainty_module.log_var_rot.detach()).item()),
-        "uncertainty_weight_trans": float(torch.exp(-uncertainty_module.log_var_trans.detach()).item()),
-    }
-
 
 def log_epoch_summary(
     logger,

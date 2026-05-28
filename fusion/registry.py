@@ -3,13 +3,16 @@ Registry for fusion methods.
 """
 
 from .concat import ConcatFusion
-from .gated import GatedFusion, SimpleGatedFusion
+from .gated import ARGatePlusFusion, SimpleGatedFusion, GatedSoftmaxFusion, GatedSigmoidFusion
 from .attention import AttentionFusion
 
 FUSION_REGISTRY = {
     "concat": ConcatFusion,
-    "gated": GatedFusion,
+    "gated": GatedSoftmaxFusion,
     "simple_gated": SimpleGatedFusion,
+    "gated_Softmax": GatedSoftmaxFusion,
+    "gated_Sigmoid": GatedSigmoidFusion,
+    "ARGate_Fusion": ARGatePlusFusion,
     "attention": AttentionFusion,
 }
 
