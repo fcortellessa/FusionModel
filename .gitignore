@@ -8,6 +8,7 @@ yolo26n.pt
 Data/
 logs/
 checkpoints/
+results/
 runs/
 results/results.csv
 *archived*

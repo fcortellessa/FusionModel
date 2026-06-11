@@ -2,7 +2,7 @@ model:
   backbone: yolo26n.pt
   freeze_backbone: false
   streams: ["rgb_image", "digit_image"]
-  fusion: "gated"
+  fusion: "gated_Sigmoid"
   fusion_temperature: 50.0
   head_type: quaternion
   activation: GELU
@@ -18,7 +18,7 @@ training:
   batch_size: 16
   epochs: 50
   num_workers: 4
-  optimizer: Adam
+  optimizer: MuSGD
   uncertainty_weighting:
     enabled: true
     init_log_var_rot: 0.0

@@ -8,6 +8,7 @@ import pandas as pd
 import glob
 import os
 from pathlib import Path
+import argparse
 
 VARIANTS = [
     "no_aug",
@@ -32,31 +33,42 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
         
         try:
             df = pd.read_csv(metrics_file)
-            
-            # Get final epoch metrics
             final_row = df.iloc[-1] if len(df) > 0 else None
+            
             if final_row is not None:
-                # Identify variant from run_name
+                # 1. Fallback variant identification from run_name
                 variant = "unknown"
                 for v in VARIANTS:
                     if v in run_name:
                         variant = v
                         break
                 
+                # 2. Extract explicit augmentation setting from results.txt if it exists
+                results_txt_path = Path(run_dir) / "results.txt"
+                if results_txt_path.exists():
+                    with open(results_txt_path, "r") as f:
+                        for line in f:
+                            # FIXED: Match your actual format 'augmentation=all'
+                            if line.startswith("augmentation="):
+                                variant = line.strip().split("=")[1].strip()
+                                break
+                
+                # FIXED: Mapped 'train_loss' and set a fallback for missing val_loss
                 results.append({
                     "run_name": run_name,
                     "variant": variant,
-                    "final_epoch": len(df),
-                    "final_val_loss": final_row.get("val_loss", None),
+                    "final_epoch": int(final_row.get("epoch", len(df))),
+                    "final_val_loss": final_row.get("val_loss", None), # Keeps None safely if missing
                     "final_val_abs_trans": final_row.get("val_abs_trans", None),
                     "final_val_abs_rot_x": final_row.get("val_abs_rot_x", None),
-                    "final_train_loss": final_row.get("loss", None),
+                    "final_train_loss": final_row.get("train_loss", None), # FIXED: was 'loss'
                 })
+                
         except Exception as e:
             print(f"Error reading {metrics_file}: {e}")
     
     if not results:
-        print("No results found!")
+        print("No valid results found! Check your directory paths or file structures.")
         return
     
     results_df = pd.DataFrame(results)
@@ -67,10 +79,16 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
     
     # Aggregate by variant
     print("\n" + "="*100)
-    print("TACTILE AUGMENTATION ABLATION STUDY RESULTS (50 epochs)")
+    print("TACTILE AUGMENTATION ABLATION STUDY RESULTS")
     print("="*100)
     
     summary = []
+    
+    # Determine metrics to show based on what actually exists in data
+    metrics_to_show = ["final_val_abs_trans", "final_val_abs_rot_x", "final_train_loss"]
+    if results_df["final_val_loss"].notna().any():
+        metrics_to_show.insert(0, "final_val_loss")
+
     for variant in VARIANTS:
         group = results_df[results_df["variant"] == variant]
         
@@ -81,18 +99,18 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
         print(f"\n{variant} (n={len(group)} runs)")
         print("-" * 100)
         
-        metrics_to_show = ["final_val_loss", "final_val_abs_trans", "final_val_abs_rot_x", "final_train_loss"]
-        
         for metric in metrics_to_show:
             mean_val = group[metric].mean()
             std_val = group[metric].std()
-            print(f"  {metric:25s}: {mean_val:8.4f} ± {std_val:8.4f}")
+            # Handle cases where std is NaN (e.g., only 1 run) cleanly
+            std_str = f"{std_val:8.4f}" if not pd.isna(std_val) else "  N/A  "
+            print(f"  {metric:25s}: {mean_val:8.4f} ± {std_str}")
             
             summary.append({
                 "variant": variant,
                 "metric": metric,
                 "mean": mean_val,
-                "std": std_val,
+                "std": std_val if not pd.isna(std_val) else 0.0,
             })
     
     # Comparison table
@@ -100,10 +118,19 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
     print("COMPARISON: Best Performance by Metric")
     print("="*100)
     
+    if not summary:
+        return
+        
     summary_df = pd.DataFrame(summary)
     
-    for metric in ["final_val_loss", "final_val_abs_trans", "final_val_abs_rot_x"]:
+    # Rank validation metrics
+    rank_metrics = [m for m in ["final_val_abs_trans", "final_val_abs_rot_x"] if m in metrics_to_show]
+    
+    for metric in rank_metrics:
         metric_group = summary_df[summary_df["metric"] == metric]
+        if metric_group.empty:
+            continue
+            
         best_idx = metric_group["mean"].idxmin()
         best_variant = metric_group.loc[best_idx, "variant"]
         best_mean = metric_group.loc[best_idx, "mean"]
@@ -115,7 +142,7 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
         # Show ranking
         ranking = metric_group.sort_values("mean")
         for idx, (_, row) in enumerate(ranking.iterrows(), 1):
-            if idx <= 3:
+            if idx <= 7:
                 print(f"  {idx}. {row['variant']:28s} = {row['mean']:8.4f} ± {row['std']:8.4f}")
     
     print("\n" + "="*100)
@@ -123,7 +150,6 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
     print("="*100)
     print("""
 Metrics to optimize (lower is better):
-  - final_val_loss: Combined quaternion + translation loss
   - final_val_abs_trans: Mean absolute translation error (meters)
   - final_val_abs_rot_x: Mean absolute rotation error around X-axis (radians)
 
@@ -131,21 +157,13 @@ Interpretation:
   - If ALL variants similar: The augmentation parameters don't significantly help
   - If ONE parameter dominates: That's the most important augmentation
   - If COMBINATION better than singles: Parameters work synergistically
-  
-Next steps:
-  1. Identify which parameters improve performance most
-  2. Run full 150-epoch training with the best variant
-  3. Consider combining best parameters for production training
     """)
 
 
 if __name__ == "__main__":
-    import argparse
-    
     parser = argparse.ArgumentParser(description="Analyze tactile ablation study results")
     parser.add_argument("--runs-dir", type=str, default="runs", help="Directory containing run folders")
-    parser.add_argument("--output", type=str, default="ablation_results.csv", help="Output CSV file")
+    parser.add_argument("--output", type=str, default="ablation_results2.csv", help="Output CSV file")
     
     args = parser.parse_args()
-    
     analyze_ablation_results(runs_dir=args.runs_dir, output_file=args.output)

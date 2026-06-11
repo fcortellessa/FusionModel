@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import shutil
 import sys
 from datetime import datetime
 import logging
@@ -20,11 +19,6 @@ def sanitize_filename(value):
     value = re.sub(r"\s+", "_", value)
     value = value.strip(" ._")
     return value or "run"
-
-
-def get_run_group_dir(config_path, output_root="runs"):
-    config_stem = sanitize_filename(os.path.splitext(os.path.basename(config_path))[0])
-    return os.path.join(output_root, config_stem)
 
 
 def build_run_artifacts(config_path, cfg, batch_size, output_root="runs"):
@@ -67,11 +61,6 @@ def save_json(data, path):
         json.dump(data, f, indent=2)
 
 
-def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 def setup_logger(log_dir="logs"):
     os.makedirs(log_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -112,7 +101,7 @@ def save_checkpoint(model, optimizer, epoch, loss, checkpoint_path="checkpoints"
     }, checkpoint_path)
     return checkpoint_path
 
-def load_checkpoint(model, optimizer, checkpoint_path, device, strict=False):
+def load_checkpoint(model, optimizer, checkpoint_path, device, strict=False, load_optimizer=True):
     """
     Load checkpoint with model and optimizer state dicts.
     
@@ -122,13 +111,27 @@ def load_checkpoint(model, optimizer, checkpoint_path, device, strict=False):
         checkpoint_path: Path to checkpoint file
         device: Device to load to
         strict: Whether to strictly enforce matching keys (default False for robustness)
+        load_optimizer: Whether to load optimizer state dict (default True). Set to False for inference/testing
+                       when optimizer structure may differ from training time.
     
     Returns:
         checkpoint dict with 'epoch', 'loss', 'model_state_dict', 'optimizer_state_dict'
     """
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    if load_optimizer and 'optimizer_state_dict' in checkpoint:
+        try:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        except ValueError as e:
+            # Handle parameter group mismatch (e.g., when uncertainty module was added during training)
+            if "different number of parameter groups" in str(e):
+                print(f"[WARNING] Could not load optimizer state dict due to parameter group mismatch: {e}")
+                print("[WARNING] This typically happens when uncertainty weighting or other modules were added during training.")
+                print("[WARNING] Proceeding with model weights only.")
+            else:
+                raise
+    
     return checkpoint
 
 

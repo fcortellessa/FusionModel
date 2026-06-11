@@ -19,8 +19,7 @@ ToDo:
 import os
 import sys
 import inspect
-# import yaml
-from logging import config
+# from logging import config
 
 import torch
 import torch.nn as nn

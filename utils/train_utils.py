@@ -1,9 +1,13 @@
+# train_utils.py
 import math
 from datetime import datetime
 
 import os
-
 import torch
+from torch import nn
+
+from utils.utils import build_run_artifacts, save_yaml, get_optimizer, save_json
+
 
 
 
@@ -387,7 +391,6 @@ class TrainingConfigBuilder:
     
     def build_optimizer(self, model, param_groups=None):
         """Build optimizer from config."""
-        from utils.utils import get_optimizer
         
         if param_groups is None:
             param_groups = _build_named_param_groups(model, base_lr=float(self.cfg["training"]["lr"]))
@@ -399,7 +402,6 @@ class TrainingConfigBuilder:
     
     def build_uncertainty_module(self, optimizer, base_lr):
         """Build uncertainty weighting module if enabled."""
-        from torch import nn
         
         uncertainty_cfg = self.cfg.get("training", {}).get("uncertainty_weighting", {})
         use_uncertainty_weighting = bool(uncertainty_cfg.get("enabled", False))
@@ -472,8 +474,7 @@ class DataPipelineManager:
     
     def _get_data_dir(self):
         """Resolve data directory from config."""
-        import os
-        
+
         configured_data_root = self.cfg.get("data", {}).get("root", "")
         if configured_data_root:
             return os.path.abspath(configured_data_root)
@@ -482,24 +483,18 @@ class DataPipelineManager:
     
     def preprocess_if_needed(self):
         """Preprocess data if needed."""
-        import os
         from data_processing.preprocess_data import preprocess_data
         
         data_dir = self._get_data_dir()
         
         aug_cfg = self.cfg.get("data", {}).get("augmentation", {})
-        aug_output_folder = str(aug_cfg.get("output_folder", "train_augmentation_default"))
         use_photo_aug = bool(aug_cfg.get("enabled", False))
-        use_preaugmented = bool(self.cfg.get("data", {}).get("use_preaugmented_train_dir", False))
-        train_folder = aug_output_folder if use_preaugmented else "train"
-        preprocessed_dir = os.path.join(data_dir, "Data_split", train_folder, "train_preprocessing")
+        preprocessed_dir = os.path.join(data_dir, "Data_split", "train", "train_preprocessing")
         should_preprocess = self.force_preprocess or (not os.path.exists(preprocessed_dir))
         
         if should_preprocess:
             if self.logger:
                 self.logger.info(f"Preprocessing data from {data_dir}")
-                if use_preaugmented:
-                    self.logger.info(f"Using pre-augmented training data from {aug_output_folder}")
             
             preprocess_data(
                 root_dir=data_dir,
@@ -507,14 +502,13 @@ class DataPipelineManager:
                 aug_seed=int(aug_cfg.get("seed", 42)),
                 aug_photo_count=int(aug_cfg.get("photo_count", 1)),
                 aug_overwrite=bool(aug_cfg.get("overwrite", False)),
-                aug_output_folder=aug_output_folder,
-                use_preaugmented_train_dir=use_preaugmented,
+                aug_output_folder=str(aug_cfg.get("output_folder", "train_augmentation_default")),
+                use_preaugmented_train_dir=False,
             )
         elif use_photo_aug:
             if self.logger:
                 self.logger.info(
-                    "Photometric augmentation enabled but using existing preprocessed data. "
-                    "Use --force_preprocess to regenerate with augmentation."
+                    "Photometric augmentation is applied online by the training dataloader."
                 )
     
     def get_loaders(self, batch_size):
@@ -526,20 +520,20 @@ class DataPipelineManager:
         Returns:
             Tuple of (train_loader, val_loader, test_loader)
         """
-        import os
         from data_processing.dataloader_preprocessed import get_dataloaders
         
         self.preprocess_if_needed()
         
         data_dir = self._get_data_dir()
         aug_cfg = self.cfg.get("data", {}).get("augmentation", {})
-        use_preaugmented = bool(self.cfg.get("data", {}).get("use_preaugmented_train_dir", False))
-        train_folder = str(aug_cfg.get("output_folder", "train_augmentation_default")) if use_preaugmented else "train"
         train_loader, val_loader, test_loader = get_dataloaders(
             root_dir=os.path.join(data_dir, "Data_split"),
             batch_size=batch_size,
             shuffle=True,
-            train_folder=train_folder,
+            train_folder="train",
+            use_online_augmentation=bool(aug_cfg.get("enabled", False)),
+            augmentation_cfg=aug_cfg,
+            image_size=int(self.cfg.get("data", {}).get("image_size", 640)),
         )
         
         if self.logger:
@@ -567,7 +561,6 @@ class RunSetupManager:
     
     def setup_artifacts(self):
         """Build run artifacts directory structure."""
-        from utils.utils import build_run_artifacts, save_yaml
         
         self.artifacts = build_run_artifacts(
             self.config_path,
@@ -592,7 +585,6 @@ class RunSetupManager:
         Returns:
             Tuple of (tensorboard_log_dir, tensorboard_process)
         """
-        import os
         from utils.logging_utils import is_port_in_use, start_tensorboard
         
         if self.artifacts is None:
@@ -617,8 +609,6 @@ class RunSetupManager:
     
     def save_manifest(self, run_metadata):
         """Save run manifest file."""
-        import os
-        from utils.utils import save_json
         
         if self.artifacts is None:
             raise ValueError("Must call setup_artifacts() first")

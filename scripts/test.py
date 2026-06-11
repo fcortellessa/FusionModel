@@ -4,6 +4,14 @@ import json
 import time
 import os
 import sys
+import warnings
+
+# Prevent albumentations from trying to fetch version info (can hang on some networks)
+os.environ.setdefault("ALBUMENTATIONS_CHECK_FOR_UPDATES", "0")
+
+# Suppress noisy DataLoader pin_memory warning when no accelerator is available
+warnings.filterwarnings("ignore", message=".*pin_memory.*no accelerator is found.*")
+
 import torch
 import pandas as pd
 
@@ -15,6 +23,7 @@ sys.path.insert(0, parent_dir)
 from base_model.pose_estimation_model import PoseEstimationNet
 from data_processing.dataloader_preprocessed import get_test_dataloader
 from utils.utils import load_checkpoint, load_config, get_optimizer
+from utils.train_utils import _build_named_param_groups
 
 
 config_path = "configs/gated.yml"
@@ -83,8 +92,9 @@ if __name__ == "__main__":
         batch_size=cfg["training"]["batch_size"],
         shuffle=True
     )
+    # Create a dummy optimizer for checkpoint loading (optimizer state not needed for inference)
     optimizer = get_optimizer(model_or_params=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
-    model.load_state_dict(load_checkpoint(model, optimizer, model_path, device="cpu")["model_state_dict"])
+    load_checkpoint(model, optimizer, model_path, device="cpu", load_optimizer=False)
     print("Model loaded successfully!")
 
     # load test data
@@ -101,17 +111,22 @@ if __name__ == "__main__":
     }
     with torch.no_grad():
         for i, sample in enumerate(test_loader):
-            inputs = {k: v.unsqueeze(0) for k, v in sample.items() if k != "pose"}
-            target = sample["pose"].unsqueeze(0)
+            inputs = {k: v for k, v in sample.items() if k != "pose"}
+            target = sample["pose"]
 
-            y, z, q = model(inputs)
+            model_out, fusion_weights = model(inputs)
+            trans = model_out["trans"]
+            rotation = model_out["rotation"]
+            
             # Store results for CSV export
             csv_results["sample_id"].append(i)
-            csv_results["pred_translation"].append(y.cpu().numpy())
-            csv_results["pred_rotation"].append(z.cpu().numpy())
-            csv_results["pred_quaternion"].append(q.cpu().numpy())
+            csv_results["pred_translation"].append(trans.cpu().numpy())
+            csv_results["pred_rotation"].append(rotation.cpu().numpy())
+            csv_results["pred_quaternion"].append(rotation.cpu().numpy())
             csv_results["gt_pose"].append(target.cpu().numpy())
 
     # Save results to CSV
     df = pd.DataFrame(csv_results)
     df.to_csv(os.path.join(results_dir, f"results_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv"), index=False)
+
+

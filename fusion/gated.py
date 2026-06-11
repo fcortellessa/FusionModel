@@ -71,7 +71,7 @@ class GatedSigmoidFusion(BaseFusion):
             nn.Sigmoid()
         )
         nn.init.uniform_(self.gate[3].weight, -1e-3, 1e-3)
-        nn.init.zeros_(self.gate[3].bias, -0.5) # conservative initialization (~38%) lower gradient at the start, to prevent early dominance of one stream
+        nn.init.constant_(self.gate[3].bias, -0.5) # conservative initialization (~38%) lower gradient at the start, to prevent early dominance of one stream
 
     def forward(self, features_list):
         # stacked: (B, num_streams, dim)

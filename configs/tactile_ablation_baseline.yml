@@ -46,9 +46,8 @@ data:
   use_rgb: true
   use_tactile: true
   use_depth: false
-  use_preaugmented_train_dir: true
+  use_preaugmented_train_dir: false
   # NOTE: Tactile ablation baseline - NO augmentation
-  # This config uses pre-augmented data from: Data/Data_split/train_augmentation_no_aug
   augmentation:
     output_folder: "train_augmentation_no_aug"
     enabled: false

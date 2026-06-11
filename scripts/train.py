@@ -3,14 +3,16 @@
 import os
 import sys
 import time
+from pathlib import Path
 import argparse
 import logging
 import torch
 import tqdm
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
-sys.path.insert(0, parent_dir)
+CURRENT_DIR = Path(__file__).resolve().parent
+PARENT_DIR = CURRENT_DIR.parent
+if str(PARENT_DIR) not in sys.path:
+    sys.path.insert(0, str(PARENT_DIR))
 
 from utils.train_utils import (
     _build_epoch_lr_scale_fn,
@@ -86,9 +88,11 @@ def _train_single_epoch(
 ):
     model.train()
     train_metrics = _init_epoch_metrics()
+
     fusion_weights = None
     fusion_weight_sums = None
     fusion_weight_count = 0
+
     tqdm_bar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)", leave=False, mininterval=1.0)
 
     for batch in tqdm_bar:
@@ -97,6 +101,7 @@ def _train_single_epoch(
         batch = {k: v.to(device) for k, v in batch.items()}
         aux_losses = batch.pop("aux_losses", None)
         pose = batch["pose"].to(device)
+
         pose_pred, fusion_weights = model(batch, aux_losses=aux_losses)
         fusion_targets = model.last_fusion_targets
 
@@ -129,8 +134,12 @@ def _train_single_epoch(
             },
         )
 
-        t_loss = train_metrics["loss"] / (tqdm_bar.n + 1)
-        tqdm_bar.set_postfix(avg_loss=f"{t_loss:.4f}", q_wt=f"{loss_q.item():.4f}")
+        avg_loss_so_far = train_metrics["loss"] / (tqdm_bar.n + 1)
+        tqdm_bar.set_postfix(
+            avg_loss=f"{avg_loss_so_far:.4f}", 
+            curr_loss=f"{loss.item():.4f}", 
+            q_wt=f"{loss_q.item():.4f}"
+        )
 
         loss.backward()
 
@@ -149,6 +158,7 @@ def _train_single_epoch(
             fusion_weights=fusion_weights,
         )
 
+
         if tb_writer is not None and fusion_targets is not None:
             fusion_targets_mean = fusion_targets.detach().mean(dim=0).cpu().tolist()
             for idx, target in enumerate(fusion_targets_mean):
@@ -156,8 +166,6 @@ def _train_single_epoch(
 
         optimizer.step()
         global_batch_step += 1
-
-        tqdm_bar.set_postfix(loss=f"{loss.item():.4f}")
 
     train_avg = EpochMetricsAggregator(train_metrics, len(train_loader)).to_dict()
     fusion_weights_avg = None
@@ -432,14 +440,39 @@ def main(
     cfg = load_config(config_path)
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Resolve batch size
-    batch_size = batch_size if batch_size is not None else cfg["training"]["batch_size"]
-    cfg["training"]["batch_size"] = batch_size
+    # Resolve hyperparameter values
+    resolved_batch_size = batch_size if batch_size is not None else cfg["training"]["batch_size"]
+    cfg["training"]["batch_size"] = resolved_batch_size
+    
+    fusion_type = cfg["model"].get("fusion", "unknown_fusion")
+    head_type = cfg["model"].get("head_type", "unknown_head")
+    optimizer_name = optimizer_name if optimizer_name is not None else cfg["training"].get("optimizer", "adamw")
+
+    # Create the nested run path hierarchy
+    # This transforms your flat name into a clean directory tree
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    nested_run_name = Path(fusion_type) / head_type / f"{optimizer_name}_{timestamp}_bs{resolved_batch_size}"
     
     # Setup run artifacts, logging, and tensorboard
-    run_setup = RunSetupManager(config_path, cfg, batch_size)
+    run_setup = RunSetupManager(config_path, cfg, resolved_batch_size)
     artifacts = run_setup.setup_artifacts()
-    logger, log_file = configure_run_logging(artifacts, tensorboard_root_dir or artifacts["tensorboard_root_dir"], {}, logger=None, log_file=None)
+
+    # Overwrite the default tensorboard target directory with nested layout
+    tb_root = Path(tensorboard_root_dir or artifacts.get("tensorboard_root_dir", "runs"))
+    tensorboard_log_dir = tb_root / nested_run_name
+
+    run_metadata = {
+        "model_name": cfg["model"]["backbone"],
+        "streams": cfg["model"]["streams"],
+        "fusion": fusion_type,
+        "head_type": head_type,
+        "freeze_backbone": cfg["model"]["freeze_backbone"],
+        "lr": cfg["training"]["lr"],
+        "batch_size": resolved_batch_size,
+        "seed": cfg.get("training", {}).get("seed", ""),
+    }
+
+    logger, log_file = configure_run_logging(artifacts, str(tensorboard_log_dir.parent), run_metadata, logger=None, log_file=None)
     run_setup.logger = logger  # Update logger after creation
     
     tensorboard_log_dir, _ = run_setup.setup_tensorboard(tensorboard_port, tensorboard_root_dir)
@@ -449,7 +482,7 @@ def main(
     
     # Load data
     data_pipeline = DataPipelineManager(cfg, base_dir, force_preprocess=force_preprocess, logger=logger)
-    train_loader, val_loader, _ = data_pipeline.get_loaders(batch_size)
+    train_loader, val_loader, _ = data_pipeline.get_loaders(resolved_batch_size)
     
     # Build training components from config
     config_builder = TrainingConfigBuilder(cfg, device, logger=logger)
@@ -486,7 +519,7 @@ def main(
         "head_type": cfg["model"]["head_type"],
         "freeze_backbone": cfg["model"]["freeze_backbone"],
         "lr": cfg["training"]["lr"],
-        "batch_size": batch_size,
+        "batch_size": resolved_batch_size,
         "seed": cfg.get("training", {}).get("seed", ""),
         "head_lr_decay": resolved_head_lr_cfg,
         "lr_schedule": lr_schedule_cfg if lr_schedule_cfg else {"enabled": False},

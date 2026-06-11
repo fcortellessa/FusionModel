@@ -24,7 +24,6 @@ from data_processing.GripFusionNet_get_norm_params import (
     compute_mean_std_digit_images,
     compute_mean_std_rgb_images_no_crop
 )
-from data_processing.augment_data import augment_offline
 
 
 # ----------------------------
@@ -224,50 +223,22 @@ def preprocess_and_save(data_path, transf_matrix, folder_path, output_dir):
                                  transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std)
 
 
-# ----------------------------
-# HIGH-LEVEL PIPELINE
-# ----------------------------
-
-def _get_train_source_dir(output_path, use_preaugmented_train_dir, use_photometric_augmentation,
-                          aug_seed, aug_photo_count, aug_overwrite, aug_output_folder,
-                          train_split_dir):
-    """Determine which train folder to use as preprocessing source."""
-    train_augmented_dir = os.path.join(output_path, aug_output_folder)
-    
-    # Priority: use_preaugmented_train_dir > use_photometric_augmentation
-    if use_preaugmented_train_dir:
-        if not os.path.exists(train_augmented_dir):
-            raise FileNotFoundError(
-                f"Configured pre-augmented folder not found: {train_augmented_dir}"
-            )
-        print(f"Using pre-augmented training data from {aug_output_folder}")
-        return train_augmented_dir
-    
-    elif use_photometric_augmentation:
-        # Generate augmented data on-the-fly
-        print("Generating photometric augmentation on-the-fly")
-        if os.path.exists(train_augmented_dir):
-            shutil.rmtree(train_augmented_dir)
-        augment_offline(
-            input_dir=Path(train_split_dir),
-            output_dir=Path(train_augmented_dir),
-            seed=int(aug_seed),
-            geo_count=0,
-            photo_count=int(aug_photo_count),
-            rotation_deg=0.0,
-            copy_originals=True,
-            overwrite=bool(aug_overwrite),
-            dry_run=False,
-            strict=False,
+def _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_std):
+    stats_path = os.path.join(output_path, "normalization_stats.json")
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "digit_mean": digit_mean,
+                "digit_std": digit_std,
+                "rgb_mean": rgb_mean,
+                "rgb_std": rgb_std,
+            },
+            f,
+            indent=2,
         )
-        return train_augmented_dir
-    
-    else:
-        # Use standard train split
-        print("Using standard train split (no augmentation)")
-        return train_split_dir
 
 
+# ----------------------------
 def preprocess_data(
     root_dir,
     use_photometric_augmentation=False,
@@ -285,12 +256,12 @@ def preprocess_data(
     split_dataset(root_dir, output_path)
 
     train_split_dir = os.path.join(output_path, "train")
-    
-    # ---- Stage 2: Determine train source (original, augmented, or pre-augmented) ----
-    train_source_dir = _get_train_source_dir(
-        output_path, use_preaugmented_train_dir, use_photometric_augmentation,
-        aug_seed, aug_photo_count, aug_overwrite, aug_output_folder, train_split_dir
-    )
+
+    if use_preaugmented_train_dir or use_photometric_augmentation:
+        print(
+            "Online augmentation is handled in the training dataloader; "
+            "preprocessing will only build the standard train/val/test caches."
+        )
 
     # ---- Stage 3: Preprocess all splits ----
     transf_matrix = [
@@ -301,21 +272,20 @@ def preprocess_data(
     ]
     
     split_input_dirs = {
-        "train": train_source_dir,
+        "train": train_split_dir,
         "val": os.path.join(output_path, "val"),
         "test": os.path.join(output_path, "test"),
     }
 
     print("Preprocessing all splits")
     for split in ["train", "val", "test"]:
-        if split == "train":
-            split_output_dir = os.path.join(train_source_dir, "train_preprocessing")
-        else:
-            split_output_dir = os.path.join(output_path, split, f"{split}_preprocessing")
+        split_output_dir = os.path.join(output_path, split, f"{split}_preprocessing")
         if os.path.exists(split_output_dir):
             shutil.rmtree(split_output_dir)
         preprocess_and_save(root_dir, transf_matrix,
             folder_path=split_input_dirs[split],
             output_dir=split_output_dir
         )
+
+    _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_std)
         

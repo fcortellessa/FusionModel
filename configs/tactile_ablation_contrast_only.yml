@@ -5,13 +5,12 @@ model:
   fusion: "gated"
   head_type: quaternion
   activation: GELU
-  mlp_quat_1: 1024
-  mlp_quat_2: 1024
+  use_preaugmented_train_dir: false
   mlp_quat_3: 512
   mlp_trans_1: 256
-  mlp_trans_2: 128
+    enabled: true
   mlp_trans_3: 64
-
+    photo_count: 1
 training:
   lr: 0.001
   batch_size: 16

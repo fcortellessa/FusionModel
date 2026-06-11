@@ -1,57 +1,31 @@
 import csv
-import logging
-import os
+from datetime import datetime
+from pathlib import Path
 import platform
 import socket
 import subprocess
 import sys
+from utils.utils import setup_logger
 
 try:
     from torch.utils.tensorboard import SummaryWriter
-except ImportError:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover
     SummaryWriter = None
 
 
 METRICS_FIELDNAMES = [
-    "timestamp",
-    "epoch",
-    "train_loss",
-    "loss_q",
-    "loss_y",
-    "loss_z",
-    "train_abs_y",
-    "train_abs_z",
-    "train_abs_trans",
-    "train_abs_rot_x",
-    "val_abs_y",
-    "val_abs_z",
-    "val_abs_trans",
-    "val_abs_rot_x",
-    "fusion_weights",
-    "best_loss",
-    "epoch_time_sec",
-    "checkpoint_path",
-    "model_name",
-    "streams",
-    "fusion",
-    "head_type",
-    "freeze_backbone",
-    "lr",
-    "lr_base",
-    "lr_head_rot",
-    "lr_head_y",
-    "lr_head_z",
-    "lr_schedule_scale",
-    "uncertainty_log_var_rot",
-    "uncertainty_log_var_trans",
-    "uncertainty_weight_rot",
-    "uncertainty_weight_trans",
-    "batch_size",
-    "seed",
+    "timestamp", "epoch", "train_loss", "loss_q", "loss_y", "loss_z",
+    "train_abs_y", "train_abs_z", "train_abs_trans", "train_abs_rot_x",
+    "val_abs_y", "val_abs_z", "val_abs_trans", "val_abs_rot_x",
+    "fusion_weights", "best_loss", "epoch_time_sec", "checkpoint_path",
+    "model_name", "streams", "fusion", "head_type", "freeze_backbone",
+    "lr", "lr_base", "lr_head_rot", "lr_head_y", "lr_head_z", "lr_schedule_scale",
+    "uncertainty_log_var_rot", "uncertainty_log_var_trans",
+    "uncertainty_weight_rot", "uncertainty_weight_trans", "batch_size", "seed",
 ]
 
 
-def is_port_in_use(port):
+def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
@@ -62,15 +36,10 @@ def start_tensorboard(logdir, logger, port=6006):
         return None
 
     command = [
-        sys.executable,
-        "-m",
-        "tensorboard.main",
-        "--logdir",
-        logdir,
-        "--port",
-        str(port),
-        "--host",
-        "127.0.0.1",
+        sys.executable, "-m", "tensorboard.main",
+        "--logdir", str(logdir),
+        "--port", str(port),
+        "--host", "127.0.0.1",
     ]
     kwargs = {
         "stdout": subprocess.DEVNULL,
@@ -88,15 +57,15 @@ def start_tensorboard(logdir, logger, port=6006):
         return None
 
 
-def format_fusion_weights(fusion_weights):
+def format_fusion_weights(fusion_weights) -> str:
     if fusion_weights is None:
         return ""
-    return "[" + ",".join(f"{weight:.4f}" for weight in fusion_weights.tolist()) + "]"
+    return "[" + ",".join(f"{w:.4f}" for w in fusion_weights.tolist()) + "]"
 
 
-def compute_model_norms(model):
-    grad_sq_sum = 0.0
+def compute_model_norms(model) -> tuple[float, float]:
     param_sq_sum = 0.0
+    grad_sq_sum = 0.0
 
     for param in model.parameters():
         param_sq_sum += param.detach().pow(2).sum().item()
@@ -124,45 +93,38 @@ def init_tensorboard_writer(tensorboard_log_dir, metadata, logger):
         logger.warning("TensorBoard is unavailable because torch.utils.tensorboard could not be imported.")
         return None
 
-    os.makedirs(tensorboard_log_dir, exist_ok=True)
-    tb_writer = SummaryWriter(log_dir=tensorboard_log_dir)
+    Path(tensorboard_log_dir).mkdir(parents=True, exist_ok=True)
+    tb_writer = SummaryWriter(log_dir=str(tensorboard_log_dir))
 
     if metadata:
-        tb_writer.add_text(
-            "run/metadata",
-            "\n".join(f"{key}: {value}" for key, value in metadata.items()),
-        )
+        meta_str = "\n".join(f"{k}: {v}" for k, v in metadata.items())
+        tb_writer.add_text("run/metadata", meta_str)
 
     return tb_writer
 
 
 def log_train_step_to_tensorboard(
-    tb_writer,
-    global_batch_step,
-    optimizer,
-    model,
-    param_groups_by_name,
-    loss,
-    loss_q,
-    loss_y,
-    loss_z,
-    abs_trans,
-    abs_rot_x,
-    fusion_weights,
+    tb_writer, global_batch_step, optimizer, model, param_groups_by_name,
+    loss, loss_q, loss_y, loss_z, abs_trans, abs_rot_x, fusion_weights,
 ):
     if tb_writer is None:
         return
 
     param_norm, grad_norm = compute_model_norms(model)
-    tb_writer.add_scalar("train_step/loss_total", loss.item(), global_batch_step)
-    tb_writer.add_scalar("train_step/loss_q", loss_q.item(), global_batch_step)
-    tb_writer.add_scalar("train_step/loss_y", loss_y.item(), global_batch_step)
-    tb_writer.add_scalar("train_step/loss_z", loss_z.item(), global_batch_step)
-    tb_writer.add_scalar("train_step/abs_trans", abs_trans.item(), global_batch_step)
-    tb_writer.add_scalar("train_step/abs_rot_x", abs_rot_x.item(), global_batch_step)
-    tb_writer.add_scalar("train_step/grad_norm", grad_norm, global_batch_step)
-    tb_writer.add_scalar("train_step/param_norm", param_norm, global_batch_step)
-    tb_writer.add_scalar("train_step/lr", optimizer.param_groups[0]["lr"], global_batch_step)
+    
+    scalars = {
+        "loss_total": loss.item(),
+        "loss_q": loss_q.item(),
+        "loss_y": loss_y.item(),
+        "loss_z": loss_z.item(),
+        "abs_trans": abs_trans.item(),
+        "abs_rot_x": abs_rot_x.item(),
+        "grad_norm": grad_norm,
+        "param_norm": param_norm,
+        "lr": optimizer.param_groups[0]["lr"],
+    }
+    for tag, val in scalars.items():
+        tb_writer.add_scalar(f"train_step/{tag}", val, global_batch_step)
 
     for group_name, group in param_groups_by_name.items():
         tb_writer.add_scalar(f"train_step/lr_{group_name}", group["lr"], global_batch_step)
@@ -173,36 +135,24 @@ def log_train_step_to_tensorboard(
 
 
 def log_epoch_to_tensorboard(
-    tb_writer,
-    global_step,
-    train_avg,
-    val_avg,
-    lr_stats,
-    lr_schedule_scale,
-    param_groups_by_name,
-    fusion_weights,
-    fusion_weights_avg,
-    uncertainty_module,
-    uncertainty_stats,
-    best_val_loss,
-    epoch_time,
+    tb_writer, global_step, train_avg, val_avg, lr_stats, lr_schedule_scale,
+    param_groups_by_name, fusion_weights, fusion_weights_avg, uncertainty_module,
+    uncertainty_stats, best_val_loss, epoch_time,
 ):
     if tb_writer is None:
         return
 
-    tb_writer.add_scalars("loss/total", {"train": train_avg["loss"], "val": val_avg["loss"]}, global_step)
-    tb_writer.add_scalars("loss/q", {"train": train_avg["loss_q"], "val": val_avg["loss_q"]}, global_step)
-    tb_writer.add_scalars("loss/y", {"train": train_avg["loss_y"], "val": val_avg["loss_y"]}, global_step)
-    tb_writer.add_scalars("loss/z", {"train": train_avg["loss_z"], "val": val_avg["loss_z"]}, global_step)
-    tb_writer.add_scalars("metrics/abs_y", {"train": train_avg["abs_y"], "val": val_avg["abs_y"]}, global_step)
-    tb_writer.add_scalars("metrics/abs_z", {"train": train_avg["abs_z"], "val": val_avg["abs_z"]}, global_step)
-    tb_writer.add_scalars("metrics/abs_trans", {"train": train_avg["abs_trans"], "val": val_avg["abs_trans"]}, global_step)
-    tb_writer.add_scalars("metrics/abs_rot_x", {"train": train_avg["abs_rot_x"], "val": val_avg["abs_rot_x"]}, global_step)
-    tb_writer.add_scalar("diagnostics/loss_gap", train_avg["loss"] - val_avg["loss"], global_step)
-    tb_writer.add_scalar("diagnostics/abs_y_gap", train_avg["abs_y"] - val_avg["abs_y"], global_step)
-    tb_writer.add_scalar("diagnostics/abs_z_gap", train_avg["abs_z"] - val_avg["abs_z"], global_step)
-    tb_writer.add_scalar("diagnostics/abs_trans_gap", train_avg["abs_trans"] - val_avg["abs_trans"], global_step)
-    tb_writer.add_scalar("diagnostics/abs_rot_x_gap", train_avg["abs_rot_x"] - val_avg["abs_rot_x"], global_step)
+    # Bulk log train/val pairings
+    metrics_to_log = ["loss", "loss_q", "loss_y", "loss_z", "abs_y", "abs_z", "abs_trans", "abs_rot_x"]
+    for metric in metrics_to_log:
+        folder = "loss" if "loss" in metric else "metrics"
+        tb_writer.add_scalars(f"{folder}/{metric}", {"train": train_avg[metric], "val": val_avg[metric]}, global_step)
+
+    # Bulk log training/validation performance gaps
+    gaps = ["loss", "abs_y", "abs_z", "abs_trans", "abs_rot_x"]
+    for m in gaps:
+        tb_writer.add_scalar(f"diagnostics/{m}_gap", train_avg[m] - val_avg[m], global_step)
+
     tb_writer.add_scalar("training/best_val_loss", best_val_loss, global_step)
     tb_writer.add_scalar("training/epoch_time_sec", epoch_time, global_step)
     tb_writer.add_scalars("training/lr", {**lr_stats, "schedule_scale": lr_schedule_scale}, global_step)
@@ -210,18 +160,12 @@ def log_epoch_to_tensorboard(
     if uncertainty_module is not None and uncertainty_stats:
         tb_writer.add_scalars(
             "uncertainty/log_var",
-            {
-                "rot": uncertainty_stats["uncertainty_log_var_rot"],
-                "trans": uncertainty_stats["uncertainty_log_var_trans"],
-            },
+            {"rot": uncertainty_stats["uncertainty_log_var_rot"], "trans": uncertainty_stats["uncertainty_log_var_trans"]},
             global_step,
         )
         tb_writer.add_scalars(
             "uncertainty/weight",
-            {
-                "rot": uncertainty_stats["uncertainty_weight_rot"],
-                "trans": uncertainty_stats["uncertainty_weight_trans"],
-            },
+            {"rot": uncertainty_stats["uncertainty_weight_rot"], "trans": uncertainty_stats["uncertainty_weight_trans"]},
             global_step,
         )
 
@@ -258,9 +202,8 @@ def log_hparams_to_tensorboard(tb_writer, metadata, optimizer, train_loader, val
 
 
 def write_epoch_metrics_csv(csv_writer, row):
-    if csv_writer is None:
-        return
-    csv_writer.writerow(row)
+    if csv_writer is not None:
+        csv_writer.writerow(row)
 
 
 def close_run_writers(csv_file, tb_writer):
@@ -273,18 +216,6 @@ def close_run_writers(csv_file, tb_writer):
 
 
 def log_run_start(logger, log_file, artifacts, tensorboard_log_dir, run_metadata, uncertainty_enabled, uncertainty_cfg, lr_schedule_cfg):
-    """Log standardized run start information.
-
-    Args:
-        logger: Logger instance
-        log_file: Path to the active log file
-        artifacts: Artifacts dict produced by build_run_artifacts
-        tensorboard_log_dir: TensorBoard log directory for this run
-        run_metadata: Metadata dict for this run
-        uncertainty_enabled: Bool indicating if uncertainty module is enabled
-        uncertainty_cfg: Uncertainty config dict
-        lr_schedule_cfg: LR schedule config dict
-    """
     logger.info(
         f"run_start log_file={log_file} metrics_csv={artifacts.get('metrics_csv_path')} "
         f"tensorboard_dir={tensorboard_log_dir} "
@@ -311,30 +242,12 @@ def log_run_start(logger, log_file, artifacts, tensorboard_log_dir, run_metadata
 
 
 def configure_run_logging(artifacts, tensorboard_root, run_metadata, uncertainty_enabled=False, uncertainty_cfg=None, lr_schedule_cfg=None, logger=None, log_file=None):
-    """Configure logger and emit run-start logs.
-
-    This wraps the existing `setup_logger` (from utils.utils) and `log_run_start`.
-    Args:
-        artifacts: Artifacts dict from `build_run_artifacts`
-        tensorboard_root: Root tensorboard directory (may be None)
-        run_metadata: Run metadata dict
-        uncertainty_enabled: Whether uncertainty weighting is enabled
-        uncertainty_cfg: Uncertainty cfg dict
-        lr_schedule_cfg: LR schedule cfg dict
-
-    Returns:
-        (logger, log_file)
-    """
-    from utils.utils import setup_logger
-    import os
-
     if logger is None or log_file is None:
         logger, log_file = setup_logger(artifacts.get("run_dir", "logs"))
 
     tb_root = tensorboard_root or artifacts.get("tensorboard_root_dir")
-    tensorboard_log_dir = os.path.join(tb_root, artifacts.get("run_name")) if tb_root is not None else None
+    tensorboard_log_dir = Path(tb_root) / artifacts.get("run_name") if tb_root is not None else None
 
-    # Emit the standardized run-start logs using the provided or newly-created logger
     log_run_start(
         logger=logger,
         log_file=log_file,
@@ -350,32 +263,13 @@ def configure_run_logging(artifacts, tensorboard_root, run_metadata, uncertainty
 
 
 def _init_epoch_metrics():
-    return {
-        "loss": 0.0,
-        "loss_q": 0.0,
-        "loss_y": 0.0,
-        "loss_z": 0.0,
-        "abs_y": 0.0,
-        "abs_z": 0.0,
-        "abs_trans": 0.0,
-        "abs_rot_x": 0.0,
-    }
+    return {k: 0.0 for k in ["loss", "loss_q", "loss_y", "loss_z", "abs_y", "abs_z", "abs_trans", "abs_rot_x"]}
+
 
 def log_epoch_summary(
-    logger,
-    epoch,
-    num_epochs,
-    train_avg,
-    val_avg,
-    lr_base,
-    lr_head_rot,
-    lr_head_y,
-    lr_head_z,
-    fusion_weights_str,
-    fusion_weights_epoch_str,
-    epoch_time,
-    uncertainty_stats,
-    best_val_loss,
+    logger, epoch, num_epochs, train_avg, val_avg, lr_base, lr_head_rot,
+    lr_head_y, lr_head_z, fusion_weights_str, fusion_weights_epoch_str,
+    epoch_time, uncertainty_stats, best_val_loss,
 ):
     logger.info(
         f"epoch={epoch+1} train_loss={train_avg['loss']:.4f} loss_q={train_avg['loss_q']:.4f} "
@@ -394,10 +288,13 @@ def log_epoch_summary(
         f"lr_head_z={lr_head_z:.8f} fusion_weights={fusion_weights_str}"
     )
 
-    if uncertainty_stats and any(isinstance(uncertainty_stats.get(k), (int, float)) for k in ["uncertainty_log_var_rot", "uncertainty_log_var_trans"]):
-        logger.info(
-            f"uncertainty rot_log_var={uncertainty_stats['uncertainty_log_var_rot']:.6f} "
-            f"trans_log_var={uncertainty_stats['uncertainty_log_var_trans']:.6f} "
-            f"rot_weight={uncertainty_stats['uncertainty_weight_rot']:.6f} "
-            f"trans_weight={uncertainty_stats['uncertainty_weight_trans']:.6f}"
-        )
+    if uncertainty_stats:
+        try:
+            logger.info(
+                f"uncertainty rot_log_var={float(uncertainty_stats['uncertainty_log_var_rot']):.6f} "
+                f"trans_log_var={float(uncertainty_stats['uncertainty_log_var_trans']):.6f} "
+                f"rot_weight={float(uncertainty_stats['uncertainty_weight_rot']):.6f} "
+                f"trans_weight={float(uncertainty_stats['uncertainty_weight_trans']):.6f}"
+            )
+        except (ValueError, TypeError):
+            pass

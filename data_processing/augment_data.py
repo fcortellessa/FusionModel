@@ -47,8 +47,6 @@ def _apply_albumentations_deterministic(
 ) -> np.ndarray:
 	"""Run an albumentations transform deterministically with local RNG objects."""
 	seed = int(rng.integers(0, 2**32 - 1))
-	# Albumentations 1.x does not expose Compose.set_random_seed.
-	# Seed NumPy and Python RNG around the transform call for reproducibility.
 	np_state = np.random.get_state()
 	py_state = random.getstate()
 	np.random.seed(seed)
@@ -87,7 +85,7 @@ def _apply_tactile_augmentation(
     rng: np.random.Generator,
     aug_config: Dict = None,
 ) -> Tuple[Image.Image, Dict]:
-    """Tactile-specific photometric augmentation engineered for clean ablation studies."""
+    """Tactile-specific photometric augmentation."""
     if aug_config is None:
         aug_config = {}
 

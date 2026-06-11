@@ -45,12 +45,11 @@ data:
   use_rgb: true
   use_tactile: true
   use_depth: false
-  use_preaugmented_train_dir: true
+  use_preaugmented_train_dir: false
   # NOTE: Tactile ablation - ALL PARAMETERS ENABLED
-  # This config uses pre-augmented data from: Data/Data_split/train_augmentation_all
   augmentation:
     output_folder: "train_augmentation_all"
-    enabled: false
+    enabled: true
     seed: 42
-    photo_count: 0
+    photo_count: 1
     overwrite: false
