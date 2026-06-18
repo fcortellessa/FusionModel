@@ -14,7 +14,8 @@ warnings.filterwarnings("ignore", message=".*pin_memory.*no accelerator is found
 
 import torch
 import pandas as pd
-
+import numpy as np
+import matplotlib.pyplot as plt
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
@@ -24,6 +25,31 @@ from base_model.pose_estimation_model import PoseEstimationNet
 from data_processing.dataloader_preprocessed import get_test_dataloader
 from utils.utils import load_checkpoint, load_config, get_optimizer
 from utils.train_utils import _build_named_param_groups
+
+
+def _normalize_quaternions(quaternions):
+    norms = np.linalg.norm(quaternions, axis=1, keepdims=True)
+    return quaternions / np.clip(norms, 1e-8, None)
+
+
+def _quaternion_roll(quaternions):
+    quaternions = _normalize_quaternions(quaternions)
+    x = quaternions[:, 0]
+    y = quaternions[:, 1]
+    z = quaternions[:, 2]
+    w = quaternions[:, 3]
+
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    return np.arctan2(sinr_cosp, cosr_cosp)
+
+
+def _quaternion_geodesic_error_deg(pred_quat, target_quat):
+    pred_quat = _normalize_quaternions(pred_quat)
+    target_quat = _normalize_quaternions(target_quat)
+    dot = np.abs(np.sum(pred_quat * target_quat, axis=1))
+    dot = np.clip(dot, 0.0, 1.0)
+    return np.degrees(2.0 * np.arccos(dot))
 
 
 config_path = "configs/gated.yml"
@@ -90,12 +116,12 @@ if __name__ == "__main__":
     test_loader = get_test_dataloader(
         root_dir=root_data_path,
         batch_size=cfg["training"]["batch_size"],
-        shuffle=True
+        shuffle=False # Typically False for testing
     )
     # Create a dummy optimizer for checkpoint loading (optimizer state not needed for inference)
-    # optimizer = get_optimizer(model_or_params=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
-    # load_checkpoint(model, optimizer, model_path, device="cpu", load_optimizer=False)
-    load_checkpoint(model, checkpoint_path=model_path, device="cpu", load_optimizer=False)
+    optimizer = get_optimizer(model_or_params=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
+    load_checkpoint(model, optimizer, model_path, device="cpu", load_optimizer=False)
+    # load_checkpoint(model, checkpoint_path=model_path, device="cpu", load_optimizer=False)
     print("Model loaded successfully!")
 
     # load test data
@@ -103,31 +129,193 @@ if __name__ == "__main__":
 
     # run inference
     model.eval()
-    csv_results = {
-        "sample_id": [],
-        "pred_translation": [],
-        "pred_rotation": [],
-        "pred_quaternion": [],
-        "gt_pose": []
-    }
+    
+    # Store raw results efficiently across batches
+    pred_translations = []
+    pred_rotations = []
+    pred_poses = []
+    gt_poses = []
+    
     with torch.no_grad():
-        for i, sample in enumerate(test_loader):
+        for sample in test_loader:
             inputs = {k: v for k, v in sample.items() if k != "pose"}
-            target = sample["pose"]
+            target = sample["pose"] # Assumed shape [B, D]
 
             model_out, fusion_weights = model(inputs)
-            trans = model_out["trans"]
-            rotation = model_out["rotation"]
+            trans = model_out["trans"]       # [B, 3]
+            rotation = model_out["rotation"] # [B, 3] or [B, 4]
             
-            # Store results for CSV export
-            csv_results["sample_id"].append(i)
-            csv_results["pred_translation"].append(trans.cpu().numpy())
-            csv_results["pred_rotation"].append(rotation.cpu().numpy())
-            csv_results["pred_quaternion"].append(rotation.cpu().numpy())
-            csv_results["gt_pose"].append(target.cpu().numpy())
+            pred_translations.append(trans.cpu().numpy())
+            pred_rotations.append(rotation.cpu().numpy())
+            pred_poses.append(model_out["pose"].cpu().numpy())
+            gt_poses.append(target.cpu().numpy())
+
+    # Flatten collected batches into single arrays
+    pred_translations = np.concatenate(pred_translations, axis=0)
+    pred_rotations = np.concatenate(pred_rotations, axis=0)
+    pred_poses = np.concatenate(pred_poses, axis=0)
+    gt_poses = np.concatenate(gt_poses, axis=0)
+    
+    # Pose tensors in this project are [x, y, z, qx, qy, qz, qw].
+    gt_translations = gt_poses[:, :3]
+    gt_rotations = gt_poses[:, 3:7]
+    pred_rotations = pred_poses[:, 3:7]
+    
+    num_samples = gt_poses.shape[0]
+
+    # Compute errors (fixing the data flow issue in original script)
+    val_abs_trans_vec = np.abs(pred_translations - gt_translations)
+    val_abs_trans = np.linalg.norm(val_abs_trans_vec, axis=1) # Vector magnitude
+    val_abs_x = val_abs_trans_vec[:, 0]
+    val_abs_y = val_abs_trans_vec[:, 1]
+    val_abs_z = val_abs_trans_vec[:, 2]
+    
+    pred_roll = _quaternion_roll(pred_rotations)
+    gt_roll = _quaternion_roll(gt_rotations)
+    roll_diff = np.abs(pred_roll - gt_roll)
+    roll_diff = np.minimum(roll_diff, 2.0 * np.pi - roll_diff)
+    val_abs_rot_x = np.degrees(roll_diff)
+    val_abs_rot_z = _quaternion_geodesic_error_deg(pred_rotations, gt_rotations)
+
+    # Assemble results into a clean dictionary
+    # Storing raw numpy arrays here will fail with DataFrame, convert to simple lists or keep as flat arrays
+    csv_results = {
+        "sample_id": np.arange(num_samples),
+        # Store individual components for easy plotting/analysis
+        "pred_trans_x": pred_translations[:, 0],
+        "pred_trans_y": pred_translations[:, 1],
+        "pred_trans_z": pred_translations[:, 2],
+        "gt_trans_x": gt_translations[:, 0],
+        "gt_trans_y": gt_translations[:, 1],
+        "gt_trans_z": gt_translations[:, 2],
+        # Mandatory columns needed by the original metrics code
+        "val_abs_trans": val_abs_trans,
+        "val_abs_x": val_abs_x,
+        "val_abs_y": val_abs_y,
+        "val_abs_z": val_abs_z,
+        "val_abs_rot_x": val_abs_rot_x,
+        "val_abs_rot_z": val_abs_rot_z,
+    }
 
     # Save results to CSV
     df = pd.DataFrame(csv_results)
-    df.to_csv(os.path.join(results_dir, f"results_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv"), index=False)
+    timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
+    csv_name = f"results_{timestamp}.csv"
+    df.to_csv(os.path.join(results_dir, csv_name), index=False)
+    print(f"Saved inference results to {os.path.join(results_dir, csv_name)}")
 
+    # Compute metrics (best, worst, mean, variance) and save to a text file
+    metrics_name = f"metrics_{timestamp}.txt"
+    with open(os.path.join(results_dir, metrics_name), "w") as f:
+        if "val_abs_trans" in df.columns:
+            f.write(f"Final Val Translation Error: {df['val_abs_trans'].iloc[-1]:.6f}\n")
+            f.write(f"Mean Val Translation Error: {df['val_abs_trans'].mean():.6f}\n")
+            f.write(f"Variance Val Translation Error: {df['val_abs_trans'].var():.6f}\n")
+            f.write(f"Best Val Translation Error: {df['val_abs_trans'].min():.6f}\n")
+            f.write(f"Worst Val Translation Error: {df['val_abs_trans'].max():.6f}\n")
+        if "val_abs_rot_x" in df.columns:
+            f.write(f"Final Val Rotation Error around x (roll): {df['val_abs_rot_x'].iloc[-1]:.6f}\n")
+            f.write(f"Mean Val Rotation Error around x (roll): {df['val_abs_rot_x'].mean():.6f}\n")
+            f.write(f"Variance Val Rotation Error around x (roll): {df['val_abs_rot_x'].var():.6f}\n")
+            f.write(f"Best Val Rotation Error around x (roll): {df['val_abs_rot_x'].min():.6f}\n")
+            f.write(f"Worst Val Rotation Error around x (roll): {df['val_abs_rot_x'].max():.6f}\n")
+        if "val_abs_y" in df.columns:
+            f.write(f"Final Val Translation Error in y: {df['val_abs_y'].iloc[-1]:.6f}\n")
+            f.write(f"Mean Val Translation Error in y: {df['val_abs_y'].mean():.6f}\n")
+            f.write(f"Variance Val Translation Error in y: {df['val_abs_y'].var():.6f}\n")
+            f.write(f"Best Val Translation Error in y: {df['val_abs_y'].min():.6f}\n")
+            f.write(f"Worst Val Translation Error in y: {df['val_abs_y'].max():.6f}\n")
+        if "val_abs_z" in df.columns:
+            f.write(f"Final Val Translation Error in z: {df['val_abs_z'].iloc[-1]:.6f}\n")
+            f.write(f"Mean Val Translation Error in z: {df['val_abs_z'].mean():.6f}\n")
+            f.write(f"Variance Val Translation Error in z: {df['val_abs_z'].var():.6f}\n")
+            f.write(f"Best Val Translation Error in z: {df['val_abs_z'].min():.6f}\n")
+            f.write(f"Worst Val Translation Error in z: {df['val_abs_z'].max():.6f}\n")
+        if "val_abs_rot_z" in df.columns:
+            f.write(f"Final Val Rotation Error (geodesic): {df['val_abs_rot_z'].iloc[-1]:.6f}\n")
+            f.write(f"Mean Val Rotation Error (geodesic): {df['val_abs_rot_z'].mean():.6f}\n")
+            f.write(f"Variance Val Rotation Error (geodesic): {df['val_abs_rot_z'].var():.6f}\n")
+            f.write(f"Best Val Rotation Error (geodesic): {df['val_abs_rot_z'].min():.6f}\n")
+            f.write(f"Worst Val Rotation Error (geodesic): {df['val_abs_rot_z'].max():.6f}\n")
+    print(f"Saved metrics to {os.path.join(results_dir, metrics_name)}")
+    
+    # ==========================================
+    # plots (matplotlib only)
+    # ==========================================
+    print("Generating visualization plots...")
+    plt.style.use('seaborn-v0_8-whitegrid') # Optional: Clean style
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f"Pose Estimation Test Results\nRun: {os.path.basename(cfg_path)}", fontsize=16)
 
+    # Plot 1: Histogram of Translation Errors
+    ax = axs[0, 0]
+    ax.hist(val_abs_trans, bins=30, color='#3498db', edgecolor='black', alpha=0.7)
+    ax.axvline(val_abs_trans.mean(), color='red', linestyle='--', label=f'Mean: {val_abs_trans.mean():.4f}')
+    ax.set_title("Total Translation Error Distribution")
+    ax.set_xlabel("Absolute Error (meters/units)")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+
+    # Plot 2: Histogram of Rotation Errors (Axis X)
+    ax = axs[0, 1]
+    ax.hist(val_abs_rot_x, bins=30, color='#2ecc71', edgecolor='black', alpha=0.7)
+    ax.axvline(val_abs_rot_x.mean(), color='red', linestyle='--', label=f'Mean: {val_abs_rot_x.mean():.4f}')
+    ax.set_title("Rotation Error Distribution (Axis X)")
+    ax.set_xlabel("Absolute Error (degrees/radians)")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+
+    # Plot 3: Scatter Plot - Predicted vs GT Translation (X-axis sample)
+    ax = axs[1, 0]
+    ax.scatter(csv_results["gt_trans_x"], csv_results["pred_trans_x"], color='#e67e22', alpha=0.5, s=20)
+    # Add a 1:1 perfect prediction line
+    lims = [
+        np.min([ax.get_xlim(), ax.get_ylim()]),  # min of both axes
+        np.max([ax.get_xlim(), ax.get_ylim()]),  # max of both axes
+    ]
+    ax.plot(lims, lims, 'k--', alpha=0.75, zorder=0, label='Perfect Prediction')
+    ax.set_aspect('equal')
+    ax.set_xlim(lims)
+    ax.set_ylim(lims)
+    ax.set_title("Translation X: Predicted vs Ground Truth")
+    ax.set_xlabel("GT Translation X")
+    ax.set_ylabel("Predicted Translation X")
+    ax.legend()
+
+    # Plot 4: Boxplot of Errors by Axis (Per-component analysis)
+    ax = axs[1, 1]
+    data_to_plot = [val_abs_x, val_abs_y, val_abs_z]
+    
+    # Create the boxplot with specific styling
+    bp = ax.boxplot(data_to_plot, patch_artist=True, notch=True)
+    
+    # Fill with colors
+    colors = ['#3498db', '#9b59b6', '#f1c40f']
+    for patch, color in zip(bp['boxes'], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
+    
+    # Changing color and linewidth of whiskers and caps
+    for whisker in bp['whiskers']:
+        whisker.set(color='#7f8c8d', linewidth=1.5, linestyle=":")
+    for cap in bp['caps']:
+        cap.set(color='#7f8c8d', linewidth=2)
+    for median in bp['medians']:
+        median.set(color='red', linewidth=2)
+    # Changing style of fliers
+    for flier in bp['fliers']:
+        flier.set(marker='o', color='#e74c3c', alpha=0.5)
+
+    ax.set_xticklabels(['Error X', 'Error Y', 'Error Z'])
+    ax.set_title("Translation Error Breakdown by Axis")
+    ax.set_ylabel("Absolute Error")
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.97]) # Adjust layout to not cut off title
+
+    # Save the figure
+    plot_name = f"summary_plots_{timestamp}.png"
+    plt.savefig(os.path.join(results_dir, plot_name), dpi=150)
+    print(f"Saved visualization plots to {os.path.join(results_dir, plot_name)}")
+    
+    # Close plt to free memory
+    plt.close()
