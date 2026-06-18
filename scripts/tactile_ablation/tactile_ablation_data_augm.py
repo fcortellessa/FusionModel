@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# tactile_ablation_data_augm.py - Generate tactile ablation augmentation datasets expected by training scripts.
 """
 Generate tactile ablation augmentation datasets expected by training scripts.
 

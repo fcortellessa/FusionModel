@@ -27,7 +27,7 @@ config_map[blur_only]="tactile_ablation_blur_only.yml"
 config_map[channel_scaling_only]="tactile_ablation_channel_scaling_only.yml"
 config_map[all]="tactile_ablation_all.yml"
 
-seeds=(42 43 44)
+seeds=(42 43 44 45 46)
 
 DEFAULT_PYTHON="python3"
 if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then

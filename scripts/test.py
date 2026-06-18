@@ -93,8 +93,9 @@ if __name__ == "__main__":
         shuffle=True
     )
     # Create a dummy optimizer for checkpoint loading (optimizer state not needed for inference)
-    optimizer = get_optimizer(model_or_params=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
-    load_checkpoint(model, optimizer, model_path, device="cpu", load_optimizer=False)
+    # optimizer = get_optimizer(model_or_params=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
+    # load_checkpoint(model, optimizer, model_path, device="cpu", load_optimizer=False)
+    load_checkpoint(model, checkpoint_path=model_path, device="cpu", load_optimizer=False)
     print("Model loaded successfully!")
 
     # load test data

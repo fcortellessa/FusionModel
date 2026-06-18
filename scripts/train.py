@@ -6,8 +6,9 @@ import time
 from pathlib import Path
 import argparse
 import logging
-import torch
 import tqdm
+import torch
+from torch.utils.data import DataLoader
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PARENT_DIR = CURRENT_DIR.parent
@@ -64,12 +65,39 @@ def _compute_uncertainty_stats(uncertainty_module):
             "uncertainty_weight_trans": "",
         }
 
-    return {
-        "uncertainty_log_var_rot": _to_float(uncertainty_module.log_var_rot),
-        "uncertainty_log_var_trans": _to_float(uncertainty_module.log_var_trans),
-        "uncertainty_weight_rot": float(torch.exp(-uncertainty_module.log_var_rot.detach()).item()),
-        "uncertainty_weight_trans": float(torch.exp(-uncertainty_module.log_var_trans.detach()).item()),
-    }
+    # Prefer standardized get_stats() if available (wrapper added in train_utils)
+    if hasattr(uncertainty_module, "get_stats") and callable(getattr(uncertainty_module, "get_stats")):
+        try:
+            stats = uncertainty_module.get_stats()
+            return stats or {
+                "uncertainty_log_var_rot": "",
+                "uncertainty_log_var_trans": "",
+                "uncertainty_weight_rot": "",
+                "uncertainty_weight_trans": "",
+            }
+        except Exception:
+            # fall back to attribute access
+            pass
+
+    # Backwards-compatible attribute access if module exposes log_var_*
+    try:
+        lv_rot = _to_float(uncertainty_module.log_var_rot)
+        lv_trans = _to_float(uncertainty_module.log_var_trans)
+        w_rot = float(torch.exp(-uncertainty_module.log_var_rot.detach()).item())
+        w_trans = float(torch.exp(-uncertainty_module.log_var_trans.detach()).item())
+        return {
+            "uncertainty_log_var_rot": lv_rot,
+            "uncertainty_log_var_trans": lv_trans,
+            "uncertainty_weight_rot": w_rot,
+            "uncertainty_weight_trans": w_trans,
+        }
+    except Exception:
+        return {
+            "uncertainty_log_var_rot": "",
+            "uncertainty_log_var_trans": "",
+            "uncertainty_weight_rot": "",
+            "uncertainty_weight_trans": "",
+        }
 
 
 
@@ -157,6 +185,29 @@ def _train_single_epoch(
             abs_rot_x=abs_rot_x,
             fusion_weights=fusion_weights,
         )
+
+        # Per-step uncertainty logging for debugging (if available)
+        if tb_writer is not None and uncertainty_module is not None:
+            try:
+                stats = uncertainty_module.get_stats() if hasattr(uncertainty_module, "get_stats") else None
+                if stats:
+                    # log log-variances if present
+                    lv_rot = stats.get("uncertainty_log_var_rot", None)
+                    lv_trans = stats.get("uncertainty_log_var_trans", None)
+                    if lv_rot is not None and lv_rot != "":
+                        tb_writer.add_scalar("uncertainty/step_log_var_rot", float(lv_rot), global_batch_step)
+                    if lv_trans is not None and lv_trans != "":
+                        tb_writer.add_scalar("uncertainty/step_log_var_trans", float(lv_trans), global_batch_step)
+
+                    # log weights if present
+                    w_rot = stats.get("uncertainty_weight_rot", None)
+                    w_trans = stats.get("uncertainty_weight_trans", None)
+                    if w_rot is not None and w_rot != "":
+                        tb_writer.add_scalar("uncertainty/step_weight_rot", float(w_rot), global_batch_step)
+                    if w_trans is not None and w_trans != "":
+                        tb_writer.add_scalar("uncertainty/step_weight_trans", float(w_trans), global_batch_step)
+            except Exception:
+                pass
 
 
         if tb_writer is not None and fusion_targets is not None:

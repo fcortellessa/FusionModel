@@ -10,7 +10,6 @@ from utils.utils import build_run_artifacts, save_yaml, get_optimizer, save_json
 
 
 
-
 def _get_lr_by_group(optimizer, group_name):
     for group in optimizer.param_groups:
         if group.get("name") == group_name:
@@ -402,37 +401,133 @@ class TrainingConfigBuilder:
     
     def build_uncertainty_module(self, optimizer, base_lr):
         """Build uncertainty weighting module if enabled."""
-        
         uncertainty_cfg = self.cfg.get("training", {}).get("uncertainty_weighting", {})
         use_uncertainty_weighting = bool(uncertainty_cfg.get("enabled", False))
-        
+
         if not use_uncertainty_weighting:
             return None
-        
-        class UncertaintyWeighting(nn.Module):
-            def __init__(self, init_log_var_rot=0.0, init_log_var_trans=0.0):
+
+        # type can be 'uncertainty' (learned log-variance) or 'gradnorm'
+        utype = str(uncertainty_cfg.get("type", "uncertainty")).lower()
+
+        class UncertaintyWrapper(nn.Module):
+            """Standardised wrapper that exposes `forward` and `get_stats()`.
+
+            get_stats() returns dict keys used by build_epoch_metrics_row:
+            - uncertainty_log_var_rot
+            - uncertainty_log_var_trans
+            - uncertainty_weight_rot
+            - uncertainty_weight_trans
+            """
+
+            def __init__(self, module, kind: str):
                 super().__init__()
-                self.log_var_rot = nn.Parameter(torch.tensor(float(init_log_var_rot), dtype=torch.float32))
-                self.log_var_trans = nn.Parameter(torch.tensor(float(init_log_var_trans), dtype=torch.float32))
-            
-            def forward(self, loss_rot, loss_trans):
-                weighted_rot = torch.exp(-self.log_var_rot) * loss_rot + self.log_var_rot
-                weighted_trans = torch.exp(-self.log_var_trans) * loss_trans + self.log_var_trans
-                return weighted_rot + weighted_trans
-        
-        uncertainty_module = UncertaintyWeighting(
-            init_log_var_rot=float(uncertainty_cfg.get("init_log_var_rot", 0.0)),
-            init_log_var_trans=float(uncertainty_cfg.get("init_log_var_trans", 0.0)),
-        ).to(self.device)
-        
-        uncertainty_lr_mult = float(uncertainty_cfg.get("lr_mult", 1.0))
-        optimizer.add_param_group({
-            "name": "uncertainty",
-            "params": uncertainty_module.parameters(),
-            "lr": base_lr * uncertainty_lr_mult,
-        })
-        
-        return uncertainty_module
+                self.module = module
+                self.kind = kind
+
+            def forward(self, *args, **kwargs):
+                return self.module(*args, **kwargs)
+
+            def get_stats(self):
+                if self.kind == "uncertainty":
+                    try:
+                        lv_rot = float(self.module.log_var_rot.detach().cpu().item())
+                        lv_trans = float(self.module.log_var_trans.detach().cpu().item())
+                        w_rot = float(torch.exp(-self.module.log_var_rot).detach().cpu().item())
+                        w_trans = float(torch.exp(-self.module.log_var_trans).detach().cpu().item())
+                        return {
+                            "uncertainty_log_var_rot": lv_rot,
+                            "uncertainty_log_var_trans": lv_trans,
+                            "uncertainty_weight_rot": w_rot,
+                            "uncertainty_weight_trans": w_trans,
+                        }
+                    except Exception:
+                        return {}
+
+                if self.kind == "gradnorm":
+                    try:
+                        weights = self.module.get_weights()
+                        if weights is None:
+                            return {}
+                        w = weights.detach().cpu()
+                        return {
+                            "uncertainty_log_var_rot": "",
+                            "uncertainty_log_var_trans": "",
+                            "uncertainty_weight_rot": float(w[0].item()),
+                            "uncertainty_weight_trans": float(w[1].item()),
+                        }
+                    except Exception:
+                        return {}
+
+                return {}
+
+        if utype == "uncertainty":
+            # use external implementation from losses/uncertainty_weighting.py
+            from losses.uncertainty_weighting import UncertaintyWeighting
+
+            base_module = UncertaintyWeighting(
+                init_log_var_rot=float(uncertainty_cfg.get("init_log_var_rot", 0.0)),
+                init_log_var_trans=float(uncertainty_cfg.get("init_log_var_trans", 0.0)),
+            ).to(self.device)
+
+            wrapper = UncertaintyWrapper(base_module, kind="uncertainty")
+
+            params = list(wrapper.parameters())
+            if params:
+                uncertainty_lr_mult = float(uncertainty_cfg.get("lr_mult", 1.0))
+                optimizer.add_param_group({
+                    "name": "uncertainty",
+                    "params": params,
+                    "lr": base_lr * uncertainty_lr_mult,
+                })
+
+            return wrapper
+
+        elif utype == "gradnorm":
+            # adapt external GradNorm implementation to a simple two-loss interface
+            from losses.gradnorm_pytorch import GradNormLossWeighter
+
+            class GradNormAdapter(nn.Module):
+                def __init__(self, cfg):
+                    super().__init__()
+                    lr = float(cfg.get("gradnorm_lr", 1e-4))
+                    alpha = float(cfg.get("gradnorm_alpha", 0.0))
+                    # GradNormLossWeighter doesn't expose trainable nn.Parameters by default
+                    self.gn = GradNormLossWeighter(
+                        num_losses=2,
+                        learning_rate=lr,
+                        restoring_force_alpha=alpha,
+                    )
+
+                def forward(self, loss_rot, loss_trans, activations=None, **kwargs):
+                    # GradNormLossWeighter expects a 1D tensor of losses
+                    losses = torch.stack([loss_rot, loss_trans])
+                    # pass activations if available (optional)
+                    return self.gn(losses, activations=activations, **kwargs)
+
+                def get_weights(self):
+                    # expose current renormalized loss weights if available
+                    try:
+                        return getattr(self.gn, "loss_weights")
+                    except Exception:
+                        return None
+
+            adapter = GradNormAdapter(uncertainty_cfg).to(self.device)
+            wrapper = UncertaintyWrapper(adapter, kind="gradnorm")
+
+            params = list(wrapper.parameters())
+            if params:
+                uncertainty_lr_mult = float(uncertainty_cfg.get("lr_mult", 1.0))
+                optimizer.add_param_group({
+                    "name": "uncertainty",
+                    "params": params,
+                    "lr": base_lr * uncertainty_lr_mult,
+                })
+
+            return wrapper
+
+        else:
+            raise ValueError(f"Unsupported uncertainty weighting type: {utype}")
     
     def build(self):
         """Build all training components.
