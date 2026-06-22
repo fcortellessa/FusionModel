@@ -55,77 +55,31 @@ def _quaternion_geodesic_error_deg(pred_quat, target_quat):
 config_path = "configs/gated.yml"
 root_data_path = "Data/Data_split/"
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default=config_path, help="Path to the training config used for the run")
-    parser.add_argument("--run_dir", type=str, default=None, help="Specific run directory to load instead of the latest run")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint path to load")
-    parser.add_argument("--results_dir", type=str, default=None, help="Override the directory where test CSVs are saved")
-    args = parser.parse_args()
-
-    if args.run_dir is not None:
-        manifest_path = os.path.join(args.run_dir, "manifest.json")
-        legacy_manifest_path = os.path.join(args.run_dir, "run_manifest.json")
-        if os.path.exists(manifest_path):
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        elif os.path.exists(legacy_manifest_path):
-            with open(legacy_manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        else:
-            manifest = {
-                "config_snapshot_path": os.path.join(args.run_dir, "config.yml"),
-                "checkpoint_path": os.path.join(args.run_dir, "checkpoint_best.pth"),
-                "run_dir": args.run_dir,
-                "results_dir": os.path.join(args.run_dir, "results"),
-            }
-
-            if not os.path.exists(manifest["config_snapshot_path"]):
-                manifest["config_snapshot_path"] = os.path.join(args.run_dir, "config.resolved.yml")
-            if not os.path.exists(manifest["checkpoint_path"]):
-                manifest["checkpoint_path"] = os.path.join(args.run_dir, "checkpoints", "best.pth")
-    else:
-        if args.checkpoint is None:
-            raise ValueError("Provide either --run_dir or --checkpoint.")
-        manifest = {
-            "config_snapshot_path": args.config,
-            "checkpoint_path": args.checkpoint,
-            "results_dir": "results",
-        }
-
-    cfg_path = manifest.get("config_snapshot_path") or args.config
-    cfg = load_config(cfg_path)
-    model_path = args.checkpoint or manifest["checkpoint_path"]
-    results_dir = args.results_dir or manifest.get("results_dir") or os.path.join(os.path.dirname(model_path), "..", "results")
-    os.makedirs(results_dir, exist_ok=True)
+def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, device):
     model = PoseEstimationNet(
-        model_name=cfg["model"]["backbone"],
-        streams=cfg["model"]["streams"],
-        fusion=cfg["model"]["fusion"],
-        freeze_backbone=cfg["model"]["freeze_backbone"],
-        rotation_parametrisation=cfg["model"]["head_type"],
-        activation=cfg["model"]["activation"],
-        rotation_layers=[cfg["model"]["mlp_quat_1"], cfg["model"]["mlp_quat_2"], cfg["model"]["mlp_quat_3"]],
-        translation_layers=[cfg["model"]["mlp_trans_1"], cfg["model"]["mlp_trans_2"],cfg["model"]["mlp_trans_3"]],
-        dropout_rot=cfg["training"]["dropout_rot"],
-        dropout_trans=cfg["training"]["dropout_trans"],
-        use_batchnorm=cfg["training"]["use_batchnorm"]
+        model_name=config["model"]["backbone"],
+        streams=config["model"]["streams"],
+        fusion=config["model"]["fusion"],
+        freeze_backbone=config["model"]["freeze_backbone"],
+        rotation_parametrisation=config["model"]["head_type"],
+        activation=config["model"]["activation"],
+        rotation_layers=[config["model"]["mlp_quat_1"], config["model"]["mlp_quat_2"], config["model"]["mlp_quat_3"]],
+        translation_layers=[config["model"]["mlp_trans_1"], config["model"]["mlp_trans_2"],config["model"]["mlp_trans_3"]],
+        dropout_rot=config["training"]["dropout_rot"],
+        dropout_trans=config["training"]["dropout_trans"],
+        use_batchnorm=config["training"]["use_batchnorm"]
     )
     # load state dict
     test_loader = get_test_dataloader(
         root_dir=root_data_path,
-        batch_size=cfg["training"]["batch_size"],
+        batch_size=config["training"]["batch_size"],
         shuffle=False # Typically False for testing
     )
     # Create a dummy optimizer for checkpoint loading (optimizer state not needed for inference)
-    optimizer = get_optimizer(model_or_params=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
+    optimizer = get_optimizer(model_or_params=model, optimizer_name=config["training"]["optimizer"], lr=config["training"]["lr"])
     load_checkpoint(model, optimizer, model_path, device="cpu", load_optimizer=False)
     # load_checkpoint(model, checkpoint_path=model_path, device="cpu", load_optimizer=False)
     print("Model loaded successfully!")
-
-    # load test data
-    # test_data = torch.load(test_data_path)
 
     # run inference
     model.eval()
@@ -238,84 +192,150 @@ if __name__ == "__main__":
             f.write(f"Best Val Rotation Error (geodesic): {df['val_abs_rot_z'].min():.6f}\n")
             f.write(f"Worst Val Rotation Error (geodesic): {df['val_abs_rot_z'].max():.6f}\n")
     print(f"Saved metrics to {os.path.join(results_dir, metrics_name)}")
-    
-    # ==========================================
-    # plots (matplotlib only)
-    # ==========================================
-    print("Generating visualization plots...")
-    plt.style.use('seaborn-v0_8-whitegrid') # Optional: Clean style
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f"Pose Estimation Test Results\nRun: {os.path.basename(cfg_path)}", fontsize=16)
 
-    # Plot 1: Histogram of Translation Errors
+def plot_results(results_directory, csv_results, config_path):
+    print("Generating visualization plots...")
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f"Pose Estimation Test Results\nRun: {os.path.basename(config_path)}", fontsize=16)
+
+    # Plot 1: Histogram of Y-Translation Errors
     ax = axs[0, 0]
-    ax.hist(val_abs_trans, bins=30, color='#3498db', edgecolor='black', alpha=0.7)
-    ax.axvline(val_abs_trans.mean(), color='red', linestyle='--', label=f'Mean: {val_abs_trans.mean():.4f}')
-    ax.set_title("Total Translation Error Distribution")
-    ax.set_xlabel("Absolute Error (meters/units)")
+    ax.hist(csv_results['val_abs_y'], bins=30, color='#3498db', edgecolor='black', alpha=0.7)
+    ax.axvline(csv_results['val_abs_y'].mean(), color='red', linestyle='--', label=f'Mean: {csv_results["val_abs_y"].mean():.4f}')
+    ax.set_title("Y-Translation Error Distribution")
+    ax.set_xlabel("Absolute Error (meters)")
     ax.set_ylabel("Frequency")
     ax.legend()
 
-    # Plot 2: Histogram of Rotation Errors (Axis X)
+    # Plot 2: Histogram of Z-Translation Errors
     ax = axs[0, 1]
-    ax.hist(val_abs_rot_x, bins=30, color='#2ecc71', edgecolor='black', alpha=0.7)
-    ax.axvline(val_abs_rot_x.mean(), color='red', linestyle='--', label=f'Mean: {val_abs_rot_x.mean():.4f}')
+    ax.hist(csv_results['val_abs_z'], bins=30, color='#de8f05', edgecolor='black', alpha=0.7)
+    ax.axvline(csv_results['val_abs_z'].mean(), color='red', linestyle='--', label=f'Mean: {csv_results["val_abs_z"].mean():.4f}')
+    ax.set_title("Z-Translation Error Distribution")
+    ax.set_xlabel("Absolute Error (meters)")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+
+    # Plot 3: Histogram of Rotation Errors (Axis X)
+    ax = axs[1, 0]
+    ax.hist(csv_results['val_abs_rot_x'], bins=30, color='#029e73', edgecolor='black', alpha=0.7)
+    ax.axvline(csv_results['val_abs_rot_x'].mean(), color='red', linestyle='--', label=f'Mean: {csv_results["val_abs_rot_x"].mean():.4f}')
     ax.set_title("Rotation Error Distribution (Axis X)")
     ax.set_xlabel("Absolute Error (degrees/radians)")
     ax.set_ylabel("Frequency")
     ax.legend()
 
-    # Plot 3: Scatter Plot - Predicted vs GT Translation (X-axis sample)
-    ax = axs[1, 0]
-    ax.scatter(csv_results["gt_trans_x"], csv_results["pred_trans_x"], color='#e67e22', alpha=0.5, s=20)
-    # Add a 1:1 perfect prediction line
-    lims = [
-        np.min([ax.get_xlim(), ax.get_ylim()]),  # min of both axes
-        np.max([ax.get_xlim(), ax.get_ylim()]),  # max of both axes
-    ]
-    ax.plot(lims, lims, 'k--', alpha=0.75, zorder=0, label='Perfect Prediction')
-    ax.set_aspect('equal')
-    ax.set_xlim(lims)
-    ax.set_ylim(lims)
-    ax.set_title("Translation X: Predicted vs Ground Truth")
-    ax.set_xlabel("GT Translation X")
-    ax.set_ylabel("Predicted Translation X")
-    ax.legend()
+    # Plot 4: Boxplot of Translation Errors by Axis (Per-component analysis) and Rotation Error (geodesic)
+    data_to_plot = [csv_results['val_abs_x'], csv_results['val_abs_y'], csv_results['val_abs_z'], csv_results['val_abs_rot_x']]
+    
+    ax_trans = axs[1, 1]
+    ax_rot = ax_trans.twinx()
+    ax_rot.grid(False) 
 
-    # Plot 4: Boxplot of Errors by Axis (Per-component analysis)
-    ax = axs[1, 1]
-    data_to_plot = [val_abs_x, val_abs_y, val_abs_z]
+    # Plot Translation errors on the primary left axis
+    bp_trans = ax_trans.boxplot([csv_results['val_abs_y'], csv_results['val_abs_z']], positions=[1, 2], widths=0.5, patch_artist=True, notch=True)
+    bp_rot = ax_rot.boxplot([csv_results['val_abs_rot_x']], positions=[3], widths=0.5, patch_artist=True, notch=True)
+
+    # --- Styling ---
+    # Colors for: [Translation Y, Translation Z, Rotation X]
+    colors = ['#3498db', '#de8f05', '#029e73']
     
-    # Create the boxplot with specific styling
-    bp = ax.boxplot(data_to_plot, patch_artist=True, notch=True)
-    
-    # Fill with colors
-    colors = ['#3498db', '#9b59b6', '#f1c40f']
-    for patch, color in zip(bp['boxes'], colors):
+    # Apply colors and styles to Translation boxes
+    for patch, color in zip(bp_trans['boxes'], colors[0:2]):
         patch.set_facecolor(color)
         patch.set_alpha(0.6)
     
-    # Changing color and linewidth of whiskers and caps
-    for whisker in bp['whiskers']:
-        whisker.set(color='#7f8c8d', linewidth=1.5, linestyle=":")
-    for cap in bp['caps']:
-        cap.set(color='#7f8c8d', linewidth=2)
-    for median in bp['medians']:
-        median.set(color='red', linewidth=2)
-    # Changing style of fliers
-    for flier in bp['fliers']:
-        flier.set(marker='o', color='#e74c3c', alpha=0.5)
+    # Apply color and style to Rotation box
+    for patch in bp_rot['boxes']:
+        patch.set_facecolor(colors[2])
+        patch.set_alpha(0.6)
 
-    ax.set_xticklabels(['Error X', 'Error Y', 'Error Z'])
-    ax.set_title("Translation Error Breakdown by Axis")
-    ax.set_ylabel("Absolute Error")
+    # Uniform styling across all whiskers, caps, medians, and fliers
+    for bp in [bp_trans, bp_rot]:
+        for whisker in bp['whiskers']:
+            whisker.set(color='#7f8c8d', linewidth=1.5, linestyle=":")
+        for cap in bp['caps']:
+            cap.set(color='#7f8c8d', linewidth=2)
+        for median in bp['medians']:
+            median.set(color='red', linewidth=2)
+        for flier in bp['fliers']:
+            flier.set(marker='o', color='#e74c3c', alpha=0.5)
 
+    # --- Axis Limits & Labels ---
+    # Set the x-axis limits to frame our 3 positions nicely
+    ax_trans.set_xlim(0.5, 3.5)
+    ax_trans.set_xticks([1, 2, 3])
+    ax_trans.set_xticklabels(['Error Y', 'Error Z', 'Rot Error X'])
+    
+    # Title and separate Y labels
+    ax_trans.set_title("Component Error Breakdown")
+    ax_trans.set_ylabel("Translation Error (meters)", color='#3498db')
+    ax_rot.set_ylabel("Rotation Error (degrees)", color='#029e73')
+    
+    # Optional: Color the axis tick labels to match the data
+    ax_trans.tick_params(axis='y', labelcolor='#3498db')
+    ax_rot.tick_params(axis='y', labelcolor='#029e73')
+
+    # --- Save & Finalize ---
     plt.tight_layout(rect=[0, 0.03, 1, 0.97]) # Adjust layout to not cut off title
 
     # Save the figure
+    timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
     plot_name = f"summary_plots_{timestamp}.png"
-    plt.savefig(os.path.join(results_dir, plot_name), dpi=150)
-    print(f"Saved visualization plots to {os.path.join(results_dir, plot_name)}")
-    
-    # Close plt to free memory
+    plt.savefig(os.path.join(results_directory, plot_name), dpi=150)
+    print(f"Saved visualization plots to {os.path.join(results_directory, plot_name)}")
+
     plt.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=config_path, help="Path to the training config used for the run")
+    parser.add_argument("--run_dir", type=str, default=None, help="Specific run directory to load instead of the latest run")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint path to load")
+    parser.add_argument("--results_dir", type=str, default=None, help="Override the directory where test CSVs are saved")
+    args = parser.parse_args()
+
+    if args.run_dir is not None:
+        manifest_path = os.path.join(args.run_dir, "manifest.json")
+        legacy_manifest_path = os.path.join(args.run_dir, "run_manifest.json")
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        elif os.path.exists(legacy_manifest_path):
+            with open(legacy_manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        else:
+            manifest = {
+                "config_snapshot_path": os.path.join(args.run_dir, "config.yml"),
+                "checkpoint_path": os.path.join(args.run_dir, "checkpoint_best.pth"),
+                "run_dir": args.run_dir,
+                "results_dir": os.path.join(args.run_dir, "results"),
+            }
+
+            if not os.path.exists(manifest["config_snapshot_path"]):
+                manifest["config_snapshot_path"] = os.path.join(args.run_dir, "config.resolved.yml")
+            if not os.path.exists(manifest["checkpoint_path"]):
+                manifest["checkpoint_path"] = os.path.join(args.run_dir, "checkpoints", "best.pth")
+    else:
+        if args.checkpoint is None:
+            raise ValueError("Provide either --run_dir or --checkpoint.")
+        manifest = {
+            "config_snapshot_path": args.config,
+            "checkpoint_path": args.checkpoint,
+            "results_dir": "results",
+        }
+
+    cfg_path = manifest.get("config_snapshot_path") or args.config
+    cfg = load_config(cfg_path)
+    model_path = args.checkpoint or manifest["checkpoint_path"]
+    results_dir = args.results_dir or manifest.get("results_dir") or os.path.join(os.path.dirname(model_path), "..", "results")
+    os.makedirs(results_dir, exist_ok=True)
+    
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    infer_and_evaluate(cfg, model_path, None, results_dir, device)
+    plot_results(results_dir, pd.read_csv(os.path.join(results_dir, os.listdir(results_dir)[-1])), cfg_path)
