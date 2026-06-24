@@ -60,6 +60,8 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
                     "final_epoch": int(final_row.get("epoch", len(df))),
                     "final_val_loss": final_row.get("val_loss", None), # Keeps None safely if missing
                     "final_val_abs_trans": final_row.get("val_abs_trans", None),
+                    "final_val_abs_trans_y": final_row.get("val_abs_trans_y", None),
+                    "final_val_abs_trans_z": final_row.get("val_abs_trans_z", None),
                     "final_val_abs_rot_x": final_row.get("val_abs_rot_x", None),
                     "final_train_loss": final_row.get("train_loss", None), # FIXED: was 'loss'
                 })
@@ -85,7 +87,7 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
     summary = []
     
     # Determine metrics to show based on what actually exists in data
-    metrics_to_show = ["final_val_abs_trans", "final_val_abs_rot_x", "final_train_loss"]
+    metrics_to_show = ["final_val_abs_trans", "final_val_abs_trans_y", "final_val_abs_trans_z", "final_val_abs_rot_x", "final_train_loss"]
     if results_df["final_val_loss"].notna().any():
         metrics_to_show.insert(0, "final_val_loss")
 
@@ -124,7 +126,7 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
     summary_df = pd.DataFrame(summary)
     
     # Rank validation metrics
-    rank_metrics = [m for m in ["final_val_abs_trans", "final_val_abs_rot_x"] if m in metrics_to_show]
+    rank_metrics = [m for m in ["final_val_abs_trans", "final_val_abs_trans_y", "final_val_abs_trans_z", "final_val_abs_rot_x"] if m in metrics_to_show]
     
     for metric in rank_metrics:
         metric_group = summary_df[summary_df["metric"] == metric]
@@ -151,6 +153,8 @@ def analyze_ablation_results(runs_dir: str = "runs", output_file: str = "ablatio
     print("""
 Metrics to optimize (lower is better):
   - final_val_abs_trans: Mean absolute translation error (meters)
+  - final_val_abs_trans_y: Mean absolute translation error along Y-axis (meters)
+  - final_val_abs_trans_z: Mean absolute translation error along Z-axis (meters)
   - final_val_abs_rot_x: Mean absolute rotation error around X-axis (radians)
 
 Interpretation:
