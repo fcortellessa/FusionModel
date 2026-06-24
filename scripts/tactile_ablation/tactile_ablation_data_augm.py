@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
@@ -81,6 +81,16 @@ ABLATION_VARIANTS = {
 }
 
 
+def _resolve_seed_values(seed: int, seed_start: int | None, seed_end: int | None) -> list[int]:
+    if seed_start is None and seed_end is None:
+        return [seed]
+    if seed_start is None or seed_end is None:
+        raise ValueError("Provide both --seed-start and --seed-end, or neither.")
+    if seed_end < seed_start:
+        raise ValueError("--seed-end must be greater than or equal to --seed-start.")
+    return list(range(seed_start, seed_end + 1))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate tactile ablation datasets with expected folder naming"
@@ -129,11 +139,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail on first problematic sample",
     )
+    parser.add_argument(
+        "--variant",
+        choices=list(ABLATION_VARIANTS.keys()),
+        default="brightness_only",
+        help="Ablation variant to generate",
+    )
+    parser.add_argument(
+        "--seed-start",
+        type=int,
+        default=None,
+        help="Inclusive start of the seed sweep",
+    )
+    parser.add_argument(
+        "--seed-end",
+        type=int,
+        default=None,
+        help="Inclusive end of the seed sweep",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    seed_values = _resolve_seed_values(args.seed, args.seed_start, args.seed_end)
 
     if not args.input.exists():
         raise FileNotFoundError(f"Input folder does not exist: {args.input}")
@@ -142,17 +172,21 @@ def main() -> None:
     print("Generating tactile ablation datasets")
     print(f"Input: {args.input}")
     print(f"Output base: {args.output_base}")
-    print(f"Variants: {', '.join(ABLATION_VARIANTS.keys())}")
+    print(f"Variant: {args.variant}")
+    print(f"Seeds: {', '.join(str(value) for value in seed_values)}")
     print("=" * 80)
 
-    for variant_name, tactile_aug_config in ABLATION_VARIANTS.items():
-        out_dir = args.output_base / f"train_augmentation_{variant_name}"
-        print(f"\n[Variant: {variant_name}] -> {out_dir}")
+    tactile_aug_config = ABLATION_VARIANTS[args.variant]
+
+    for current_seed in seed_values:
+        output_suffix = args.variant if len(seed_values) == 1 else f"{args.variant}_seed{current_seed}"
+        out_dir = args.output_base / f"train_augmentation_{output_suffix}"
+        print(f"\n[Variant: {args.variant}] seed={current_seed} -> {out_dir}")
 
         augment_offline(
             input_dir=args.input,
             output_dir=out_dir,
-            seed=args.seed,
+            seed=current_seed,
             augmentation_count=args.augmentation_count,
             copy_originals=not args.no_copy_originals,
             overwrite=args.overwrite,

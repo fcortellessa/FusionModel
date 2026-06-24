@@ -1,6 +1,8 @@
+import argparse
 import hashlib
 import json
 import random
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -8,7 +10,22 @@ from typing import Dict, List, Tuple, Optional
 import albumentations as A
 import numpy as np
 from PIL import Image
+import yaml
 from torch.utils.data import Dataset
+
+
+BRIGHTNESS_ONLY_TACTILE_AUG_CONFIG = {
+    "enabled": True,
+    "output_folder": "train_augmentation_brightness_only",
+    "enabled_noise": False,
+    "enabled_brightness": True,
+    "enabled_contrast": False,
+    "enabled_blur": False,
+    "enabled_channel_scaling": False,
+    "seed": 42,
+    "photo_count": 1,
+    "overwrite": False,
+}
 
 
 @dataclass(frozen=True)
@@ -159,3 +176,77 @@ class OnlineAugmentedDataset(Dataset):
         digit_augmented = self._apply_deterministic(digit_img, self.tactile_transform, local_rng)
 
         return rgb_augmented, digit_augmented, label_data, triplet
+
+
+def build_brightness_only_training_config(seed: int, template_config: Dict) -> Dict:
+    """Return a training config adjusted for online brightness-only augmentation."""
+    config = deepcopy(template_config)
+    data_cfg = config.setdefault("data", {})
+    data_cfg["use_preaugmented_train_dir"] = False
+    data_cfg["root"] = ""
+
+    augmentation_cfg = deepcopy(BRIGHTNESS_ONLY_TACTILE_AUG_CONFIG)
+    augmentation_cfg["seed"] = int(seed)
+    data_cfg["augmentation"] = augmentation_cfg
+
+    training_cfg = config.setdefault("training", {})
+    training_cfg["seed"] = int(seed)
+    return config
+
+
+def write_seeded_online_configs(
+    template_config_path: Path,
+    output_dir: Path,
+    seed_start: int,
+    seed_end: int,
+) -> List[Path]:
+    """Write one brightness-only online config per seed in the inclusive range."""
+    if seed_end < seed_start:
+        raise ValueError("seed_end must be greater than or equal to seed_start")
+
+    with template_config_path.open("r", encoding="utf-8") as handle:
+        template_config = yaml.safe_load(handle)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written_paths: List[Path] = []
+
+    for seed in range(seed_start, seed_end + 1):
+        seeded_config = build_brightness_only_training_config(seed, template_config)
+        output_path = output_dir / f"tactile_ablation_brightness_only_seed{seed}.yml"
+        with output_path.open("w", encoding="utf-8") as handle:
+            yaml.safe_dump(seeded_config, handle, sort_keys=False)
+        written_paths.append(output_path)
+
+    return written_paths
+
+
+def _parse_cli() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate online brightness-only ablation configs")
+    parser.add_argument(
+        "--template-config",
+        type=Path,
+        default=Path("configs/tactile_ablation_brightness_only.yml"),
+        help="Base training config to copy and adjust",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("configs/generated/online_brightness_only"),
+        help="Directory where seed-specific configs will be written",
+    )
+    parser.add_argument("--seed-start", type=int, default=40, help="Inclusive start seed")
+    parser.add_argument("--seed-end", type=int, default=46, help="Inclusive end seed")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = _parse_cli()
+    written = write_seeded_online_configs(
+        template_config_path=args.template_config,
+        output_dir=args.output_dir,
+        seed_start=args.seed_start,
+        seed_end=args.seed_end,
+    )
+    print("Wrote the following online brightness-only configs:")
+    for path in written:
+        print(path)

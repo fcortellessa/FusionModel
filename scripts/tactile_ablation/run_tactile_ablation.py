@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
-sys.path.insert(0, parent_dir)
+repo_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+sys.path.insert(0, repo_root)
 
 from data_processing.augment_data import augment_offline
 
@@ -106,9 +106,7 @@ def generate_ablation_variants(
             input_dir=input_path,
             output_dir=output_dir,
             seed=seed,
-            geo_count=0,
-            photo_count=photo_count,
-            rotation_deg=0.0,
+            augmentation_count=photo_count,
             copy_originals=copy_originals,
             overwrite=overwrite,
             dry_run=False,
