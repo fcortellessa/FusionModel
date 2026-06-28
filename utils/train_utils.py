@@ -58,9 +58,9 @@ def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
         return lambda epoch_idx: 1.0
 
     schedule_type = str(schedule_cfg.get("type", "one_cycle")).lower()
-    if schedule_type not in {"one_cycle", "warmup_cosine"}:
+    if schedule_type not in {"one_cycle", "warmup_cosine", "multi_cycle"}:
         raise ValueError(
-            f"Unsupported lr_schedule type: {schedule_type}. Supported options: one_cycle, warmup_cosine."
+            f"Unsupported lr_schedule type: {schedule_type}. Supported options: one_cycle, warmup_cosine, multi_cycle."
         )
 
     start_lr_mult = float(schedule_cfg.get("start_lr_mult", 0.2))

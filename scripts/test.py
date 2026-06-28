@@ -1,4 +1,8 @@
 # test script
+
+# usage: 
+# python .\scripts\test.py --config runs\20260511_152356_bs16_gated\config.yml 
+# --checkpoint runs\20260511_152356_bs16_gated\checkpoint_best.pth --results_dir runs\20260511_152356_bs16_gated\results
 import argparse
 import json
 import time
@@ -6,10 +10,8 @@ import os
 import sys
 import warnings
 
-# Prevent albumentations from trying to fetch version info (can hang on some networks)
+# Prevent albumentations from trying to fetch version info and suppress pin_memory warning 
 os.environ.setdefault("ALBUMENTATIONS_CHECK_FOR_UPDATES", "0")
-
-# Suppress noisy DataLoader pin_memory warning when no accelerator is available
 warnings.filterwarnings("ignore", message=".*pin_memory.*no accelerator is found.*")
 
 import torch
@@ -192,6 +194,7 @@ def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, d
             f.write(f"Best Val Rotation Error (geodesic): {df['val_abs_rot_z'].min():.6f}\n")
             f.write(f"Worst Val Rotation Error (geodesic): {df['val_abs_rot_z'].max():.6f}\n")
     print(f"Saved metrics to {os.path.join(results_dir, metrics_name)}")
+
 
 def plot_results(results_directory, csv_results, config_path):
     print("Generating visualization plots...")
