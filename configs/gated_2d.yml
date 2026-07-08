@@ -16,7 +16,7 @@ model:
 training:
   lr: 0.001
   batch_size: 16
-  epochs: 50
+  epochs: 150
   num_workers: 4
   optimizer: Adam
   uncertainty_weighting:

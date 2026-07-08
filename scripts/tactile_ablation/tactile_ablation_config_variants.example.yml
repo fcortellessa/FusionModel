@@ -1,0 +1,26 @@
+# Example spec for generate_config_variants.py
+# Edit the paths and values to match the configs you want to sweep.
+
+name_prefix: tactile_ablation
+
+fixed_overrides:
+  data.use_preaugmented_train_dir: false
+  data.root: ""
+
+grid:
+  training.seed: [40, 41, 42]
+  data.augmentation.enabled_noise: [false]
+  data.augmentation.enabled_brightness: [true, false]
+  data.augmentation.enabled_contrast: [false]
+  data.augmentation.enabled_blur: [false]
+  data.augmentation.enabled_channel_scaling: [false]
+
+variants:
+  - name: brightness_only_reference
+    overrides:
+      data.augmentation.output_folder: train_augmentation_brightness_only
+      data.augmentation.enabled_noise: false
+      data.augmentation.enabled_brightness: true
+      data.augmentation.enabled_contrast: false
+      data.augmentation.enabled_blur: false
+      data.augmentation.enabled_channel_scaling: false

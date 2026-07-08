@@ -1,0 +1,15 @@
+output_dir: "configs/generated/fusions_schedules_variants"
+
+fixed_overrides:
+  # Enforce that data augmentation remains disabled across all runs
+  data.augmentation.enabled: false
+
+grid:
+  # 3 distinct seeds for every combination
+  training.seed: [42, 43, 44]
+  
+  # Your chosen model fusion variations
+  model.fusion: ["gated", "spatial_gated_2d"]
+  
+  # Your chosen learning rate schedule variations
+  training.lr_schedule.type: ["one_cycle", "multi_cycle"]
