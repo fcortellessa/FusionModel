@@ -197,18 +197,17 @@ def _process_samples_parallel(valid_timestamps, folder_path, output_dir,
         ))
 
 
-def preprocess_and_save(data_path, transf_matrix, folder_path, output_dir):
+def preprocess_and_save(
+    transf_matrix,
+    folder_path,
+    output_dir,
+    rgb_mean,
+    rgb_std,
+    digit_mean,
+    digit_std,
+):
     """Preprocess and save all samples in a folder."""
     os.makedirs(output_dir, exist_ok=True)
-
-    # ---- Compute normalization stats ----
-    print("Computing normalization stats...", flush=True)
-    digit_mean, digit_std = compute_mean_std_digit_images(
-        os.path.join(data_path, "Data_split/train/")
-    )
-    rgb_mean, rgb_std = compute_mean_std_rgb_images_no_crop(
-        os.path.join(data_path, "Data_split/train/")
-    )
 
     # ---- Collect valid timestamps ----
     valid_timestamps = _collect_valid_timestamps(folder_path)
@@ -277,14 +276,23 @@ def preprocess_data(
         "test": os.path.join(output_path, "test"),
     }
 
+    print("Computing normalization stats...", flush=True)
+    digit_mean, digit_std = compute_mean_std_digit_images(train_split_dir)
+    rgb_mean, rgb_std = compute_mean_std_rgb_images_no_crop(train_split_dir)
+
     print("Preprocessing all splits")
     for split in ["train", "val", "test"]:
         split_output_dir = os.path.join(output_path, split, f"{split}_preprocessing")
         if os.path.exists(split_output_dir):
             shutil.rmtree(split_output_dir)
-        preprocess_and_save(root_dir, transf_matrix,
+        preprocess_and_save(
+            transf_matrix,
             folder_path=split_input_dirs[split],
-            output_dir=split_output_dir
+            output_dir=split_output_dir,
+            rgb_mean=rgb_mean,
+            rgb_std=rgb_std,
+            digit_mean=digit_mean,
+            digit_std=digit_std,
         )
 
     _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_std)
