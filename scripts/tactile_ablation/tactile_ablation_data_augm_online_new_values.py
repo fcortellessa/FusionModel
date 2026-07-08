@@ -54,7 +54,7 @@ class OnlineAugmentedDataset(Dataset):
     """
     def __init__(
         self,
-        input_dir: str | Path,
+        input_dir: str,
         seed: int,
         tactile_aug_config: Optional[Dict] = None,
     ):

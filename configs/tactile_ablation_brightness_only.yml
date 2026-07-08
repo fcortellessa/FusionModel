@@ -6,17 +6,19 @@ model:
   head_type: quaternion
   activation: GELU
   use_preaugmented_train_dir: false
+  mlp_quat_1: 1024
+  mlp_quat_2: 1024
   mlp_quat_3: 512
   mlp_trans_1: 256
-    enabled: true
+  mlp_trans_2: 128
   mlp_trans_3: 64
-    photo_count: 1
+
 training:
   lr: 0.001
   batch_size: 16
   epochs: 50
   num_workers: 4
-  optimizer: Adam
+  optimizer: MuSGD
   uncertainty_weighting:
     enabled: true
     init_log_var_rot: 0.0
@@ -52,5 +54,5 @@ data:
     output_folder: "train_augmentation_brightness_only"
     enabled: false
     seed: 42
-    photo_count: 0
+    photo_count: 1
     overwrite: false
