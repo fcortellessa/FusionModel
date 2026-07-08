@@ -294,13 +294,32 @@ def plot_results(results_directory, csv_results, config_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--run_folder", type=str, default=None, help="Path to a structured run folder containing config, checkpoints, etc.")
+    # folder or each config and checkpoint specified separately
     parser.add_argument("--config", type=str, default=config_path, help="Path to the training config used for the run")
     parser.add_argument("--run_dir", type=str, default=None, help="Specific run directory to load instead of the latest run")
     parser.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint path to load")
     parser.add_argument("--results_dir", type=str, default=None, help="Override the directory where test CSVs are saved")
+    
     args = parser.parse_args()
 
-    if args.run_dir is not None:
+    # --run_folder input
+    if args.run_folder is not None:
+        manifest_path = os.path.join(args.run_folder, "manifest.json")
+        
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        else:
+            # Fallback layout mapping based on your structure
+            manifest = {
+                "config_snapshot_path": os.path.join(args.run_folder, "config.yml"),
+                "checkpoint_path": os.path.join(args.run_folder, "checkpoint_best.pth"),
+                "results_dir": os.path.join(args.run_folder, "results"),
+            }
+
+    # separate inputs for config and checkpoint
+    elif args.run_dir is not None:
         manifest_path = os.path.join(args.run_dir, "manifest.json")
         legacy_manifest_path = os.path.join(args.run_dir, "run_manifest.json")
         if os.path.exists(manifest_path):
@@ -323,22 +342,24 @@ if __name__ == "__main__":
                 manifest["checkpoint_path"] = os.path.join(args.run_dir, "checkpoints", "best.pth")
     else:
         if args.checkpoint is None:
-            raise ValueError("Provide either --run_dir or --checkpoint.")
+            raise ValueError("Provide either --run_folder, --run_dir, or an explicit --checkpoint.")
         manifest = {
             "config_snapshot_path": args.config,
             "checkpoint_path": args.checkpoint,
             "results_dir": "results",
         }
 
+    # Execute inference and evaluation
     cfg_path = manifest.get("config_snapshot_path") or args.config
     cfg = load_config(cfg_path)
     model_path = args.checkpoint or manifest["checkpoint_path"]
     results_dir = args.results_dir or manifest.get("results_dir") or os.path.join(os.path.dirname(model_path), "..", "results")
+    
     os.makedirs(results_dir, exist_ok=True)
     
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     infer_and_evaluate(cfg, model_path, None, results_dir, device)
+    
     plot_results(results_dir, pd.read_csv(os.path.join(results_dir, os.listdir(results_dir)[-1])), cfg_path)

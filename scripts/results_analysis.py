@@ -95,22 +95,24 @@ def compute_metrics_from_csv(df):
     # =========================
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
     plot_train_val(
+        df,
         ax1,
         "epoch",
         "train_abs_trans",
         "val_abs_trans",
-        "Translation Error",
-        "Translation Error (mm)",
+        title="Translation Error",
+        ylabel="Translation Error (mm)",
         train_label="Train Translation",
         val_label="Val Translation",
     )
     plot_train_val(
+        df,
         ax2,
         "epoch",
         "train_abs_rot_x",
         "val_abs_rot_x",
-        "Rotation Error",
-        "Rotation Error (deg)",
+        title="Rotation Error",
+        ylabel="Rotation Error (deg)",
         train_label="Train Rotation",
         val_label="Val Rotation",
         train_color="orange",
@@ -128,8 +130,8 @@ def compute_metrics_from_csv(df):
     # =========================
     if "train_abs_y" in df.columns or "val_abs_y" in df.columns or "train_abs_z" in df.columns or "val_abs_z" in df.columns:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-        plot_train_val(ax1, "epoch", "train_abs_y", "val_abs_y", "Y-axis Error", "Abs Error (m)", train_label="Train Y", val_label="Val Y")
-        plot_train_val(ax2, "epoch", "train_abs_z", "val_abs_z", "Z-axis Error", "Abs Error (m)", train_label="Train Z", val_label="Val Z", train_color="#2ca02c", val_color="#9467bd")
+        plot_train_val(df, ax1, "epoch", "train_abs_y", "val_abs_y", "Y-axis Error", ylabel="Abs Error (m)", train_label="Train Y", val_label="Val Y")
+        plot_train_val(df, ax2, "epoch", "train_abs_z", "val_abs_z", "Z-axis Error", ylabel="Abs Error (m)", train_label="Train Z", val_label="Val Z", train_color="#2ca02c", val_color="#9467bd")
         ax2.set_xlabel("Epoch")
         add_run_metadata(fig, df)
         fig.tight_layout(rect=[0, 0.05, 1, 1])
@@ -216,7 +218,7 @@ def compute_metrics_from_csv(df):
 
 if __name__ == "__main__":
     # Load your CSV (replace with your file path)
-    df = pd.read_csv(r"runs\20260529_192320_bs16_gated_Sigmoid\metrics.csv")
+    df = pd.read_csv(r"runs\20260707_104025_bs16_spatial_gated_2d\metrics.csv")
 
     # Ensure numeric columns
     numeric_cols = [

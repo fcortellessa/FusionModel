@@ -169,9 +169,10 @@ class PoseEstimationNet(nn.Module):
         self.conv_p5 = nn.Conv2d(dim_p5, dim_p5//2, 1)
 
         # 3. Spatial Pooling: Downsampling layers to reach target spatial dimensions
-        self.down_p3 = nn.AdaptiveAvgPool2d((20, 20))
-        self.down_p4 = nn.AdaptiveAvgPool2d((5, 5))
-        self.down_p5 = nn.AdaptiveAvgPool2d((5, 5))
+        self.spatial_grid_size = (10, 10)
+        self.down_p3 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
+        self.down_p4 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
+        self.down_p5 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
 
         # 4. Fusion
         # Compute feature dimension

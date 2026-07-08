@@ -1,5 +1,6 @@
 __pychache__/
 .venv/
+data_capture/.py3_12_venv/
 .vscode/launch.json
 .github/
 *.egg-info/

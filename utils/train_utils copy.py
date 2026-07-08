@@ -52,7 +52,7 @@ def _build_named_param_groups(model, base_lr):
     return param_groups
 
 
-######
+# ============================================================================
 def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
     schedule_cfg = schedule_cfg or {}
 
@@ -87,7 +87,6 @@ def _compute_warmup_epochs(num_epochs, schedule_cfg):
         warmup_epochs = int(round(num_epochs * pct_start))
 
     return max(1, min(warmup_epochs, max(1, num_epochs - 1)))
-
 
 def _cosine_interp(start, end, progress):
     progress = min(max(progress, 0.0), 1.0)
@@ -218,9 +217,9 @@ def _build_multi_cycle_schedule(num_epochs, cfg):
 
     return lr_scale
 
+# ============================================================================
 
 
-#####
 def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
     schedule_cfg = schedule_cfg or {}
     if not bool(schedule_cfg.get("enabled", False)):
@@ -265,7 +264,6 @@ def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
 def _apply_metric_accumulation(metric_sums, batch_values):
     for key, value in batch_values.items():
         metric_sums[key] += value
-
 
 def build_epoch_metrics_row(
     metadata,

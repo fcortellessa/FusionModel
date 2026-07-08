@@ -9,7 +9,6 @@ from torch import nn
 from utils.utils import build_run_artifacts, save_yaml, get_optimizer, save_json
 
 
-
 def _get_lr_by_group(optimizer, group_name):
     for group in optimizer.param_groups:
         if group.get("name") == group_name:
@@ -50,7 +49,6 @@ def _build_named_param_groups(model, base_lr):
         )
 
     return param_groups
-
 
 def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
     schedule_cfg = schedule_cfg or {}
@@ -96,7 +94,6 @@ def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
 def _apply_metric_accumulation(metric_sums, batch_values):
     for key, value in batch_values.items():
         metric_sums[key] += value
-
 
 def build_epoch_metrics_row(
     metadata,

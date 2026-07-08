@@ -75,22 +75,44 @@ class PoseEstimationNet(nn.Module):
         self.conv_p4 = nn.Conv2d(c4, c4//2, 1)
         self.conv_p5 = nn.Conv2d(c5, c5//2, 1)
 
-        self.down_p3 = nn.AdaptiveAvgPool2d((20, 20))
-        self.down_p4 = nn.AdaptiveAvgPool2d((5, 5))
-        self.down_p5 = nn.AdaptiveAvgPool2d((5, 5))
+        self.spatial_grid_size = (10, 10)
+        self.down_p3 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
+        self.down_p4 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
+        self.down_p5 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
 
         # 2. Fusion module
-        with torch.no_grad():
-            dummy_feat = self.forward_single_stream(dummy_input, extractor)
-            feat_dim = dummy_feat.shape[1]
+        # Determine spatial dimensions
+        self.is_2d_fusion = (fusion == "spatial_gated_2d")
 
-        # build_fusion returns a single fusion module instance as specified by the config
-        self.fusion = build_fusion(fusion, feat_dim, len(streams))
+        if self.is_2d_fusion:
+            # We treat the unified pyramid channel footprint as our 'dim'
+            # Channels: (c3//2) + (c4//2) + (c5//2)
+            self.total_spatial_channels = (c3//2) + (c4//2) + (c5//2)
+            
+            # Instantiate the 2D fusion via registry
+            self.fusion = build_fusion(fusion, self.total_spatial_channels, len(streams))
+            
+            # Post-fusion convolution to mix features spatially across scales
+            self.fusion_post_conv = nn.Sequential(
+                nn.Conv2d(self.total_spatial_channels, self.total_spatial_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(self.total_spatial_channels) if use_batchnorm else nn.Identity(),
+                nn.GELU()
+            )
+            # Unified grid size maps directly to the linear layers
+            fused_dim = self.total_spatial_channels * self.spatial_grid_size[0] * self.spatial_grid_size[1]
+        else:
+            with torch.no_grad():
+                dummy_feat = self.forward_single_stream(dummy_input, extractor)
+                feat_dim = dummy_feat.shape[1]
+
+            # build_fusion returns a single fusion module instance as specified by the config
+            self.fusion = build_fusion(fusion, feat_dim, len(streams))
+            fused_dim = feat_dim * len(streams) if fusion == "concat" else feat_dim
+
         self._fusion_accepts_aux_losses = "aux_losses" in inspect.signature(self.fusion.forward).parameters
         self.weights = None
         self.last_fusion_targets = None
 
-        fused_dim = feat_dim * len(streams) if fusion == "concat" else feat_dim
 
         # 3. Prediction Heads
         # Helper to process config values into a list
@@ -179,37 +201,71 @@ class PoseEstimationNet(nn.Module):
 
 
     def forward(self, x_dict, aux_losses=None):
-        features = []
+        if self.is_2d_fusion:
+            # --- 2D SPATIAL FUSION PIPELINE ---
+            stream_p3s, stream_p4s, stream_p5s = [], [], []
+            
+            for stream in self.streams:
+                x = x_dict[stream]
+                extractor = self.feature_extractors[stream]
+                
+                # Extract raw features from backbone
+                p3, p4, p5 = extract_features_raw(x, extractor, self.p345_indices)
+                
+                # Align maps to a unified spatial layout
+                p3_f = self.down_p3(self.conv_p3(p3))
+                p4_f = self.down_p4(self.conv_p4(p4))
+                p5_f = self.down_p5(self.conv_p5(p5))
+                
+                # Concatenate scales per-stream to build a 2D spatial block
+                spatial_block = torch.cat([p3_f, p4_f, p5_f], dim=1) # [B, total_spatial_channels, H, W]
+                
+                # Append the constructed spatial map
+                stream_p3s.append(spatial_block) # Reusing list to store blocks
 
-        for stream in self.streams:
-            x = x_dict[stream]
-            extractor = self.feature_extractors[stream]
-            feat = self.forward_single_stream(x, extractor)
-            features.append(feat)
+            # Call your registry module with a list of 2D Tensors!
+            fusion_out = self.fusion(stream_p3s)
+            fused_spatial, gate_weights = fusion_out  # gate_weights shape: [B, num_streams, 10, 10]
+            
+            # Mix structural elements locally, then flatten for heads
+            fused_spatial = self.fusion_post_conv(fused_spatial)
+            fused = fused_spatial.flatten(1)
+            
+            # Log average spatial weights across the 10x10 coordinates
+            avg_fusion_weights = gate_weights.mean(dim=(0, 2, 3)) 
 
-        # Fuse features (Shape: [Batch, Fused_Dim])
-        if aux_losses is not None and self._fusion_accepts_aux_losses:
-            fusion_out = self.fusion(features, aux_losses=aux_losses)
         else:
-            fusion_out = self.fusion(features)
+            # --- 1D FUSION PIPELINE ---
+            features = []
 
-        fusion_targets = None
-        if isinstance(fusion_out, tuple):
-            if len(fusion_out) == 2:
-                fused, fusion_weights = fusion_out
-            elif len(fusion_out) == 3:
-                fused, fusion_weights, fusion_targets = fusion_out
+            for stream in self.streams:
+                x = x_dict[stream]
+                extractor = self.feature_extractors[stream]
+                feat = self.forward_single_stream(x, extractor)
+                features.append(feat)
+
+            # Fuse features (Shape: [Batch, Fused_Dim])
+            if aux_losses is not None and self._fusion_accepts_aux_losses:
+                fusion_out = self.fusion(features, aux_losses=aux_losses)
             else:
-                raise ValueError(
-                    f"Fusion module '{self.fusion_type}' returned {len(fusion_out)} values; expected 1, 2, or 3."
-                )
+                fusion_out = self.fusion(features)
 
-            avg_fusion_weights = fusion_weights.mean(dim=0) if fusion_weights is not None else None
-        else:
-            fused = fusion_out
-            avg_fusion_weights = None
+            fusion_targets = None
+            if isinstance(fusion_out, tuple):
+                if len(fusion_out) == 2:
+                    fused, fusion_weights = fusion_out
+                elif len(fusion_out) == 3:
+                    fused, fusion_weights, fusion_targets = fusion_out
+                else:
+                    raise ValueError(
+                        f"Fusion module '{self.fusion_type}' returned {len(fusion_out)} values; expected 1, 2, or 3."
+                    )
+                avg_fusion_weights = fusion_weights.mean(dim=0) if fusion_weights is not None else None
+            else:
+                fused = fusion_out
+                avg_fusion_weights = None
 
-        self.last_fusion_targets = fusion_targets
+            self.last_fusion_targets = fusion_targets
 
         # Handle SE(3) direct optimization
         if self.rotation_parametrisation == "se3_direct":

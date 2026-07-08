@@ -2,10 +2,9 @@ model:
   backbone: yolo26n.pt
   freeze_backbone: false
   streams: ["rgb_image", "digit_image"]
-  fusion: "gated"
+  fusion: "spatial_gated_2d"
   fusion_temperature: 50.0
-  head_type: 2D_unit_vector
-  rotation_loss_type: geodesic  # Options: "geodesic" or "normalized_mse"
+  head_type: quaternion
   activation: GELU
   mlp_quat_1: 1024
   mlp_quat_2: 1024
@@ -21,7 +20,7 @@ training:
   num_workers: 4
   optimizer: Adam
   uncertainty_weighting:
-    enabled: false
+    enabled: true
     init_log_var_rot: 0.0
     init_log_var_trans: 0.0
     lr_mult: 1.0
@@ -42,7 +41,7 @@ training:
     min_lr_mult: 0.00001
 
 data:
-  root: "D:/MA/FusionModel/data" #"D:/MA/USB_TCP_combined"
+  root: "D:/MA/FusionModel/data"
   streams: ["mono_cam", "tactile"]
   image_size: 640
   use_rgb: true

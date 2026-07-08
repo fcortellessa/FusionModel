@@ -16,7 +16,8 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 ROBOT_IP = "192.168.1.100" 
 DIGIT_SERIAL = "D12345" # Replace with DIGIT's specific serial number on the back of the camera
 
-# Base fixture position (The exact calibrated reference pose [x,y,z,rx,ry,rz] = (0,0,0,0,0,0) of the USB connector in Robot Base Frame)
+# Base fixture position:
+# The exact calibrated reference pose [x,y,z,rx,ry,rz] = (0,0,0,0,0,0) of the USB connector in Robot Base Frame
 REFERENCE_POSE = [0.4, 0.1, 0.2, 3.14, 0.0, 0.0] #??? ToDo
 
 # Initialize RealSense D405
@@ -29,8 +30,7 @@ align = rs.align(rs.stream.color)
 
 # Initialize DIGIT Tactile Sensor
 digit = Digit(DIGIT_SERIAL)
-digit.connect()
-# Upon connection, the DIGIT defaults to VGA: 640x480 @ 30fps
+digit.connect()     # Upon connection, the DIGIT defaults to VGA: 640x480 @ 30fps
 
 # Initialize UR5 Manipulator
 rtde_c = RTDEControl(ROBOT_IP)
