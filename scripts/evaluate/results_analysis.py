@@ -101,7 +101,7 @@ def compute_metrics_from_csv(df):
         "train_abs_trans",
         "val_abs_trans",
         title="Translation Error",
-        ylabel="Translation Error (mm)",
+        ylabel="Translation Error (m)",
         train_label="Train Translation",
         val_label="Val Translation",
     )
