@@ -268,14 +268,25 @@ def analyze_folder_ablation(runs_dir: Path, output_dir: Path):
     metrics_to_benchmark = [col for col in ['train_loss', 'epoch_time_sec', 'val_abs_rot_x', 'val_abs_y', 'val_abs_z'] if col in master_history.columns]
 
     for metric in metrics_to_benchmark:
-        fig, ax = plt.subplots(figsize=(11, 5.5))
+        fig, ax = plt.subplots(figsize=(10, 5))
         for variant in variants:
             v_df = master_history[master_history['variant'] == variant].dropna(subset=[metric])
             if v_df.empty:
                 continue
             
             stats = v_df.groupby('epoch')[metric].agg(['mean', 'std']).reset_index()
-            lbl = variant if len(variant) <= 55 else variant[:52] + "..."
+            
+            # Wrap label text into two lines if it's too long
+            if len(variant) > 30:
+                # Split at a clean parameter boundary if possible
+                midpoint = len(variant) // 2
+                split_idx = variant.find(" | ", midpoint - 5, midpoint + 5)
+                if split_idx != -1:
+                    lbl = variant[:split_idx] + "\n" + variant[split_idx:]
+                else:
+                    lbl = variant[:30] + "\n" + variant[30:]
+            else:
+                lbl = variant
             
             ax.plot(stats['epoch'], stats['mean'], label=lbl, color=colors[variant], linewidth=2)
             if 'std' in stats.columns and stats['std'].notna().any():
@@ -288,16 +299,22 @@ def analyze_folder_ablation(runs_dir: Path, output_dir: Path):
         elif "rot_x" in metric:
             unit_str = "deg"
         else:
-            unit_str = "m or mm"
+            unit_str = "m"
 
         ax.set_title(f"Ablation Performance Metric: Comparison of {metric}", fontsize=12, fontweight='bold')
         ax.set_xlabel("Epoch")
         ax.set_ylabel(f"Scale Measure [{unit_str}]")
         ax.grid(True, linestyle='--', alpha=0.5)
-        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
-        plt.tight_layout()
+        # Store the legend object in a variable
+        leg = ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
         
-        plt.savefig(output_dir / f"ablation_comparison_{metric}.png", dpi=150)
+        # Save ensuring the legend bounding box is explicitly measured
+        plt.savefig(
+            output_dir / f"ablation_comparison_{metric}.png", 
+            dpi=150, 
+            bbox_extra_artists=(leg,), 
+            bbox_inches='tight'
+        )
         plt.close()
         
     print(f"Multi-run ablation bench plots saved inside target folder: {output_dir}")
