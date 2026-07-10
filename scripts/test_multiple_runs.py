@@ -18,6 +18,9 @@ RUN_FOLDERS_TO_BE_INFERENCED = [
 # Option 2: Provide a parent directory (it will scan all direct subdirectories)
 ABLATION_FOLDER = "runs/data_augmentation/"
 
+# Subdirectories within the ablation folder to completely skip
+IGNORE_FOLDERS = ["results"]
+
 # ==============================================================================
 # EXECUTION LOGIC
 # ==============================================================================
@@ -46,11 +49,11 @@ def main():
 
     # 2. Automatically find and add subfolders from the ablation directory
     if ABLATION_FOLDER and os.path.isdir(ABLATION_FOLDER):
-        subdirs = [
-            os.path.join(ABLATION_FOLDER, d) 
-            for d in os.listdir(ABLATION_FOLDER) 
-            if os.path.isdir(os.path.join(ABLATION_FOLDER, d))
-        ]
+        subdirs = []
+        for d in os.listdir(ABLATION_FOLDER):
+            # Check if it's a directory and NOT in our ignore list
+            if os.path.isdir(os.path.join(ABLATION_FOLDER, d)) and d not in IGNORE_FOLDERS:
+                subdirs.append(os.path.join(ABLATION_FOLDER, d))
         subdirs.sort()  # Sorts them alphabetically/numerically
         folders_to_process.extend(subdirs)
 
