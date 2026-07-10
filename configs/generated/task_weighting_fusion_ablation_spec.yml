@@ -22,7 +22,7 @@ fixed_overrides:
   training.dropout_trans: 0.1
   training.use_batchnorm: true
   training.lr_schedule.enabled: true
-  training.lr_schedule.type: one_cycle
+  training.lr_schedule.type: multi_cycle
   training.lr_schedule.pct_start: 0.2
   training.lr_schedule.start_lr_mult: 0.2
   training.lr_schedule.max_lr_mult: 3.0

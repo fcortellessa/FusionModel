@@ -4,6 +4,34 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
+
+import yaml
+
+
+def discover_configs_from_folder(config_dir):
+    config_path = Path(config_dir)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config folder does not exist: {config_dir}")
+    if not config_path.is_dir():
+        raise NotADirectoryError(f"Expected a directory for --config_dir, got: {config_dir}")
+
+    configs = []
+    for path in sorted(config_path.rglob("*.yml")):
+        if not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle) or {}
+        except Exception:
+            continue
+
+        if isinstance(data, dict) and "model" in data and "training" in data:
+            configs.append(str(path))
+
+    if not configs:
+        raise ValueError(f"No .yml config files found in: {config_dir}")
+    return configs
 
 
 def run_multiple_trainings(configs, batch_sizes, tb_port, reset_tb_dir=True, cleanup_tb_dir=False):
@@ -42,6 +70,12 @@ def run_multiple_trainings(configs, batch_sizes, tb_port, reset_tb_dir=True, cle
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--config_dir",
+        type=str,
+        default=None,
+        help="Directory containing .yml config files to run. If set, overrides --configs.",
+    )
+    parser.add_argument(
         "--configs",
         nargs="+",
         default=["configs/gated.yml", "configs/default.yml"],
@@ -72,8 +106,10 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    configs = discover_configs_from_folder(args.config_dir) if args.config_dir else args.configs
     run_multiple_trainings(
-        configs=args.configs,
+        configs=configs,
         batch_sizes=args.batch_sizes,
         tb_port=args.tensorboard_port,
         reset_tb_dir=not args.no_reset_tb_dir,

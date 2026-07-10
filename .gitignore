@@ -14,5 +14,6 @@ checkpoints/
 logs/
 results/
 runs/
+plots/
 
 *archived*
