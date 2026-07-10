@@ -397,15 +397,16 @@ class TrainingConfigBuilder:
         return get_optimizer(param_groups, optimizer_name=optimizer_name, lr=base_lr)
     
     def build_uncertainty_module(self, optimizer, base_lr):
-        """Build uncertainty weighting module if enabled."""
-        uncertainty_cfg = self.cfg.get("training", {}).get("uncertainty_weighting", {})
-        use_uncertainty_weighting = bool(uncertainty_cfg.get("enabled", False))
+        """Build task weighting module if enabled."""
+        training_cfg = self.cfg.get("training", {})
+        task_weighting_cfg = training_cfg.get("task_weighting", training_cfg.get("uncertainty_weighting", {}))
+        use_task_weighting = bool(task_weighting_cfg.get("enabled", False))
 
-        if not use_uncertainty_weighting:
+        if not use_task_weighting:
             return None
 
-        # type can be 'uncertainty' (learned log-variance) or 'gradnorm'
-        utype = str(uncertainty_cfg.get("type", "uncertainty")).lower()
+        # type can be 'uncertainty' (learned log-variance), 'gradnorm', or 'dwa'
+        utype = str(task_weighting_cfg.get("type", "uncertainty")).lower()
 
         class UncertaintyWrapper(nn.Module):
             """Standardised wrapper that exposes `forward` and `get_stats()`.
@@ -463,15 +464,15 @@ class TrainingConfigBuilder:
             from losses.uncertainty_weighting import UncertaintyWeighting
 
             base_module = UncertaintyWeighting(
-                init_log_var_rot=float(uncertainty_cfg.get("init_log_var_rot", 0.0)),
-                init_log_var_trans=float(uncertainty_cfg.get("init_log_var_trans", 0.0)),
+                init_log_var_rot=float(task_weighting_cfg.get("init_log_var_rot", 0.0)),
+                init_log_var_trans=float(task_weighting_cfg.get("init_log_var_trans", 0.0)),
             ).to(self.device)
 
             wrapper = UncertaintyWrapper(base_module, kind="uncertainty")
 
             params = list(wrapper.parameters())
             if params:
-                uncertainty_lr_mult = float(uncertainty_cfg.get("lr_mult", 1.0))
+                uncertainty_lr_mult = float(task_weighting_cfg.get("lr_mult", 1.0))
                 optimizer.add_param_group({
                     "name": "uncertainty",
                     "params": params,
@@ -509,18 +510,28 @@ class TrainingConfigBuilder:
                     except Exception:
                         return None
 
-            adapter = GradNormAdapter(uncertainty_cfg).to(self.device)
+            adapter = GradNormAdapter(task_weighting_cfg).to(self.device)
             wrapper = UncertaintyWrapper(adapter, kind="gradnorm")
 
             params = list(wrapper.parameters())
             if params:
-                uncertainty_lr_mult = float(uncertainty_cfg.get("lr_mult", 1.0))
+                uncertainty_lr_mult = float(task_weighting_cfg.get("lr_mult", 1.0))
                 optimizer.add_param_group({
                     "name": "uncertainty",
                     "params": params,
                     "lr": base_lr * uncertainty_lr_mult,
                 })
 
+            return wrapper
+
+        elif utype == "dwa":
+            from losses.task_weighting import DynamicWeightAverage
+
+            dwa_module = DynamicWeightAverage(
+                temperature=float(task_weighting_cfg.get("dwa_temperature", 2.0)),
+            ).to(self.device)
+
+            wrapper = UncertaintyWrapper(dwa_module, kind="dwa")
             return wrapper
 
         else:

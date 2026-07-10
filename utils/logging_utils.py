@@ -225,12 +225,26 @@ def log_run_start(logger, log_file, artifacts, tensorboard_log_dir, run_metadata
     )
 
     if uncertainty_enabled:
-        logger.info(
-            "uncertainty_weighting enabled=true "
-            f"init_log_var_rot={uncertainty_cfg.get('init_log_var_rot', 0.0)} "
-            f"init_log_var_trans={uncertainty_cfg.get('init_log_var_trans', 0.0)} "
-            f"lr_mult={uncertainty_cfg.get('lr_mult', 1.0)}"
-        )
+        weighting_type = str(uncertainty_cfg.get('type', 'uncertainty')).lower()
+        if weighting_type == 'dwa':
+            logger.info(
+                "task_weighting enabled=true "
+                f"type=dwa dwa_temperature={uncertainty_cfg.get('dwa_temperature', 2.0)}"
+            )
+        elif weighting_type == 'gradnorm':
+            logger.info(
+                "task_weighting enabled=true "
+                f"type=gradnorm gradnorm_lr={uncertainty_cfg.get('gradnorm_lr', 1e-4)} "
+                f"gradnorm_alpha={uncertainty_cfg.get('gradnorm_alpha', 0.0)} "
+                f"lr_mult={uncertainty_cfg.get('lr_mult', 1.0)}"
+            )
+        else:
+            logger.info(
+                "task_weighting enabled=true "
+                f"type=uncertainty init_log_var_rot={uncertainty_cfg.get('init_log_var_rot', 0.0)} "
+                f"init_log_var_trans={uncertainty_cfg.get('init_log_var_trans', 0.0)} "
+                f"lr_mult={uncertainty_cfg.get('lr_mult', 1.0)}"
+            )
 
     if bool(lr_schedule_cfg.get("enabled", False)):
         logger.info(

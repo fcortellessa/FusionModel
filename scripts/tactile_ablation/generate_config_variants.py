@@ -163,11 +163,14 @@ def load_variant_entries(spec: Mapping[str, Any]) -> List[Dict[str, Any]]:
 
     entries: List[Dict[str, Any]] = []
     varying_grid_keys = [key for key, values in grid.items() if len(normalize_scalar_list(values)) > 1]
-    for combo in expand_grid(grid):
-        overrides = dict(fixed_overrides)
-        overrides.update(combo)
-        name_overrides = {key: combo[key] for key in varying_grid_keys}
-        entries.append({"prefix": prefix, "overrides": overrides, "name_overrides": name_overrides})
+    if grid:
+        for combo in expand_grid(grid):
+            overrides = dict(fixed_overrides)
+            overrides.update(combo)
+            name_overrides = {key: combo[key] for key in varying_grid_keys}
+            entries.append({"prefix": prefix, "overrides": overrides, "name_overrides": name_overrides})
+    elif not explicit_variants:
+        entries.append({"prefix": prefix, "overrides": dict(fixed_overrides), "name_overrides": dict(fixed_overrides)})
 
     for variant in explicit_variants:
         if not isinstance(variant, Mapping):

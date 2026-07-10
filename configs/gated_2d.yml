@@ -19,8 +19,11 @@ training:
   epochs: 150
   num_workers: 4
   optimizer: Adam
-  uncertainty_weighting:
+  task_weighting:
     enabled: true
+    type: gradnorm
+    gradnorm_lr: 1.0e-4
+    gradnorm_alpha: 0.5
     init_log_var_rot: 0.0
     init_log_var_trans: 0.0
     lr_mult: 1.0

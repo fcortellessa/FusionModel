@@ -1,0 +1,254 @@
+output_dir: "configs/generated/task_weighting_fusion_ablation"
+name_prefix: "task_weighting_fusion"
+
+fixed_overrides:
+  model.backbone: "yolo26n.pt"
+  model.freeze_backbone: false
+  model.streams: ["rgb_image", "digit_image"]
+  model.head_type: quaternion
+  model.activation: GELU
+  model.mlp_quat_1: 1024
+  model.mlp_quat_2: 1024
+  model.mlp_quat_3: 512
+  model.mlp_trans_1: 256
+  model.mlp_trans_2: 128
+  model.mlp_trans_3: 64
+  training.lr: 0.001
+  training.batch_size: 16
+  training.epochs: 150
+  training.num_workers: 4
+  training.optimizer: Adam
+  training.dropout_rot: 0.3
+  training.dropout_trans: 0.1
+  training.use_batchnorm: true
+  training.lr_schedule.enabled: true
+  training.lr_schedule.type: one_cycle
+  training.lr_schedule.pct_start: 0.2
+  training.lr_schedule.start_lr_mult: 0.2
+  training.lr_schedule.max_lr_mult: 3.0
+  training.lr_schedule.final_lr_mult: 0.05
+  training.head_lr_decay.enabled: false
+  training.head_lr_decay.patience: 5
+  training.head_lr_decay.factor: 0.2
+  training.head_lr_decay.min_lr_mult: 1.0e-05
+  data.root: "D:/MA/FusionModel/data"
+  data.streams: ["mono_cam", "tactile"]
+  data.image_size: 640
+  data.use_rgb: true
+  data.use_tactile: true
+  data.use_depth: false
+  data.augmentation.enabled: false
+  data.augmentation.seed: 42
+  data.augmentation.photo_count: 1
+  data.augmentation.overwrite: false
+
+variants:
+  - name: gated_fixed_seed42
+    overrides:
+      model.fusion: "gated"
+      training.seed: 42
+      training.task_weighting.enabled: false
+
+  - name: gated_fixed_seed43
+    overrides:
+      model.fusion: "gated"
+      training.seed: 43
+      training.task_weighting.enabled: false
+
+  - name: gated_fixed_seed44
+    overrides:
+      model.fusion: "gated"
+      training.seed: 44
+      training.task_weighting.enabled: false
+
+  - name: gated_uncertainty_seed42
+    overrides:
+      model.fusion: "gated"
+      training.seed: 42
+      training.task_weighting.enabled: true
+      training.task_weighting.type: uncertainty
+      training.task_weighting.init_log_var_rot: 0.0
+      training.task_weighting.init_log_var_trans: 0.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: gated_uncertainty_seed43
+    overrides:
+      model.fusion: "gated"
+      training.seed: 43
+      training.task_weighting.enabled: true
+      training.task_weighting.type: uncertainty
+      training.task_weighting.init_log_var_rot: 0.0
+      training.task_weighting.init_log_var_trans: 0.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: gated_uncertainty_seed44
+    overrides:
+      model.fusion: "gated"
+      training.seed: 44
+      training.task_weighting.enabled: true
+      training.task_weighting.type: uncertainty
+      training.task_weighting.init_log_var_rot: 0.0
+      training.task_weighting.init_log_var_trans: 0.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: gated_gradnorm_seed42
+    overrides:
+      model.fusion: "gated"
+      training.seed: 42
+      training.task_weighting.enabled: true
+      training.task_weighting.type: gradnorm
+      training.task_weighting.gradnorm_lr: 1.0e-4
+      training.task_weighting.gradnorm_alpha: 0.5
+      training.task_weighting.lr_mult: 1.0
+
+  - name: gated_gradnorm_seed43
+    overrides:
+      model.fusion: "gated"
+      training.seed: 43
+      training.task_weighting.enabled: true
+      training.task_weighting.type: gradnorm
+      training.task_weighting.gradnorm_lr: 1.0e-4
+      training.task_weighting.gradnorm_alpha: 0.5
+      training.task_weighting.lr_mult: 1.0
+
+  - name: gated_gradnorm_seed44
+    overrides:
+      model.fusion: "gated"
+      training.seed: 44
+      training.task_weighting.enabled: true
+      training.task_weighting.type: gradnorm
+      training.task_weighting.gradnorm_lr: 1.0e-4
+      training.task_weighting.gradnorm_alpha: 0.5
+      training.task_weighting.lr_mult: 1.0
+
+  - name: gated_dwa_seed42
+    overrides:
+      model.fusion: "gated"
+      training.seed: 42
+      training.task_weighting.enabled: true
+      training.task_weighting.type: dwa
+      training.task_weighting.dwa_temperature: 2.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: gated_dwa_seed43
+    overrides:
+      model.fusion: "gated"
+      training.seed: 43
+      training.task_weighting.enabled: true
+      training.task_weighting.type: dwa
+      training.task_weighting.dwa_temperature: 2.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: gated_dwa_seed44
+    overrides:
+      model.fusion: "gated"
+      training.seed: 44
+      training.task_weighting.enabled: true
+      training.task_weighting.type: dwa
+      training.task_weighting.dwa_temperature: 2.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_fixed_seed42
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 42
+      training.task_weighting.enabled: false
+
+  - name: spatial_gated_2d_fixed_seed43
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 43
+      training.task_weighting.enabled: false
+
+  - name: spatial_gated_2d_fixed_seed44
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 44
+      training.task_weighting.enabled: false
+
+  - name: spatial_gated_2d_uncertainty_seed42
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 42
+      training.task_weighting.enabled: true
+      training.task_weighting.type: uncertainty
+      training.task_weighting.init_log_var_rot: 0.0
+      training.task_weighting.init_log_var_trans: 0.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_uncertainty_seed43
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 43
+      training.task_weighting.enabled: true
+      training.task_weighting.type: uncertainty
+      training.task_weighting.init_log_var_rot: 0.0
+      training.task_weighting.init_log_var_trans: 0.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_uncertainty_seed44
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 44
+      training.task_weighting.enabled: true
+      training.task_weighting.type: uncertainty
+      training.task_weighting.init_log_var_rot: 0.0
+      training.task_weighting.init_log_var_trans: 0.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_gradnorm_seed42
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 42
+      training.task_weighting.enabled: true
+      training.task_weighting.type: gradnorm
+      training.task_weighting.gradnorm_lr: 1.0e-4
+      training.task_weighting.gradnorm_alpha: 0.5
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_gradnorm_seed43
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 43
+      training.task_weighting.enabled: true
+      training.task_weighting.type: gradnorm
+      training.task_weighting.gradnorm_lr: 1.0e-4
+      training.task_weighting.gradnorm_alpha: 0.5
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_gradnorm_seed44
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 44
+      training.task_weighting.enabled: true
+      training.task_weighting.type: gradnorm
+      training.task_weighting.gradnorm_lr: 1.0e-4
+      training.task_weighting.gradnorm_alpha: 0.5
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_dwa_seed42
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 42
+      training.task_weighting.enabled: true
+      training.task_weighting.type: dwa
+      training.task_weighting.dwa_temperature: 2.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_dwa_seed43
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 43
+      training.task_weighting.enabled: true
+      training.task_weighting.type: dwa
+      training.task_weighting.dwa_temperature: 2.0
+      training.task_weighting.lr_mult: 1.0
+
+  - name: spatial_gated_2d_dwa_seed44
+    overrides:
+      model.fusion: "spatial_gated_2d"
+      training.seed: 44
+      training.task_weighting.enabled: true
+      training.task_weighting.type: dwa
+      training.task_weighting.dwa_temperature: 2.0
+      training.task_weighting.lr_mult: 1.0

@@ -81,6 +81,11 @@ def _compute_uncertainty_stats(uncertainty_module):
 
     # Backwards-compatible attribute access if module exposes log_var_*
     try:
+        if hasattr(uncertainty_module, "get_stats") and callable(getattr(uncertainty_module, "get_stats")):
+            stats = uncertainty_module.get_stats()
+            if stats:
+                return stats
+
         lv_rot = _to_float(uncertainty_module.log_var_rot)
         lv_trans = _to_float(uncertainty_module.log_var_trans)
         w_rot = float(torch.exp(-uncertainty_module.log_var_rot.detach()).item())
@@ -397,6 +402,15 @@ def train_loop(
                 logger=logger,
             )
 
+            if uncertainty_module is not None and hasattr(uncertainty_module, "update_epoch"):
+                try:
+                    uncertainty_module.update_epoch(
+                        train_avg["loss_q"],
+                        train_avg["loss_y"] + train_avg["loss_z"],
+                    )
+                except Exception as exc:
+                    logger.debug(f"Task-weighting epoch update skipped: {exc}")
+
             if val_avg["loss"] < best_val_loss:
                 best_val_loss = val_avg["loss"]
                 save_checkpoint(model, optimizer, epoch, val_avg["loss"], checkpoint_path)
@@ -544,7 +558,8 @@ def main(
         base_lr = float(cfg["training"]["lr"])
         optimizer = get_optimizer(param_groups, optimizer_name=optimizer_name, lr=base_lr)
         if uncertainty_module is not None:
-            uncertainty_lr_mult = float(cfg.get("training", {}).get("uncertainty_weighting", {}).get("lr_mult", 1.0))
+            task_weighting_cfg = cfg.get("training", {}).get("task_weighting", cfg.get("training", {}).get("uncertainty_weighting", {}))
+            uncertainty_lr_mult = float(task_weighting_cfg.get("lr_mult", 1.0))
             optimizer.add_param_group({
                 "name": "uncertainty",
                 "params": uncertainty_module.parameters(),
@@ -554,7 +569,7 @@ def main(
     # Prepare training metadata
     head_lr_cfg = cfg.get("training", {}).get("head_lr_decay", {})
     lr_schedule_cfg = cfg.get("training", {}).get("lr_schedule", {})
-    uncertainty_cfg = cfg.get("training", {}).get("uncertainty_weighting", {})
+    task_weighting_cfg = cfg.get("training", {}).get("task_weighting", cfg.get("training", {}).get("uncertainty_weighting", {}))
     
     resolved_head_lr_cfg = {
         "enabled": bool(head_lr_cfg.get("enabled", True)),
@@ -574,7 +589,7 @@ def main(
         "seed": cfg.get("training", {}).get("seed", ""),
         "head_lr_decay": resolved_head_lr_cfg,
         "lr_schedule": lr_schedule_cfg if lr_schedule_cfg else {"enabled": False},
-        "uncertainty_weighting": uncertainty_cfg if uncertainty_module is not None else {"enabled": False},
+        "task_weighting": task_weighting_cfg if uncertainty_module is not None else {"enabled": False},
     }
     
     # Save manifest

@@ -144,7 +144,7 @@ def analyze_any_ablation(runs_dir: str = "runs", output_file: str = None, plots_
         return
 
     config_df = pd.DataFrame.from_dict(all_configs, orient='index')
-    ignore_keys = ["data.augmentation.seed", "training.uncertainty_weighting.init_log_var_rot", "training.uncertainty_weighting.init_log_var_trans", "seed"]
+    ignore_keys = ["data.augmentation.seed", "training.task_weighting.init_log_var_rot", "training.task_weighting.init_log_var_trans", "training.uncertainty_weighting.init_log_var_rot", "training.uncertainty_weighting.init_log_var_trans", "seed"]
     config_df = config_df.drop(columns=[c for c in ignore_keys if c in config_df.columns], errors='ignore')
     
     unique_counts = config_df.nunique()
