@@ -396,7 +396,7 @@ class TrainingConfigBuilder:
         
         return get_optimizer(param_groups, optimizer_name=optimizer_name, lr=base_lr)
     
-    def build_uncertainty_module(self, optimizer, base_lr):
+    def build_uncertainty_module(self, optimizer, base_lr, shared_parameter=None):
         """Build task weighting module if enabled."""
         training_cfg = self.cfg.get("training", {})
         task_weighting_cfg = training_cfg.get("task_weighting", training_cfg.get("uncertainty_weighting", {}))
@@ -495,6 +495,7 @@ class TrainingConfigBuilder:
                         num_losses=2,
                         learning_rate=lr,
                         restoring_force_alpha=alpha,
+                        grad_norm_parameters=shared_parameter,
                     )
 
                 def forward(self, loss_rot, loss_trans, activations=None, **kwargs):
@@ -547,7 +548,8 @@ class TrainingConfigBuilder:
         param_groups = _build_named_param_groups(model, base_lr=float(self.cfg["training"]["lr"]))
         optimizer = self.build_optimizer(model, param_groups=param_groups)
         base_lr = float(self.cfg["training"]["lr"])
-        uncertainty_module = self.build_uncertainty_module(optimizer, base_lr)
+        shared_parameter = next((param for param in model.parameters() if param.requires_grad), None)
+        uncertainty_module = self.build_uncertainty_module(optimizer, base_lr, shared_parameter=shared_parameter)
         loss_function = self.build_loss_function()
         
         if self.logger:
@@ -580,7 +582,15 @@ class DataPipelineManager:
 
         configured_data_root = self.cfg.get("data", {}).get("root", "")
         if configured_data_root:
-            return os.path.abspath(configured_data_root)
+            # Accept common malformed absolute-home paths such as "home/user/...".
+            if configured_data_root.startswith("home/"):
+                configured_data_root = "/" + configured_data_root
+
+            if os.path.isabs(configured_data_root):
+                return os.path.abspath(configured_data_root)
+
+            project_root = os.path.abspath(os.path.join(self.base_dir, ".."))
+            return os.path.abspath(os.path.join(project_root, configured_data_root))
         else:
             return os.path.abspath(os.path.join(self.base_dir, "../Data"))
     

@@ -31,7 +31,7 @@ fixed_overrides:
   training.head_lr_decay.patience: 5
   training.head_lr_decay.factor: 0.2
   training.head_lr_decay.min_lr_mult: 1.0e-05
-  data.root: "D:/MA/FusionModel/data"
+  data.root: "/home/MA_Flavia/Documents/FusionModel/Data"
   data.streams: ["mono_cam", "tactile"]
   data.image_size: 640
   data.use_rgb: true

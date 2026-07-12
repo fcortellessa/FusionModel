@@ -41,7 +41,7 @@ training:
   
 
 data:
-  root: "D:/MA/FusionModel/data"
+  root: "/home/MA_Flavia/Documents/FusionModel/Data"
   streams: ["mono_cam", "tactile"]
   image_size: 640
   use_rgb: true

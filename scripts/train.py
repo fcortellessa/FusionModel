@@ -174,7 +174,11 @@ def _train_single_epoch(
             q_wt=f"{loss_q.item():.4f}"
         )
 
-        loss.backward()
+        if not (
+            uncertainty_module is not None
+            and getattr(uncertainty_module, "kind", None) == "gradnorm"
+        ):
+            loss.backward()
 
         log_train_step_to_tensorboard(
             tb_writer=tb_writer,
@@ -258,6 +262,11 @@ def validation_loop(
     """
     model.eval()
     val_metrics = _init_epoch_metrics()
+    uncertainty_for_loss = (
+        None
+        if uncertainty_module is not None and getattr(uncertainty_module, "kind", None) == "gradnorm"
+        else uncertainty_module
+    )
     
     num_val = len(val_loader)
     with torch.no_grad():
@@ -269,7 +278,7 @@ def validation_loop(
             
             # Compute loss and metrics using rotation handler
             loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(
-                pose_pred, pose, uncertainty_module
+                pose_pred, pose, uncertainty_for_loss
             )
             abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = rotation_handler.compute_metrics(
                 pose_pred, pose
