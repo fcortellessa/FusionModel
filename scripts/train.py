@@ -105,6 +105,61 @@ def _compute_uncertainty_stats(uncertainty_module):
         }
 
 
+def _init_fusion_gate_stats():
+    """Create accumulators for compact, per-stream gate diagnostics."""
+    return {"sum": None, "sum_sq": None, "count": None, "lt_0_1": None, "gt_0_9": None}
+
+
+def _accumulate_fusion_gate_stats(stats, gates):
+    """Accumulate all gate values while keeping channel-wise gates out of the CSV."""
+    if gates is None:
+        return
+
+    # Gate shapes are (B, streams) or (B, streams, channels).  Each row below
+    # therefore represents every gate value belonging to one stream.
+    by_stream = gates.detach().float().cpu().movedim(1, 0).reshape(gates.shape[1], -1)
+    gate_sum = by_stream.sum(dim=1)
+    gate_sum_sq = by_stream.square().sum(dim=1)
+    gate_count = torch.full_like(gate_sum, by_stream.shape[1])
+    low_count = (by_stream < 0.1).sum(dim=1)
+    high_count = (by_stream > 0.9).sum(dim=1)
+
+    if stats["sum"] is None:
+        stats.update({
+            "sum": gate_sum,
+            "sum_sq": gate_sum_sq,
+            "count": gate_count,
+            "lt_0_1": low_count,
+            "gt_0_9": high_count,
+        })
+        return
+
+    for key, value in {
+        "sum": gate_sum,
+        "sum_sq": gate_sum_sq,
+        "count": gate_count,
+        "lt_0_1": low_count,
+        "gt_0_9": high_count,
+    }.items():
+        stats[key] += value
+
+
+def _summarize_fusion_gate_stats(stats, prefix):
+    """Return CSV-ready, per-stream gate statistics as compact list strings."""
+    if stats["sum"] is None:
+        return {}, None
+
+    mean = stats["sum"] / stats["count"]
+    variance = (stats["sum_sq"] / stats["count"] - mean.square()).clamp_min(0.0)
+    summary = {
+        f"{prefix}_fusion_gate_mean": format_fusion_weights(mean),
+        f"{prefix}_fusion_gate_std": format_fusion_weights(variance.sqrt()),
+        f"{prefix}_fusion_gate_fraction_lt_0_1": format_fusion_weights(stats["lt_0_1"] / stats["count"]),
+        f"{prefix}_fusion_gate_fraction_gt_0_9": format_fusion_weights(stats["gt_0_9"] / stats["count"]),
+    }
+    return summary, mean
+
+
 
 def _train_single_epoch(
     model,
@@ -123,8 +178,7 @@ def _train_single_epoch(
     train_metrics = _init_epoch_metrics()
 
     fusion_weights = None
-    fusion_weight_sums = None
-    fusion_weight_count = 0
+    fusion_gate_stats = _init_fusion_gate_stats()
 
     tqdm_bar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)", leave=False, mininterval=1.0)
 
@@ -145,13 +199,7 @@ def _train_single_epoch(
             pose_pred, pose
         )
 
-        if fusion_weights is not None:
-            fusion_weights_flat = fusion_weights.detach().cpu().flatten().float()
-            if fusion_weight_sums is None:
-                fusion_weight_sums = fusion_weights_flat.clone()
-            else:
-                fusion_weight_sums += fusion_weights_flat
-            fusion_weight_count += 1
+        _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights)
 
         _apply_metric_accumulation(
             train_metrics,
@@ -224,14 +272,15 @@ def _train_single_epoch(
         global_batch_step += 1
 
     train_avg = EpochMetricsAggregator(train_metrics, len(train_loader)).to_dict()
-    fusion_weights_avg = None
-    if fusion_weight_sums is not None and fusion_weight_count > 0:
-        fusion_weights_avg = fusion_weight_sums / float(fusion_weight_count)
+    fusion_gate_summary, fusion_weights_avg = _summarize_fusion_gate_stats(
+        fusion_gate_stats, prefix="train"
+    )
 
     return {
         "train_avg": train_avg,
         "fusion_weights": fusion_weights,
         "fusion_weights_avg": fusion_weights_avg,
+        "fusion_gate_summary": fusion_gate_summary,
         "global_batch_step": global_batch_step,
     }
 
@@ -258,6 +307,8 @@ def validation_loop(
     """
     model.eval()
     val_metrics = _init_epoch_metrics()
+    fusion_gate_stats = _init_fusion_gate_stats()
+    rotation_errors = []
     
     num_val = len(val_loader)
     with torch.no_grad():
@@ -266,6 +317,7 @@ def validation_loop(
             aux_losses = batch.pop("aux_losses", None)
             pose = batch["pose"].to(device)
             pose_pred, _ = model(batch, aux_losses=aux_losses)
+            _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights)
             
             # Compute loss and metrics using rotation handler
             loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(
@@ -273,6 +325,9 @@ def validation_loop(
             )
             abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = rotation_handler.compute_metrics(
                 pose_pred, pose
+            )
+            rotation_errors.append(
+                rotation_handler.compute_rotation_errors_degrees(pose_pred, pose).detach().cpu()
             )
             
             _apply_metric_accumulation(
@@ -289,7 +344,14 @@ def validation_loop(
                 },
             )
     
-    return EpochMetricsAggregator(val_metrics, num_val).to_dict()
+    val_gate_summary, _ = _summarize_fusion_gate_stats(fusion_gate_stats, prefix="val")
+    all_rotation_errors = torch.cat(rotation_errors)
+    rotation_summary = {
+        "val_rot_median_deg": torch.median(all_rotation_errors).item(),
+        "val_rot_p90_deg": torch.quantile(all_rotation_errors, 0.9).item(),
+        "val_rot_within_5deg": (all_rotation_errors <= 5.0).float().mean().item(),
+    }
+    return EpochMetricsAggregator(val_metrics, num_val).to_dict(), val_gate_summary, rotation_summary
 
 
 def train_loop(
@@ -368,12 +430,13 @@ def train_loop(
             train_avg = train_epoch["train_avg"]
             fusion_weights = train_epoch["fusion_weights"]
             fusion_weights_avg = train_epoch["fusion_weights_avg"]
+            train_gate_summary = train_epoch["fusion_gate_summary"]
             epoch_time = time.perf_counter() - epoch_start
 
-            fw_str = format_fusion_weights(fusion_weights)
-            fw_epoch_str = format_fusion_weights(fusion_weights_avg) if fusion_weights_avg is not None else fw_str
+            fw_str = format_fusion_weights(fusion_weights_avg) if fusion_weights_avg is not None else format_fusion_weights(fusion_weights)
+            fw_epoch_str = fw_str
 
-            val_avg = validation_loop(
+            val_avg, val_gate_summary, val_rotation_summary = validation_loop(
                 model=model,
                 val_loader=val_loader,
                 rotation_handler=rotation_handler,
@@ -429,6 +492,7 @@ def train_loop(
                 fusion_weights_epoch_str=fw_epoch_str,
                 epoch_time=epoch_time,
                 uncertainty_stats=uncertainty_stats,
+                validation_rotation_summary=val_rotation_summary,
                 best_val_loss=best_val_loss,
             )
 
@@ -470,7 +534,7 @@ def train_loop(
             )
 
             row = build_epoch_metrics_row(
-                metadata=metadata,
+                metadata={**metadata, **train_gate_summary, **val_gate_summary},
                 epoch=epoch,
                 train_avg=train_avg,
                 val_avg=val_avg,
@@ -587,6 +651,10 @@ def main(
         "lr": cfg["training"]["lr"],
         "batch_size": resolved_batch_size,
         "seed": cfg.get("training", {}).get("seed", ""),
+        "num_parameters": sum(parameter.numel() for parameter in model.parameters()),
+        "num_trainable_parameters": sum(
+            parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+        ),
         "head_lr_decay": resolved_head_lr_cfg,
         "lr_schedule": lr_schedule_cfg if lr_schedule_cfg else {"enabled": False},
         "task_weighting": task_weighting_cfg if uncertainty_module is not None else {"enabled": False},

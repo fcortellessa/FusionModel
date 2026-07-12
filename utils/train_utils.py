@@ -109,10 +109,12 @@ def build_epoch_metrics_row(
     lr_head_z,
     current_lr_scale,
     uncertainty_stats,
+    validation_rotation_summary=None,
     checkpoint_path="",
 ):
     metadata = metadata or {}
     uncertainty_stats = uncertainty_stats or {}
+    validation_rotation_summary = validation_rotation_summary or {}
 
     return {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -121,6 +123,9 @@ def build_epoch_metrics_row(
         "loss_q": train_avg["loss_q"],
         "loss_y": train_avg["loss_y"],
         "loss_z": train_avg["loss_z"],
+        "val_loss_q": val_avg["loss_q"],
+        "val_loss_y": val_avg["loss_y"],
+        "val_loss_z": val_avg["loss_z"],
         "train_abs_y": train_avg["abs_y"],
         "train_abs_z": train_avg["abs_z"],
         "train_abs_trans": train_avg["abs_trans"],
@@ -129,7 +134,18 @@ def build_epoch_metrics_row(
         "val_abs_z": val_avg["abs_z"],
         "val_abs_trans": val_avg["abs_trans"],
         "val_abs_rot_x": val_avg["abs_rot_x"],
+        "val_rot_median_deg": validation_rotation_summary.get("val_rot_median_deg", ""),
+        "val_rot_p90_deg": validation_rotation_summary.get("val_rot_p90_deg", ""),
+        "val_rot_within_5deg": validation_rotation_summary.get("val_rot_within_5deg", ""),
         "fusion_weights": fusion_weights_str,
+        "train_fusion_gate_mean": metadata.get("train_fusion_gate_mean", ""),
+        "train_fusion_gate_std": metadata.get("train_fusion_gate_std", ""),
+        "train_fusion_gate_fraction_lt_0_1": metadata.get("train_fusion_gate_fraction_lt_0_1", ""),
+        "train_fusion_gate_fraction_gt_0_9": metadata.get("train_fusion_gate_fraction_gt_0_9", ""),
+        "val_fusion_gate_mean": metadata.get("val_fusion_gate_mean", ""),
+        "val_fusion_gate_std": metadata.get("val_fusion_gate_std", ""),
+        "val_fusion_gate_fraction_lt_0_1": metadata.get("val_fusion_gate_fraction_lt_0_1", ""),
+        "val_fusion_gate_fraction_gt_0_9": metadata.get("val_fusion_gate_fraction_gt_0_9", ""),
         "best_loss": best_val_loss,
         "epoch_time_sec": epoch_time,
         "checkpoint_path": os.path.abspath(checkpoint_path) if checkpoint_path else "",
@@ -150,6 +166,8 @@ def build_epoch_metrics_row(
         "uncertainty_weight_trans": uncertainty_stats.get("uncertainty_weight_trans", ""),
         "batch_size": metadata.get("batch_size", ""),
         "seed": metadata.get("seed", ""),
+        "num_parameters": metadata.get("num_parameters", ""),
+        "num_trainable_parameters": metadata.get("num_trainable_parameters", ""),
     }
 
 # ============================================================================

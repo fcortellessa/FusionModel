@@ -16,13 +16,20 @@ except ImportError:  # pragma: no cover
 
 METRICS_FIELDNAMES = [
     "timestamp", "epoch", "train_loss", "loss_q", "loss_y", "loss_z",
+    "val_loss_q", "val_loss_y", "val_loss_z",
     "train_abs_y", "train_abs_z", "train_abs_trans", "train_abs_rot_x",
     "val_abs_y", "val_abs_z", "val_abs_trans", "val_abs_rot_x",
-    "fusion_weights", "best_loss", "epoch_time_sec", "checkpoint_path",
+    "val_rot_median_deg", "val_rot_p90_deg", "val_rot_within_5deg",
+    "fusion_weights", "train_fusion_gate_mean", "train_fusion_gate_std",
+    "train_fusion_gate_fraction_lt_0_1", "train_fusion_gate_fraction_gt_0_9",
+    "val_fusion_gate_mean", "val_fusion_gate_std",
+    "val_fusion_gate_fraction_lt_0_1", "val_fusion_gate_fraction_gt_0_9",
+    "best_loss", "epoch_time_sec", "checkpoint_path",
     "model_name", "streams", "fusion", "head_type", "freeze_backbone",
     "lr", "lr_base", "lr_head_rot", "lr_head_y", "lr_head_z", "lr_schedule_scale",
     "uncertainty_log_var_rot", "uncertainty_log_var_trans",
     "uncertainty_weight_rot", "uncertainty_weight_trans", "batch_size", "seed",
+    "num_parameters", "num_trainable_parameters",
 ]
 
 

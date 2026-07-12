@@ -84,3 +84,4 @@ def list_fusions():
 # IMPORTANT: these imports must come AFTER the registry definition
 from . import concat  # noqa: F401
 from . import gated   # noqa: F401
+from . import gated_concat  # noqa: F401

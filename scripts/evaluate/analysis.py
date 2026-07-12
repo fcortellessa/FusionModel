@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from ast import literal_eval
 from pathlib import Path
 
+
 def flatten_dict(d: dict, parent_key: str = '', sep: str = '.') -> dict:
     """Flattens nested configuration blocks, mapping lists to hashable tuples."""
     items = []
@@ -58,11 +59,17 @@ def add_run_metadata(fig, frame):
         fig.text(0.01, 0.01, metadata_text, ha="left", va="bottom", fontsize=8, alpha=0.75)
 
 
-def plot_train_val(df, ax, epoch_col, train_col, val_col, title, ylabel, train_label=None, val_label=None, train_color="#1f77b4", val_color="#ff7f0e"):
-    if train_col in df.columns:
-        ax.plot(df[epoch_col], df[train_col], color=train_color, label=train_label or f"Train {train_col}")
-    if val_col in df.columns:
-        ax.plot(df[epoch_col], df[val_col], color=val_color, label=val_label or f"Val {val_col}")
+def plot_train_val(df, ax, epoch_col, train_col, val_col, title, ylabel, train_label=None, val_label=None,
+                   train_color="#1f77b4", val_color="#ff7f0e", zoom_last_30=False):
+    plot_df = df.copy()
+    if zoom_last_30 and len(df) > 30:
+        plot_df = df.tail(30)
+        title += " (Last 30 Epochs)"
+
+    if train_col in plot_df.columns:
+        ax.plot(plot_df[epoch_col], plot_df[train_col], color=train_color, label=train_label or f"Train {train_col}")
+    if val_col in plot_df.columns:
+        ax.plot(plot_df[epoch_col], plot_df[val_col], color=val_color, label=val_label or f"Val {val_col}")
     ax.set_title(title, fontsize=11, fontweight='bold')
     ax.set_ylabel(ylabel)
     ax.legend(fontsize=9)
@@ -84,101 +91,102 @@ def maybe_parse_fusion_weights(value):
 def analyze_single_run(df, output_dir: Path):
     """Generates exhaustive diagnostic plots for an isolated execution run."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 1. TRAIN VS VAL LOSS
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    plot_train_val(df, ax, "epoch", "train_loss", "val_loss", "Train vs Validation Loss Convergence", "Loss Value")
-    if "train_loss" in df.columns:
-        best_idx = df["train_loss"].idxmin()
-        ax.annotate(f"Best Train: {df.loc[best_idx, 'train_loss']:.3f}", 
-                    (df.loc[best_idx, "epoch"], df.loc[best_idx, "train_loss"]),
-                    xytext=(10, 10), textcoords='offset points', arrowprops=dict(arrowstyle="->", alpha=0.5))
-    ax.set_xlabel("Epoch")
-    add_run_metadata(fig, df)
-    plt.tight_layout()
-    plt.savefig(output_dir / "loss_convergence.png", dpi=150)
-    plt.close()
 
-    # 2. OVERALL TRANSLATION AND ROTATION ERRORS
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
-    plot_train_val(df, ax1, "epoch", "train_abs_trans", "val_abs_trans", "Total Translation Error Magnitude", "Error [m or mm]")
-    plot_train_val(df, ax2, "epoch", "train_abs_rot_x", "val_abs_rot_x", "Orientation Error Profile (X-axis)", "Error [deg]",
-                   train_color="#e377c2", val_color="#d62728")
-    ax2.set_xlabel("Epoch")
-    add_run_metadata(fig, df)
-    plt.tight_layout()
-    plt.savefig(output_dir / "trajectory_errors_total.png", dpi=150)
-    plt.close()
+    # Generate both full and zoomed plots
+    for zoom in [False, True]:
+        suffix = "_zoom30" if zoom else ""
 
-    # 3. PER-AXIS TRANSLATION ANALYSIS
-    if any(col in df.columns for col in ["train_abs_y", "val_abs_y", "train_abs_z", "val_abs_z"]):
+        # 1. TRAIN VS VAL LOSS
+        fig, ax = plt.subplots(figsize=(10, 4.5))
+        plot_train_val(df, ax, "epoch", "train_loss", "val_loss", "Train vs Validation Loss Convergence", "Loss Value",
+                       zoom_last_30=zoom)
+        if "train_loss" in df.columns and not zoom:
+            best_idx = df["train_loss"].idxmin()
+            ax.annotate(f"Best Train: {df.loc[best_idx, 'train_loss']:.3f}",
+                        (df.loc[best_idx, "epoch"], df.loc[best_idx, "train_loss"]),
+                        xytext=(10, 10), textcoords='offset points', arrowprops=dict(arrowstyle="->", alpha=0.5))
+        ax.set_xlabel("Epoch")
+        add_run_metadata(fig, df)
+        plt.tight_layout()
+        plt.savefig(output_dir / f"loss_convergence{suffix}.png", dpi=150)
+        plt.close()
+
+        # 2. OVERALL TRANSLATION AND ROTATION ERRORS
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
-        plot_train_val(df, ax1, "epoch", "train_abs_y", "val_abs_y", "Y-Axis Alignment Error", "Abs Error [m or mm]")
-        plot_train_val(df, ax2, "epoch", "train_abs_z", "val_abs_z", "Z-Axis Alignment Error", "Abs Error [m or mm]", 
-                       train_color="#2ca02c", val_color="#9467bd")
+        plot_train_val(df, ax1, "epoch", "train_abs_trans", "val_abs_trans", "Total Translation Error Magnitude",
+                       "Error [m or mm]", zoom_last_30=zoom)
+        plot_train_val(df, ax2, "epoch", "train_abs_rot_x", "val_abs_rot_x", "Orientation Error Profile (X-axis)",
+                       "Error [deg]",
+                       train_color="#e377c2", val_color="#d62728", zoom_last_30=zoom)
         ax2.set_xlabel("Epoch")
         add_run_metadata(fig, df)
         plt.tight_layout()
-        plt.savefig(output_dir / "trajectory_errors_axes.png", dpi=150)
+        plt.savefig(output_dir / f"trajectory_errors_total{suffix}.png", dpi=150)
         plt.close()
 
-    # Dedicated Plot: ROT_X Train vs Val (Same color, Train lower alpha)
-    if "train_abs_rot_x" in df.columns or "val_abs_rot_x" in df.columns:
-        fig, ax = plt.subplots(figsize=(10, 4.5))
-        if "train_abs_rot_x" in df.columns:
-            ax.plot(df["epoch"], df["train_abs_rot_x"], color="#d62728", alpha=0.4, linewidth=2, label="Train Rotation X")
-        if "val_abs_rot_x" in df.columns:
-            ax.plot(df["epoch"], df["val_abs_rot_x"], color="#d62728", alpha=1.0, linewidth=2, label="Val Rotation X")
-        ax.set_title("Rotation X: Train vs Validation Performance", fontsize=11, fontweight='bold')
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Error [deg]")
-        ax.legend(fontsize=9)
-        ax.grid(True, linestyle='--', alpha=0.6)
-        add_run_metadata(fig, df)
-        plt.tight_layout()
-        plt.savefig(output_dir / "metric_compare_rot_x.png", dpi=150)
-        plt.close()
+        # 3. PER-AXIS TRANSLATION ANALYSIS
+        if any(col in df.columns for col in ["train_abs_y", "val_abs_y", "train_abs_z", "val_abs_z"]):
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+            plot_train_val(df, ax1, "epoch", "train_abs_y", "val_abs_y", "Y-Axis Alignment Error",
+                           "Abs Error [m or mm]", zoom_last_30=zoom)
+            plot_train_val(df, ax2, "epoch", "train_abs_z", "val_abs_z", "Z-Axis Alignment Error",
+                           "Abs Error [m or mm]",
+                           train_color="#2ca02c", val_color="#9467bd", zoom_last_30=zoom)
+            ax2.set_xlabel("Epoch")
+            add_run_metadata(fig, df)
+            plt.tight_layout()
+            plt.savefig(output_dir / f"trajectory_errors_axes{suffix}.png", dpi=150)
+            plt.close()
 
-    # Dedicated Plot: ABS_Y Train vs Val (Same color, Train lower alpha)
-    if "train_abs_y" in df.columns or "val_abs_y" in df.columns:
-        fig, ax = plt.subplots(figsize=(10, 4.5))
-        if "train_abs_y" in df.columns:
-            ax.plot(df["epoch"], df["train_abs_y"], color="#1f77b4", alpha=0.4, linewidth=2, label="Train Abs Y")
-        if "val_abs_y" in df.columns:
-            ax.plot(df["epoch"], df["val_abs_y"], color="#1f77b4", alpha=1.0, linewidth=2, label="Val Abs Y")
-        ax.set_title("Y-Axis Translation: Train vs Validation Performance", fontsize=11, fontweight='bold')
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Error [m or mm]")
-        ax.legend(fontsize=9)
-        ax.grid(True, linestyle='--', alpha=0.6)
-        add_run_metadata(fig, df)
-        plt.tight_layout()
-        plt.savefig(output_dir / "metric_compare_abs_y.png", dpi=150)
-        plt.close()
+        # Dedicated Plot: ROT_X Train vs Val
+        if "train_abs_rot_x" in df.columns or "val_abs_rot_x" in df.columns:
+            fig, ax = plt.subplots(figsize=(10, 4.5))
+            plot_df = df.tail(30) if (zoom and len(df) > 30) else df
+            if "train_abs_rot_x" in df.columns:
+                ax.plot(plot_df["epoch"], plot_df["train_abs_rot_x"], color="#d62728", alpha=0.4, linewidth=2,
+                        label="Train Rotation X")
+            if "val_abs_rot_x" in df.columns:
+                ax.plot(plot_df["epoch"], plot_df["val_abs_rot_x"], color="#d62728", alpha=1.0, linewidth=2,
+                        label="Val Rotation X")
+            title_str = "Rotation X: Performance" + (" (Last 30 Epochs)" if zoom else "")
+            ax.set_title(title_str, fontsize=11, fontweight='bold')
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Error [deg]")
+            ax.legend(fontsize=9)
+            ax.grid(True, linestyle='--', alpha=0.6)
+            add_run_metadata(fig, df)
+            plt.tight_layout()
+            plt.savefig(output_dir / f"metric_compare_rot_x{suffix}.png", dpi=150)
+            plt.close()
 
-    # Dedicated Plot: ABS_Z Train vs Val (Same color, Train lower alpha)
-    if "train_abs_z" in df.columns or "val_abs_z" in df.columns:
-        fig, ax = plt.subplots(figsize=(10, 4.5))
-        if "train_abs_z" in df.columns:
-            ax.plot(df["epoch"], df["train_abs_z"], color="#2ca02c", alpha=0.4, linewidth=2, label="Train Abs Z")
-        if "val_abs_z" in df.columns:
-            ax.plot(df["epoch"], df["val_abs_z"], color="#2ca02c", alpha=1.0, linewidth=2, label="Val Abs Z")
-        ax.set_title("Z-Axis Translation: Train vs Validation Performance", fontsize=11, fontweight='bold')
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Error [m or mm]")
-        ax.legend(fontsize=9)
-        ax.grid(True, linestyle='--', alpha=0.6)
-        add_run_metadata(fig, df)
-        plt.tight_layout()
-        plt.savefig(output_dir / "metric_compare_abs_z.png", dpi=150)
-        plt.close()
+        # Dedicated Plot: ABS_Y Train vs Val
+        if "train_abs_y" in df.columns or "val_abs_y" in df.columns:
+            fig, ax = plt.subplots(figsize=(10, 4.5))
+            plot_df = df.tail(30) if (zoom and len(df) > 30) else df
+            if "train_abs_y" in df.columns:
+                ax.plot(plot_df["epoch"], plot_df["train_abs_y"], color="#1f77b4", alpha=0.4, linewidth=2,
+                        label="Train Abs Y")
+            if "val_abs_y" in df.columns:
+                ax.plot(plot_df["epoch"], plot_df["val_abs_y"], color="#1f77b4", alpha=1.0, linewidth=2,
+                        label="Val Abs Y")
+            title_str = "Y-Axis Translation: Performance" + (" (Last 30 Epochs)" if zoom else "")
+            ax.set_title(title_str, fontsize=11, fontweight='bold')
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Error [m or mm]")
+            ax.legend(fontsize=9)
+            ax.grid(True, linestyle='--', alpha=0.6)
+            add_run_metadata(fig, df)
+            plt.tight_layout()
+            plt.savefig(output_dir / f"metric_compare_abs_y{suffix}.png", dpi=150)
+            plt.close()
 
     # 4. TASK UNCERTAINTY DYNAMIC WEIGHTS
     weight_cols = [col for col in ["uncertainty_weight_rot", "uncertainty_weight_trans"] if col in df.columns]
     if weight_cols:
         fig, ax = plt.subplots(figsize=(10, 4.5))
         for col in weight_cols:
-            ax.plot(df["epoch"], df[col], label=col.replace("uncertainty_weight_", "").upper() + " Task Weight", linewidth=2)
+            ax.plot(df["epoch"], df[col], label=col.replace("uncertainty_weight_", "").upper() + " Task Weight",
+                    linewidth=2)
         ax.set_title("Homoscedastic Multi-Task Loss Weight Balancing", fontsize=11, fontweight='bold')
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Dynamic Loss Scaling Modifier Weights")
@@ -189,24 +197,119 @@ def analyze_single_run(df, output_dir: Path):
         plt.savefig(output_dir / "homoscedastic_uncertainty_weights.png", dpi=150)
         plt.close()
 
-    # 5. GENERALIZATION LOSS RATIO PROFILE
-    if "train_loss" in df.columns and "val_loss" in df.columns:
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ratio = df["val_loss"] / df["train_loss"]
-        ax.plot(df["epoch"], ratio, color="#7f7f7f", linewidth=2, label=r"Generalization Index Ratio ($\frac{\mathcal{L}_{val}}{\mathcal{L}_{train}}$)")
-        ax.axhline(1.0, color='r', linestyle='--', alpha=0.5, label='Ideal Equivalence Line')
-        ax.set_title("Generalization Gap Index Profile", fontsize=11, fontweight='bold')
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Ratio Scale Metric")
-        ax.legend()
-        ax.grid(True, linestyle='--', alpha=0.6)
-        add_run_metadata(fig, df)
-        plt.tight_layout()
-        plt.savefig(output_dir / "generalization_loss_ratio.png", dpi=150)
-        plt.close()
-
     print(f"Diagnostics safely generated inside directory: {output_dir}")
 
+
+def generate_ablation_summary(master_history: pd.DataFrame, runs_dir: Path, output_dir: Path):
+    """
+    Compiles a comprehensive benchmarking leaderboard ranked by the lowest validation loss.
+    Cross-references and extracts test dataset metrics if generated by test.py.
+    """
+    import glob
+
+    def extract_test_metrics(run_folder_name: str) -> dict:
+        """Helper to safely scan for and extract the latest test metrics."""
+        run_path = runs_dir / run_folder_name
+        # Match test.py's structural output combinations
+        test_files = (
+                glob.glob(os.path.join(str(run_path), "results/results_*.csv")) +
+                glob.glob(os.path.join(str(run_path), "results_*.csv"))
+        )
+
+        if not test_files:
+            return {}
+
+        try:
+            # Always grab the absolute freshest test file by creation timestamp
+            latest_test_file = max(test_files, key=os.path.getctime)
+            test_df = pd.read_csv(latest_test_file)
+            if test_df.empty:
+                return {}
+
+            return {
+                "Test Abs Trans (Mean)": test_df[
+                    "val_abs_trans"].mean() if "val_abs_trans" in test_df.columns else np.nan,
+                "Test Abs Rot X (Mean)": test_df[
+                    "val_abs_rot_x"].mean() if "val_abs_rot_x" in test_df.columns else np.nan,
+                "Test Abs Y (Mean)": test_df["val_abs_y"].mean() if "val_abs_y" in test_df.columns else np.nan,
+                "Test Abs Z (Mean)": test_df["val_abs_z"].mean() if "val_abs_z" in test_df.columns else np.nan,
+            }
+        except Exception as e:
+            print(f"Warning: Failed parsing test data frame for {run_folder_name}: {e}")
+            return {}
+
+    summary_data = []
+
+    for variant, group in master_history.groupby("variant"):
+        # Take the final 5 epochs to yield stable metric readings less prone to outliers
+        final_epochs = group.sort_values("epoch").tail(5)
+
+        # Pull associated raw run folder name to track down test.py results
+        corresponding_run_name = group["run_name"].iloc[0]
+        test_metrics = extract_test_metrics(corresponding_run_name)
+
+        metrics_summary = {
+            "Ablation Variant Config": variant,
+            "Run Folder": corresponding_run_name,
+            "Final Epoch": group["epoch"].max(),
+
+            # Validation Metrics (Averaged over last 5 epochs)
+            "Val Loss (Mean)": final_epochs["val_loss"].mean() if "val_loss" in final_epochs.columns else np.nan,
+            "Val Abs Rot X (Mean)": final_epochs[
+                "val_abs_rot_x"].mean() if "val_abs_rot_x" in final_epochs.columns else np.nan,
+            "Val Abs Y (Mean)": final_epochs["val_abs_y"].mean() if "val_abs_y" in final_epochs.columns else np.nan,
+            "Val Abs Z (Mean)": final_epochs["val_abs_z"].mean() if "val_abs_z" in final_epochs.columns else np.nan,
+
+            # Isolated Holdout Test Set Metrics (From test.py evaluation step)
+            "Test Abs Trans (Mean)": test_metrics.get("Test Abs Trans (Mean)", np.nan),
+            "Test Abs Rot X (Mean)": test_metrics.get("Test Abs Rot X (Mean)", np.nan),
+            "Test Abs Y (Mean)": test_metrics.get("Test Abs Y (Mean)", np.nan),
+            "Test Abs Z (Mean)": test_metrics.get("Test Abs Z (Mean)", np.nan),
+
+            "Avg Epoch Time (Sec)": group["epoch_time_sec"].mean() if "epoch_time_sec" in group.columns else np.nan
+        }
+        summary_data.append(metrics_summary)
+
+    summary_df = pd.DataFrame(summary_data)
+    if "Val Loss (Mean)" in summary_df.columns:
+        summary_df = summary_df.sort_values(by="Val Loss (Mean)", ascending=True).reset_index(drop=True)
+
+    # Output 1: Save standard comparative CSV matrix
+    csv_out = output_dir / "ablation_summary.csv"
+    summary_df.to_csv(csv_out, index=False)
+
+    # Output 2: Save cleanly formatted text file report markdown
+    txt_out = output_dir / "ablation_summary.txt"
+    with open(txt_out, "w") as f:
+        f.write("========================================================================\n")
+        f.write("             UNIVERSAL ABLATION PERFORMANCE BENCH LEADERBOARD           \n")
+        f.write("========================================================================\n\n")
+        f.write("Ordered by Validation Loss convergence performance (Lower Is Better).\n")
+        f.write("Note: Validation scores are averaged over the last 5 epochs for stability.\n")
+        f.write("      Test metrics reflect static evaluation from your checkpoint.\n\n")
+
+        for idx, row in summary_df.iterrows():
+            f.write(f"Rank {idx + 1}: {row['Ablation Variant Config']}\n")
+            f.write(f"  [Folder Instance Reference: {row['Run Folder']}]\n")
+            f.write(f"  --> VALIDATION SET CONVERGENCE PROFILE:\n")
+            f.write(f"      - Val Loss (Mean)      : {row['Val Loss (Mean)']:.5f}\n")
+            f.write(f"      - Val Rot X Error (deg): {row['Val Abs Rot X (Mean)']:.4f}\n")
+            f.write(f"      - Val Trans Y Error    : {row['Val Abs Y (Mean)']:.4f}\n")
+            f.write(f"      - Val Trans Z Error    : {row['Val Abs Z (Mean)']:.4f}\n")
+
+            f.write(f"  --> HOLDOUT TEST DATASET EVALUATION PROFILE:\n")
+            t_trans = row['Test Abs Trans (Mean)']
+            t_rot = row['Test Abs Rot X (Mean)']
+            f.write(
+                f"      - Test Abs Trans Magnitude : {f'{t_trans:.5f}' if pd.notna(t_trans) else 'N/A (Run test.py first)'}\n")
+            f.write(f"      - Test Rot X Error (deg)   : {f'{t_rot}:.4f}' if pd.notna(t_rot) else 'N/A'}\n")
+
+            f.write(f"  --> SPEED & COMPLEXITY:\n")
+            f.write(f"      - Computational Rhythm : {row['Avg Epoch Time (Sec)']:.2f} sec/epoch\n")
+            f.write("=" * 72 + "\n")
+
+    print(
+        f"\n[Summary Generated] Leaderboards written successfully:\n -> CSV Table: {csv_out}\n -> Text Report: {txt_out}")
 
 def analyze_folder_ablation(runs_dir: Path, output_dir: Path):
     """Finds all child runs, isolates configuration edits, and plots comparative curves."""
@@ -221,7 +324,7 @@ def analyze_folder_ablation(runs_dir: Path, output_dir: Path):
     for path in metrics_files:
         run_name = os.path.basename(os.path.dirname(path))
         config_path = Path(os.path.dirname(path)) / "config.yml"
-        
+
         flat_config = {}
         if config_path.exists():
             try:
@@ -243,9 +346,11 @@ def analyze_folder_ablation(runs_dir: Path, output_dir: Path):
         return
 
     config_df = pd.DataFrame.from_dict(all_configs, orient='index')
-    ignore_keys = ["data.augmentation.seed", "training.task_weighting.init_log_var_rot", "training.task_weighting.init_log_var_trans", "training.uncertainty_weighting.init_log_var_rot", "training.uncertainty_weighting.init_log_var_trans", "seed"]
+    ignore_keys = ["data.augmentation.seed", "training.task_weighting.init_log_var_rot",
+                   "training.task_weighting.init_log_var_trans", "training.uncertainty_weighting.init_log_var_rot",
+                   "training.uncertainty_weighting.init_log_var_trans", "seed"]
     config_df = config_df.drop(columns=[c for c in ignore_keys if c in config_df.columns], errors='ignore')
-    
+
     unique_counts = config_df.nunique()
     ablated_keys = unique_counts[unique_counts > 1].index.tolist()
 
@@ -261,69 +366,114 @@ def analyze_folder_ablation(runs_dir: Path, output_dir: Path):
     master_history["variant"] = master_history["run_name"].map(variant_mapping)
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate the performance tabular summaries!
+    generate_ablation_summary(master_history, runs_dir=runs_dir, output_dir=output_dir.parent)
+
     variants = master_history['variant'].unique()
     cmap = plt.get_cmap('tab10')
     colors = {v: cmap(i % 10) for i, v in enumerate(variants)}
 
-    metrics_to_benchmark = [col for col in ['train_loss', 'epoch_time_sec', 'val_abs_rot_x', 'val_abs_y', 'val_abs_z'] if col in master_history.columns]
+    metrics_to_benchmark = [col for col in ['train_loss', 'epoch_time_sec', 'val_abs_rot_x', 'val_abs_y', 'val_abs_z']
+                            if col in master_history.columns]
 
-    for metric in metrics_to_benchmark:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        for variant in variants:
-            v_df = master_history[master_history['variant'] == variant].dropna(subset=[metric])
-            if v_df.empty:
-                continue
-            
-            stats = v_df.groupby('epoch')[metric].agg(['mean', 'std']).reset_index()
-            
-            # Wrap label text into two lines if it's too long
-            if len(variant) > 30:
-                # Split at a clean parameter boundary if possible
-                midpoint = len(variant) // 2
-                split_idx = variant.find(" | ", midpoint - 5, midpoint + 5)
-                if split_idx != -1:
-                    lbl = variant[:split_idx] + "\n" + variant[split_idx:]
+    # Generate full comparative and zoomed comparative graphs
+    for zoom in [False, True]:
+        suffix = "_zoom30" if zoom else ""
+
+        for metric in metrics_to_benchmark:
+            fig, ax = plt.subplots(figsize=(10, 5))
+            for variant in variants:
+                v_df = master_history[master_history['variant'] == variant].dropna(subset=[metric])
+                if v_df.empty:
+                    continue
+
+                if zoom and v_df['epoch'].max() > 30:
+                    max_epoch = v_df['epoch'].max()
+                    v_df = v_df[v_df['epoch'] > (max_epoch - 30)]
+
+                stats = v_df.groupby('epoch')[metric].agg(['mean', 'std']).reset_index()
+
+                # Wrap label text into two lines if it's too long
+                if len(variant) > 30:
+                    midpoint = len(variant) // 2
+                    split_idx = variant.find(" | ", midpoint - 5, midpoint + 5)
+                    if split_idx != -1:
+                        lbl = variant[:split_idx] + "\n" + variant[split_idx:]
+                    else:
+                        lbl = variant[:30] + "\n" + variant[30:]
                 else:
-                    lbl = variant[:30] + "\n" + variant[30:]
+                    lbl = variant
+
+                ax.plot(stats['epoch'], stats['mean'], label=lbl, color=colors[variant], linewidth=2)
+                if 'std' in stats.columns and stats['std'].notna().any():
+                    ax.fill_between(stats['epoch'], stats['mean'] - stats['std'], stats['mean'] + stats['std'],
+                                    color=colors[variant], alpha=0.15)
+
+            if "loss" in metric:
+                unit_str = "Value"
+            elif "time" in metric:
+                unit_str = "Seconds"
+            elif "rot_x" in metric:
+                unit_str = "deg"
             else:
-                lbl = variant
-            
-            ax.plot(stats['epoch'], stats['mean'], label=lbl, color=colors[variant], linewidth=2)
-            if 'std' in stats.columns and stats['std'].notna().any():
-                ax.fill_between(stats['epoch'], stats['mean'] - stats['std'], stats['mean'] + stats['std'], color=colors[variant], alpha=0.15)
+                unit_str = "m"
 
-        if "loss" in metric:
-            unit_str = "Value"
-        elif "time" in metric:
-            unit_str = "Seconds"
-        elif "rot_x" in metric:
-            unit_str = "deg"
-        else:
-            unit_str = "m"
+            title_str = f"Ablation Performance Metric: Comparison of {metric}"
+            if zoom:
+                title_str += " (Last 30 Epochs)"
 
-        ax.set_title(f"Ablation Performance Metric: Comparison of {metric}", fontsize=12, fontweight='bold')
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel(f"Scale Measure [{unit_str}]")
-        ax.grid(True, linestyle='--', alpha=0.5)
-        # Store the legend object in a variable
-        leg = ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
-        
-        # Save ensuring the legend bounding box is explicitly measured
-        plt.savefig(
-            output_dir / f"ablation_comparison_{metric}.png", 
-            dpi=150, 
-            bbox_extra_artists=(leg,), 
-            bbox_inches='tight'
-        )
-        plt.close()
-        
+            ax.set_title(title_str, fontsize=12, fontweight='bold')
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel(f"Scale Measure [{unit_str}]")
+            ax.grid(True, linestyle='--', alpha=0.5)
+            leg = ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
+
+            plt.savefig(
+                output_dir / f"ablation_comparison_{metric}{suffix}.png",
+                dpi=150,
+                bbox_extra_artists=(leg,),
+                bbox_inches='tight'
+            )
+            plt.close()
+
     print(f"Multi-run ablation bench plots saved inside target folder: {output_dir}")
 
 
+def extract_test_metrics(run_dir: Path) -> dict:
+    """Locates the latest test metrics generated by test.py and extracts them."""
+    # Find all results files matching your test.py naming schema
+    test_files = glob.glob(os.path.join(str(run_dir), "results/results_*.csv"))
+    if not test_files:
+        # Fallback to check directly in the run folder
+        test_files = glob.glob(os.path.join(str(run_dir), "results_*.csv"))
+
+    if not test_files:
+        return {}  # No test metrics found for this run yet
+
+    # Grab the most recent test file based on creation time
+    latest_test_file = max(test_files, key=os.path.getctime)
+    try:
+        test_df = pd.read_csv(latest_test_file)
+        if test_df.empty:
+            return {}
+
+        return {
+            "Test Abs Trans (Mean)": test_df["val_abs_trans"].mean() if "val_abs_trans" in test_df.columns else np.nan,
+            "Test Abs Rot X (Mean)": test_df["val_abs_rot_x"].mean() if "val_abs_rot_x" in test_df.columns else np.nan,
+            "Test Abs Y (Mean)": test_df["val_abs_y"].mean() if "val_abs_y" in test_df.columns else np.nan,
+            "Test Abs Z (Mean)": test_df["val_abs_z"].mean() if "val_abs_z" in test_df.columns else np.nan,
+        }
+    except Exception as e:
+        print(f"Warning: Failed to parse test file {latest_test_file}: {e}")
+        return {}
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Universal Run & Multi-Run Performance Evaluator Engine")
-    parser.add_argument("--path", type=str, required=True, help="Target path: Can be an explicit path to a single metrics.csv file, a run folder, or a parent multi-run directory.")
-    parser.add_argument("--nested", action="store_true", help="If set and --path is an ablation folder, runs diagnostic analysis for each sub-run folder sequentially.")
+    parser.add_argument("--path", type=str, required=True,
+                        help="Target path: Can be an explicit path to a single metrics.csv file, a run folder, or a parent multi-run directory.")
+    parser.add_argument("--nested", action="store_true",
+                        help="If set and --path is an ablation folder, runs diagnostic analysis for each sub-run folder sequentially.")
     args = parser.parse_args()
 
     target_path = Path(args.path)
@@ -337,10 +487,8 @@ if __name__ == "__main__":
             df = pd.read_csv(metrics_check)
             analyze_single_run(df, output_dir=target_path / "diagnostics")
         else:
-            # First, complete the core multi-run comparison logic
             analyze_folder_ablation(target_path, output_dir=target_path / "results" / "plots")
-            
-            # If the user toggled --nested, loop over individual run folders inside
+
             if args.nested:
                 print("\n--- Starting Nested Subfolder Diagnostics Reporting ---")
                 metrics_files = glob.glob(os.path.join(str(target_path), "*/metrics.csv"))
@@ -348,7 +496,7 @@ if __name__ == "__main__":
                     csv_path = Path(path_str)
                     run_folder_name = csv_path.parent.name
                     print(f"Processing isolated diagnostics for run variant: {run_folder_name}")
-                    
+
                     sub_df = pd.read_csv(csv_path)
                     if not sub_df.empty:
                         analyze_single_run(sub_df, output_dir=csv_path.parent / "diagnostics")

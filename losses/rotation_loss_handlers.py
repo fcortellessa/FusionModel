@@ -26,6 +26,19 @@ class RotationLossHandler:
         """
         raise NotImplementedError
 
+    def compute_rotation_errors_degrees(self, pose_pred, pose):
+        """Return one roll-angle error in degrees per example for percentiles."""
+        raise NotImplementedError
+
+
+def _roll_error_degrees(pred_roll_vec, target_roll_vec):
+    """Compute shortest signed-angle distance for sine/cosine roll vectors."""
+    pred_angle = torch.atan2(pred_roll_vec[:, 0], pred_roll_vec[:, 1])
+    target_angle = torch.atan2(target_roll_vec[:, 0], target_roll_vec[:, 1])
+    difference = torch.abs(pred_angle - target_angle)
+    difference = torch.atan2(torch.sin(difference), torch.cos(difference))
+    return torch.rad2deg(torch.abs(difference))
+
 
 class TwoDUnitVectorHandler(RotationLossHandler):
     """Handler for 2D unit vector rotation parametrisation."""
@@ -77,6 +90,11 @@ class TwoDUnitVectorHandler(RotationLossHandler):
         abs_rot_x = torch.rad2deg(rot_diff).mean()
         
         return abs_trans_y, abs_trans_z, abs_trans, abs_rot_x
+
+    def compute_rotation_errors_degrees(self, pose_pred, pose):
+        return _roll_error_degrees(
+            pose_pred["rotation"], quaternion_to_2d_unit_vector(pose[:, 3:])
+        )
 
 
 class AngleHandler(RotationLossHandler):
@@ -130,6 +148,15 @@ class AngleHandler(RotationLossHandler):
         abs_rot_x = torch.rad2deg(torch.abs(rot_diff)).mean()
         
         return abs_trans_y, abs_trans_z, abs_trans, abs_rot_x
+
+    def compute_rotation_errors_degrees(self, pose_pred, pose):
+        pred_angle = pose_pred["rotation"].squeeze(-1)
+        target_roll = quaternion_to_2d_unit_vector(pose[:, 3:])
+        target_angle = torch.atan2(target_roll[:, 0], target_roll[:, 1])
+        difference = torch.atan2(
+            torch.sin(pred_angle - target_angle), torch.cos(pred_angle - target_angle)
+        )
+        return torch.rad2deg(torch.abs(difference))
 
 
 class LieAlgebraHandler(RotationLossHandler):
@@ -195,6 +222,15 @@ class LieAlgebraHandler(RotationLossHandler):
         
         return abs_trans_y, abs_trans_z, abs_trans, abs_rot_x
 
+    def compute_rotation_errors_degrees(self, pose_pred, pose):
+        pred_quat = torch.nn.functional.normalize(
+            axis_angle_to_quaternion(pose_pred["rotation"]), p=2, dim=1, eps=1e-7
+        )
+        target_quat = torch.nn.functional.normalize(pose[:, 3:], p=2, dim=1, eps=1e-7)
+        return _roll_error_degrees(
+            quaternion_to_2d_unit_vector(pred_quat), quaternion_to_2d_unit_vector(target_quat)
+        )
+
 
 class SE3DirectHandler(RotationLossHandler):
     """Handler for SE(3) direct optimization in Lie algebra space."""
@@ -249,6 +285,15 @@ class SE3DirectHandler(RotationLossHandler):
         
         return abs_trans_y, abs_trans_z, abs_trans, abs_rot_x
 
+    def compute_rotation_errors_degrees(self, pose_pred, pose):
+        pred_quat = torch.nn.functional.normalize(
+            rotation_vector_to_quaternion(pose_pred["se3"][:, 3:6]), p=2, dim=1, eps=1e-7
+        )
+        target_quat = torch.nn.functional.normalize(pose[:, 3:], p=2, dim=1, eps=1e-7)
+        return _roll_error_degrees(
+            quaternion_to_2d_unit_vector(pred_quat), quaternion_to_2d_unit_vector(target_quat)
+        )
+
 
 class QuaternionHandler(RotationLossHandler):
     """Handler for default quaternion rotation parametrisation."""
@@ -268,6 +313,12 @@ class QuaternionHandler(RotationLossHandler):
     def compute_metrics(self, pose_pred, pose):
         abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = absolute_pose_error_x_rot(pose_pred["pose"].detach(), pose)
         return abs_trans_y, abs_trans_z, abs_trans, abs_rot_x
+
+    def compute_rotation_errors_degrees(self, pose_pred, pose):
+        return _roll_error_degrees(
+            quaternion_to_2d_unit_vector(pose_pred["rotation"]),
+            quaternion_to_2d_unit_vector(pose[:, 3:]),
+        )
 
 
 def get_rotation_handler(rotation_parametrisation, criterion=None, rotation_loss_type="geodesic"):

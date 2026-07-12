@@ -107,10 +107,18 @@ class PoseEstimationNet(nn.Module):
 
             # build_fusion returns a single fusion module instance as specified by the config
             self.fusion = build_fusion(fusion, feat_dim, len(streams))
-            fused_dim = feat_dim * len(streams) if fusion == "concat" else feat_dim
+            # Concatenation-preserving fusions retain one complete vector per stream.
+            concat_output_fusions = {
+                "concat",
+                "gated_concat",
+                "residual_gated_concat",
+                "channelwise_residual_gated_concat",
+            }
+            fused_dim = feat_dim * len(streams) if fusion in concat_output_fusions else feat_dim
 
         self._fusion_accepts_aux_losses = "aux_losses" in inspect.signature(self.fusion.forward).parameters
         self.weights = None
+        self.last_fusion_weights = None
         self.last_fusion_targets = None
 
 
@@ -201,6 +209,7 @@ class PoseEstimationNet(nn.Module):
 
 
     def forward(self, x_dict, aux_losses=None):
+        self.last_fusion_weights = None
         if self.is_2d_fusion:
             # --- 2D SPATIAL FUSION PIPELINE ---
             stream_p3s, stream_p4s, stream_p5s = [], [], []
@@ -233,6 +242,7 @@ class PoseEstimationNet(nn.Module):
             
             # Log average spatial weights across the 10x10 coordinates
             avg_fusion_weights = gate_weights.mean(dim=(0, 2, 3)) 
+            self.last_fusion_weights = gate_weights
 
         else:
             # --- 1D FUSION PIPELINE ---
@@ -265,6 +275,9 @@ class PoseEstimationNet(nn.Module):
                 fused = fusion_out
                 avg_fusion_weights = None
 
+            # Retain raw per-example gates for epoch statistics without changing the
+            # public return value, which remains the mean gate for compatibility.
+            self.last_fusion_weights = fusion_weights if isinstance(fusion_out, tuple) else None
             self.last_fusion_targets = fusion_targets
 
         # Handle SE(3) direct optimization
@@ -297,4 +310,3 @@ class PoseEstimationNet(nn.Module):
                 "trans": translation,    # Shape: [B, 3]
                 "pose": torch.cat([translation, rotation], dim=-1)  # Shape: [B, 7]
             }, avg_fusion_weights  # return mean fusion weights for logging
-        
