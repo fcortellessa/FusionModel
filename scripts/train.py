@@ -492,7 +492,6 @@ def train_loop(
                 fusion_weights_epoch_str=fw_epoch_str,
                 epoch_time=epoch_time,
                 uncertainty_stats=uncertainty_stats,
-                validation_rotation_summary=val_rotation_summary,
                 best_val_loss=best_val_loss,
             )
 
@@ -547,6 +546,7 @@ def train_loop(
                 lr_head_z=lr_head_z,
                 current_lr_scale=current_lr_scale,
                 uncertainty_stats=uncertainty_stats,
+                validation_rotation_summary=val_rotation_summary,
                 checkpoint_path=checkpoint_path,
             )
             write_epoch_metrics_csv(csv_writer, row)

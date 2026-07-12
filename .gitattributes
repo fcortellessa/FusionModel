@@ -1,0 +1,7 @@
+# Set the default behavior to automatically normalize line endings
+* text=auto
+
+# Explicitly declare text files you want to always be LF
+*.py text eol=lf
+*.sh text eol=lf
+*.json text eol=lf

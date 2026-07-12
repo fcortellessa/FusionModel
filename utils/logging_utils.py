@@ -138,7 +138,13 @@ def log_train_step_to_tensorboard(
         tb_writer.add_scalar(f"train_step/lr_{group_name}", group["lr"], global_batch_step)
 
     if fusion_weights is not None:
-        for idx, weight in enumerate(fusion_weights.detach().cpu().flatten().tolist()):
+        # Channel-wise gates may contain thousands of values per stream.  Log a
+        # single stream mean per step instead of creating one TensorBoard event
+        # per channel; detailed epoch statistics are saved to metrics.csv.
+        weights_to_log = fusion_weights.detach()
+        if weights_to_log.ndim > 1:
+            weights_to_log = weights_to_log.mean(dim=tuple(range(1, weights_to_log.ndim)))
+        for idx, weight in enumerate(weights_to_log.cpu().tolist()):
             tb_writer.add_scalar(f"fusion/weight_stream_{idx}", float(weight), global_batch_step)
 
 
