@@ -2,6 +2,7 @@ __pychache__/
 .venv/
 data_capture/.py3_12_venv/
 .vscode/launch.json
+.idea/FusionModel.iml
 .github/
 *.egg-info/
 *.pyc
