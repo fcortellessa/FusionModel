@@ -32,15 +32,18 @@ sys.path.insert(0, parent_dir)
 from base_model.yolo_trunk import load_yolo_trunk, get_p345_indices, align_channels, extract_features_raw
 from base_model.mlp_head import MLPHead, PoseHead_with_quaternion, PoseHead_with_2D_unitVector, SE3_lie_group_PoseHead, PoseHead_with_angle, PoseHead_with_lie_algebra, SE3_lie_algebra_direct_PoseHead
 from fusion.registry import build_fusion
+from fusion.adapters import TaskSpecificResidualGate, TaskSpecificChannelAttention, TaskFeatureAdapter
 
 
 class PoseEstimationNet(nn.Module):
     def __init__(self, model_name='yolo26n.pt', streams=("mono_cam", "tactile"), fusion="concat", freeze_backbone=False, rotation_parametrisation="quaternion", activation=nn.GELU(), 
-                 rotation_layers = [256, 1024, 16], translation_layers = [1024, 1024, 0], dropout_rot = 0.0, dropout_trans = 0.0, use_batchnorm = True):
+                 rotation_layers = [256, 1024, 16], translation_layers = [1024, 1024, 0], dropout_rot = 0.0, dropout_trans = 0.0, use_batchnorm = True, task_adapter=None,
+                 task_feature_adapter=False):
         super().__init__()
 
         self.streams = streams
         self.fusion_type = fusion
+        self.task_adapter_type = task_adapter
         self.feature_extractors = nn.ModuleDict()
         self.in_channels = {}
 
@@ -120,6 +123,37 @@ class PoseEstimationNet(nn.Module):
         self.weights = None
         self.last_fusion_weights = None
         self.last_fusion_targets = None
+        self.rot_adapter = None
+        self.trans_adapter = None
+        self.rot_adapter_activations = None
+        self.trans_adapter_activations = None
+
+        if task_adapter:
+            if task_adapter == "task_specific_residual_gate":
+                self.rot_adapter = TaskSpecificResidualGate(fused_dim)
+                self.trans_adapter = TaskSpecificResidualGate(fused_dim)
+            elif task_adapter == "task_specific_channel_attention":
+                self.rot_adapter = TaskSpecificChannelAttention(fused_dim)
+                self.trans_adapter = TaskSpecificChannelAttention(fused_dim)
+            else:
+                raise ValueError(f"Unknown task adapter: {task_adapter}")
+            self.task_adapter_type = task_adapter
+
+        # Optional task-specific feature adaptation applied after fusion, right before
+        # the rotation/translation heads. These two adapters are independent instances
+        # (no shared parameters) and do not replace the legacy `rot_adapter`/
+        # `trans_adapter` mechanism above, which is kept for backward compatibility.
+        # When disabled (default), no adapters are created and the model behaves
+        # exactly like the original implementation.
+        self.task_feature_adapter_enabled = bool(task_feature_adapter)
+        self.rotation_adapter = None
+        self.translation_adapter = None
+        self.rotation_attention = None
+        self.translation_attention = None
+
+        if self.task_feature_adapter_enabled:
+            self.rotation_adapter = TaskFeatureAdapter(fused_dim)
+            self.translation_adapter = TaskFeatureAdapter(fused_dim)
 
 
         # 3. Prediction Heads
@@ -297,19 +331,54 @@ class PoseEstimationNet(nn.Module):
             }, avg_fusion_weights
         else:
             # Run through separate heads
-            rotation = self.rot_head(fused)
+            fused_rot = fused
+            fused_trans = fused
+            rot_adapter_activations = None
+            trans_adapter_activations = None
+
+            if self.rot_adapter:
+                fused_rot, self.rot_adapter_activations = self.rot_adapter(fused)
+            if self.trans_adapter:
+                fused_trans, self.trans_adapter_activations = self.trans_adapter(fused)
+
+            # Optional task-specific feature adaptation: two independent adapters
+            # (no shared parameters) applied right before the rotation/translation
+            # heads. When disabled, behavior is unchanged (identity passthrough).
+            rotation_features = fused_rot
+            translation_features = fused_trans
+            if self.rotation_adapter is not None:
+                rotation_features, self.rotation_attention = self.rotation_adapter(fused_rot)
+            if self.translation_adapter is not None:
+                translation_features, self.translation_attention = self.translation_adapter(fused_trans)
+
+            # Run through separate heads
+            rotation = self.rot_head(rotation_features)
             if self.rotation_parametrisation == "quaternion":
                 rotation = torch.nn.functional.normalize(rotation, p=2, dim=1, eps=1e-12)
-            
-            y = self.y_head(fused)
-            z = self.z_head(fused)
+        
+            y = self.y_head(translation_features)
+            z = self.z_head(translation_features)
 
             # Return as a dictionary or concatenated vector, x=0
             x_coord = torch.zeros_like(y)
             translation = torch.cat([x_coord, y, z], dim=-1)
 
-            return {
+            output = {
                 "rotation": rotation,   # Shape: [B, 4] for quat
                 "trans": translation,    # Shape: [B, 3]
                 "pose": torch.cat([translation, rotation], dim=-1)  # Shape: [B, 7]
-            }, avg_fusion_weights  # return mean fusion weights for logging
+            }
+
+            # Optional attention logging: only present when task-specific feature
+            # adaptation is enabled. When disabled, the output dict is unchanged
+            # (no extra key added), preserving full backward compatibility. When
+            # enabled, callers that want to log the attentions can look up this
+            # key; callers (e.g. the existing training loop) that don't know about
+            # it simply ignore the extra key, so no modification is required there.
+            if self.task_feature_adapter_enabled:
+                output["task_feature_adapter_attention"] = {
+                    "rotation_attention": self.rotation_attention,
+                    "translation_attention": self.translation_attention,
+                }
+
+            return output, avg_fusion_weights  # return mean fusion weights for logging

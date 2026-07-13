@@ -146,6 +146,14 @@ def log_train_step_to_tensorboard(
             weights_to_log = weights_to_log.mean(dim=tuple(range(1, weights_to_log.ndim)))
         for idx, weight in enumerate(weights_to_log.cpu().tolist()):
             tb_writer.add_scalar(f"fusion/weight_stream_{idx}", float(weight), global_batch_step)
+            
+    if hasattr(model, "rot_adapter_activations") and model.rot_adapter_activations is not None:
+        mean_act = model.rot_adapter_activations.detach().mean()
+        tb_writer.add_scalar("adapter/rot_mean", mean_act.item(), global_batch_step)
+    
+    if hasattr(model, "trans_adapter_activations") and model.trans_adapter_activations is not None:
+        mean_act = model.trans_adapter_activations.detach().mean()
+        tb_writer.add_scalar("adapter/trans_mean", mean_act.item(), global_batch_step)
 
 
 def log_epoch_to_tensorboard(
@@ -172,16 +180,21 @@ def log_epoch_to_tensorboard(
     tb_writer.add_scalars("training/lr", {**lr_stats, "schedule_scale": lr_schedule_scale}, global_step)
 
     if uncertainty_module is not None and uncertainty_stats:
-        tb_writer.add_scalars(
-            "uncertainty/log_var",
-            {"rot": uncertainty_stats["uncertainty_log_var_rot"], "trans": uncertainty_stats["uncertainty_log_var_trans"]},
-            global_step,
-        )
-        tb_writer.add_scalars(
-            "uncertainty/weight",
-            {"rot": uncertainty_stats["uncertainty_weight_rot"], "trans": uncertainty_stats["uncertainty_weight_trans"]},
-            global_step,
-        )
+        log_var_stats = {
+            "rot": uncertainty_stats["uncertainty_log_var_rot"],
+            "trans": uncertainty_stats["uncertainty_log_var_trans"],
+        }
+        log_var_stats = {k: v for k, v in log_var_stats.items() if isinstance(v, (int, float))}
+        if log_var_stats:
+            tb_writer.add_scalars("uncertainty/log_var", log_var_stats, global_step)
+
+        weight_stats = {
+            "rot": uncertainty_stats["uncertainty_weight_rot"],
+            "trans": uncertainty_stats["uncertainty_weight_trans"],
+        }
+        weight_stats = {k: v for k, v in weight_stats.items() if isinstance(v, (int, float))}
+        if weight_stats:
+            tb_writer.add_scalars("uncertainty/weight", weight_stats, global_step)
 
     for group_name, group in param_groups_by_name.items():
         tb_writer.add_scalar(f"training/lr_groups/{group_name}", group["lr"], global_step)

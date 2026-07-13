@@ -389,9 +389,22 @@ class TrainingConfigBuilder:
             ],
             dropout_rot=self.cfg["training"]["dropout_rot"],
             dropout_trans=self.cfg["training"]["dropout_trans"],
-            use_batchnorm=self.cfg["training"]["use_batchnorm"]
+            use_batchnorm=self.cfg["training"]["use_batchnorm"],
+            task_adapter=self.cfg["model"].get("task_adapter", None),
+            task_feature_adapter=self._is_task_feature_adapter_enabled()
         )
         return model.to(self.device)
+
+    def _is_task_feature_adapter_enabled(self):
+        """Read `model.task_feature_adapter.enabled` from config, defaulting to False.
+
+        Supports both the documented mapping form (`{"enabled": true}`) and a plain
+        boolean value for convenience/backward compatibility.
+        """
+        task_feature_adapter_cfg = self.cfg["model"].get("task_feature_adapter", False)
+        if isinstance(task_feature_adapter_cfg, dict):
+            return bool(task_feature_adapter_cfg.get("enabled", False))
+        return bool(task_feature_adapter_cfg)
     
     def build_loss_function(self):
         """Build loss function from config."""

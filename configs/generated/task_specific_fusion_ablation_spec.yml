@@ -1,0 +1,15 @@
+output_dir: "configs/generated/task_specific_fusion_ablation"
+
+fixed_overrides:
+  data.augmentation.enabled: false
+  training.batch_size: 32
+  training.epochs: 50
+  training.deterministic: true
+  training.lr_schedule.type: "multi_cycle"
+  data.root: D:/MA/FusionModel/data
+  task_feature_adapter.enabled: true
+
+grid:
+  training.seed: [43, 44, 45]
+  model.fusion: ["concat"]
+  task_feature_adapter.type: ["channel_attention", "residual_gate"]
