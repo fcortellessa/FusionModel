@@ -656,6 +656,7 @@ class DataPipelineManager:
             use_online_augmentation=bool(aug_cfg.get("enabled", False)),
             augmentation_cfg=aug_cfg,
             image_size=int(self.cfg.get("data", {}).get("image_size", 640)),
+            normalize_translation=bool(self.cfg.get("data", {}).get("normalize_translation", True)),
         )
         
         if self.logger:

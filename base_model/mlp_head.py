@@ -6,6 +6,7 @@ Specific pose head classes that utilize the MLPHead in different ways for predic
 - SE3_lie_group_PoseHead: Predicts translation in (x, y, z) coordinates and rotation as a 3D vector representing the Lie algebra of SE(3).
 """
 
+import torch
 import torch.nn as nn
 
 
@@ -47,6 +48,7 @@ class PoseHead_with_quaternion(nn.Module):
         """
         t = self.translation(x)
         r = self.rotation(x)
+        r = torch.nn.functional.normalize(r, p=2, dim=1, eps=1e-12)
         return t[:, 0:1], t[:, 1:2], r
     
 

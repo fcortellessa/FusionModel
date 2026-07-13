@@ -47,6 +47,7 @@ from utils.logging_utils import (
     close_run_writers,
 )
 from losses.rotation_loss_handlers import get_rotation_handler
+from utils.normalization import MEAN_Y, STD_Y, MEAN_Z, STD_Z
 
 logger = logging.getLogger("GripFusionNet")
 log_file = None
@@ -204,6 +205,7 @@ def _train_single_epoch(
     global_batch_step,
     epoch,
     num_epochs,
+    normalize_translation=True,
 ):
     model.train()
     train_metrics = _init_epoch_metrics()
@@ -226,8 +228,18 @@ def _train_single_epoch(
         loss, loss_q, loss_y, loss_z, _ = rotation_handler.compute_loss(
             pose_pred, pose, uncertainty_module
         )
+        pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items()}
+        if normalize_translation:
+            pose_pred_unnorm["trans"][:, 1] = pose_pred_unnorm["trans"][:, 1] * STD_Y + MEAN_Y
+            pose_pred_unnorm["trans"][:, 2] = pose_pred_unnorm["trans"][:, 2] * STD_Z + MEAN_Z
+
+        pose_unnorm = pose.clone()
+        if normalize_translation:
+            pose_unnorm[:, 0] = pose_unnorm[:, 0] * STD_Y + MEAN_Y
+            pose_unnorm[:, 1] = pose_unnorm[:, 1] * STD_Z + MEAN_Z
+
         abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = rotation_handler.compute_metrics(
-            pose_pred, pose
+            pose_pred_unnorm, pose_unnorm
         )
 
         _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights)
@@ -322,6 +334,7 @@ def validation_loop(
     rotation_handler,
     device,
     uncertainty_module=None,
+    normalize_translation=True,
 ):
     """
     Run a single validation epoch.
@@ -354,11 +367,22 @@ def validation_loop(
             loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(
                 pose_pred, pose, uncertainty_module
             )
+            
+            pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items()}
+            if normalize_translation:
+                pose_pred_unnorm["trans"][:, 1] = pose_pred_unnorm["trans"][:, 1] * STD_Y + MEAN_Y
+                pose_pred_unnorm["trans"][:, 2] = pose_pred_unnorm["trans"][:, 2] * STD_Z + MEAN_Z
+
+            pose_unnorm = pose.clone()
+            if normalize_translation:
+                pose_unnorm[:, 0] = pose_unnorm[:, 0] * STD_Y + MEAN_Y
+                pose_unnorm[:, 1] = pose_unnorm[:, 1] * STD_Z + MEAN_Z
+
             abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = rotation_handler.compute_metrics(
-                pose_pred, pose
+                pose_pred_unnorm, pose_unnorm
             )
             rotation_errors.append(
-                rotation_handler.compute_rotation_errors_degrees(pose_pred, pose).detach().cpu()
+                rotation_handler.compute_rotation_errors_degrees(pose_pred_unnorm, pose_unnorm).detach().cpu()
             )
             
             _apply_metric_accumulation(
@@ -402,6 +426,7 @@ def train_loop(
     head_lr_decay_cfg=None,
     lr_schedule_cfg=None,
     rotation_loss_type="geodesic",
+    normalize_translation=True,
 ):
     best_val_loss = float("inf")
     csv_file = None
@@ -456,6 +481,7 @@ def train_loop(
                 global_batch_step=global_batch_step,
                 epoch=epoch,
                 num_epochs=num_epochs,
+                normalize_translation=normalize_translation,
             )
             global_batch_step = train_epoch["global_batch_step"]
             train_avg = train_epoch["train_avg"]
@@ -473,6 +499,7 @@ def train_loop(
                 rotation_handler=rotation_handler,
                 device=device,
                 uncertainty_module=uncertainty_module,
+                normalize_translation=normalize_translation,
             )
 
             lr_base = _get_lr_by_group(optimizer, "base")
@@ -726,6 +753,7 @@ def main(
         head_lr_decay_cfg=resolved_head_lr_cfg,
         lr_schedule_cfg=lr_schedule_cfg,
         rotation_loss_type=rotation_loss_type,
+        normalize_translation=cfg.get("data", {}).get("normalize_translation", True),
     )
 
 

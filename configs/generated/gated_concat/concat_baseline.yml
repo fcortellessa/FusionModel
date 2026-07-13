@@ -7,30 +7,30 @@ model:
   fusion: concat
   head_type: quaternion
   activation: GELU
-  mlp_quat_1: 1024
-  mlp_quat_2: 1024
-  mlp_quat_3: 512
-  mlp_trans_1: 256
-  mlp_trans_2: 128
-  mlp_trans_3: 64
+  mlp_quat_1: 512               # Balanced capacity so the translation head
+  mlp_quat_2: 256               # doesn't hijack the upstream gating mechanism
+  mlp_quat_3: 128
+  mlp_trans_1: 512
+  mlp_trans_2: 256
+  mlp_trans_3: 128
 training:
-  lr: 0.001
+  lr: 0.0001
   batch_size: 16
   epochs: 150
   num_workers: 4
-  optimizer: Adam
+  optimizer: AdamW
   uncertainty_weighting:
     enabled: false
-  dropout_rot: 0.3
+  dropout_rot: 0.1
   dropout_trans: 0.1
-  use_batchnorm: true
+  use_batchnorm: false
   lr_schedule:
     enabled: true
     type: multi_cycle
-    pct_start: 0.2
-    start_lr_mult: 0.2
-    max_lr_mult: 3.0
-    final_lr_mult: 0.05
+    pct_start: 0.1         # Shorten the warm-up so it doesn't build too much momentum
+    start_lr_mult: 0.1     # Start low
+    max_lr_mult: 1.0       # CRITICAL: Do not allow the LR to exceed your base LR
+    final_lr_mult: 0.001   # Drop much lower to allow fine-tuning of the rotation angle
   head_lr_decay:
     enabled: false
 data:
@@ -47,3 +47,4 @@ data:
     seed: 42
     photo_count: 1
     overwrite: false
+  normalize_translation: true

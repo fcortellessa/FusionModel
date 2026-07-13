@@ -8,6 +8,7 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as T
 
+from utils.normalization import MEAN_Y, STD_Y, MEAN_Z, STD_Z
 from data_processing.GripFusionNet_get_norm_params import (
     compute_mean_std_digit_images,
     compute_mean_std_rgb_images_no_crop,
@@ -19,11 +20,19 @@ from data_processing.augment_data import (
 )
 
 
-def _pose_json_to_tensor(json_path):
+def _pose_json_to_tensor(json_path, normalize_translation=True):
     with open(json_path, "r", encoding="utf-8") as f:
         pose_data = json.load(f)
 
-    pos = [float(pose_data["position"][k]) for k in ("x", "y", "z")]
+    y = float(pose_data["position"]["y"])
+    z = float(pose_data["position"]["z"])
+    x = float(pose_data["position"]["x"])
+
+    if normalize_translation:
+        y = (y - MEAN_Y) / STD_Y
+        z = (z - MEAN_Z) / STD_Z
+
+    pos = [x, y, z]
     quat = [float(pose_data["orientation"][k]) for k in ("x", "y", "z", "w")]
     return torch.tensor(pos + quat, dtype=torch.float32)
 
@@ -83,7 +92,7 @@ class PreprocessedTactileDataset(Dataset):
 
 
 class RawOnlineAugmentedTactileDataset(Dataset):
-    def __init__(self, folder_path, image_size=640, augmentation_cfg=None, norm_stats=None):
+    def __init__(self, folder_path, image_size=640, augmentation_cfg=None, norm_stats=None, normalize_translation=True):
         self.folder_path = folder_path
         self.samples = _build_raw_samples(folder_path)
         if not self.samples:
@@ -91,6 +100,7 @@ class RawOnlineAugmentedTactileDataset(Dataset):
 
         self.image_size = int(image_size)
         self.augmentation_cfg = augmentation_cfg or {}
+        self.normalize_translation = normalize_translation
         self.enable_augmentation = bool(self.augmentation_cfg.get("enabled", False))
         self.photo_count = max(0, int(self.augmentation_cfg.get("photo_count", 1)))
         self.seed = int(self.augmentation_cfg.get("seed", 42))
@@ -142,7 +152,7 @@ class RawOnlineAugmentedTactileDataset(Dataset):
 
         rgb_tensor = self.rgb_transform(rgb_img)
         digit_tensor = self.digit_transform(digit_img)
-        pose_tensor = _pose_json_to_tensor(sample["json_path"])
+        pose_tensor = _pose_json_to_tensor(sample["json_path"], normalize_translation=self.normalize_translation)
 
         return rgb_tensor, digit_tensor, pose_tensor
 
@@ -163,6 +173,7 @@ def get_dataloaders(
     use_online_augmentation=False,
     augmentation_cfg=None,
     image_size=640,
+    normalize_translation=True,
 ):
     train_raw_dir = os.path.join(root_dir, train_folder)
     train_preprocessed_dir = os.path.join(root_dir, train_folder, "train_preprocessing")
@@ -176,6 +187,7 @@ def get_dataloaders(
             image_size=image_size,
             augmentation_cfg=augmentation_cfg,
             norm_stats=stats,
+            normalize_translation=normalize_translation,
         )
     else:
         train_set = PreprocessedTactileDataset(train_preprocessed_dir)
