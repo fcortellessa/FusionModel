@@ -1,0 +1,15 @@
+output_dir: "configs/generated/gated_concat_seed_confirmation"
+
+fixed_overrides:
+  data.augmentation.enabled: false
+  training.batch_size: 32
+  training.epochs: 50
+  training.deterministic: true
+  training.lr_schedule.type: "one_cycle"
+
+grid:
+  training.seed: [43, 44, 45, 46]
+  model.fusion:
+    - "concat"
+    - "gated_concat"
+    - "residual_gated_concat"

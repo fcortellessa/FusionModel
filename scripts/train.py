@@ -6,7 +6,9 @@ import time
 from pathlib import Path
 import argparse
 import logging
+import random
 import tqdm
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -48,6 +50,35 @@ from losses.rotation_loss_handlers import get_rotation_handler
 
 logger = logging.getLogger("GripFusionNet")
 log_file = None
+
+
+def set_global_seed(seed, deterministic=True):
+    """Seed every RNG used by training before data loaders and models are built."""
+    if seed is None or seed == "":
+        return None
+    if isinstance(seed, (list, tuple)):
+        raise TypeError(
+            "training.seed must be one integer per training run. "
+            "Use a generator spec grid to expand a list of seeds into separate configs."
+        )
+
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    # cuBLAS requires this setting for deterministic CUDA matrix operations.
+    if deterministic:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+    torch.backends.cudnn.benchmark = not deterministic
+    torch.backends.cudnn.deterministic = deterministic
+    torch.use_deterministic_algorithms(deterministic, warn_only=True)
+    return seed
 
 
 def _to_float(value):
@@ -568,6 +599,12 @@ def main(
     # Load config
     cfg = load_config(config_path)
     base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    training_cfg = cfg.get("training", {})
+    resolved_seed = set_global_seed(
+        training_cfg.get("seed"),
+        deterministic=bool(training_cfg.get("deterministic", True)),
+    )
     
     # Resolve hyperparameter values
     resolved_batch_size = batch_size if batch_size is not None else cfg["training"]["batch_size"]
@@ -603,6 +640,12 @@ def main(
 
     logger, log_file = configure_run_logging(artifacts, str(tensorboard_log_dir.parent), run_metadata, logger=None, log_file=None)
     run_setup.logger = logger  # Update logger after creation
+    if resolved_seed is not None:
+        logger.info(
+            "Global RNG seed set to %s (deterministic=%s)",
+            resolved_seed,
+            bool(training_cfg.get("deterministic", True)),
+        )
     
     tensorboard_log_dir, _ = run_setup.setup_tensorboard(tensorboard_port, tensorboard_root_dir)
     

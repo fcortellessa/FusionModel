@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 
 METRICS_FIELDNAMES = [
-    "timestamp", "epoch", "train_loss", "loss_q", "loss_y", "loss_z",
+    "timestamp", "epoch", "train_loss", "val_loss", "loss_q", "loss_y", "loss_z",
     "val_loss_q", "val_loss_y", "val_loss_z",
     "train_abs_y", "train_abs_z", "train_abs_trans", "train_abs_rot_x",
     "val_abs_y", "val_abs_z", "val_abs_trans", "val_abs_rot_x",

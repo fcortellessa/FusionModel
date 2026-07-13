@@ -120,6 +120,7 @@ def build_epoch_metrics_row(
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "epoch": epoch + 1,
         "train_loss": train_avg["loss"],
+        "val_loss": val_avg["loss"],
         "loss_q": train_avg["loss_q"],
         "loss_y": train_avg["loss_y"],
         "loss_z": train_avg["loss_z"],
