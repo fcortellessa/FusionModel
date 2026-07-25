@@ -205,7 +205,7 @@ def analyze_single_run(df, output_dir: Path):
 
         # 2. OVERALL TRANSLATION AND ROTATION ERRORS
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
-        plot_train_val(df, ax1, "epoch", "train_abs_trans", "val_abs_trans", "Total Translation Error Magnitude", "Error [m or mm]", zoom_last_30=zoom)
+        plot_train_val(df, ax1, "epoch", "train_abs_trans", "val_abs_trans", "Total Translation Error Magnitude", "Error [m]", zoom_last_30=zoom)
         plot_train_val(df, ax2, "epoch", "train_abs_rot_x", "val_abs_rot_x", "Orientation Error Profile (X-axis)", "Error [deg]",
                        train_color="#e377c2", val_color="#d62728", zoom_last_30=zoom)
         ax2.set_xlabel("Epoch")
@@ -217,8 +217,8 @@ def analyze_single_run(df, output_dir: Path):
         # 3. PER-AXIS TRANSLATION ANALYSIS
         if any(col in df.columns for col in ["train_abs_y", "val_abs_y", "train_abs_z", "val_abs_z"]):
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
-            plot_train_val(df, ax1, "epoch", "train_abs_y", "val_abs_y", "Y-Axis Alignment Error", "Abs Error [m or mm]", zoom_last_30=zoom)
-            plot_train_val(df, ax2, "epoch", "train_abs_z", "val_abs_z", "Z-Axis Alignment Error", "Abs Error [m or mm]", 
+            plot_train_val(df, ax1, "epoch", "train_abs_y", "val_abs_y", "Y-Axis Alignment Error", "Abs Error [m]", zoom_last_30=zoom)
+            plot_train_val(df, ax2, "epoch", "train_abs_z", "val_abs_z", "Z-Axis Alignment Error", "Abs Error [m]", 
                            train_color="#2ca02c", val_color="#9467bd", zoom_last_30=zoom)
             ax2.set_xlabel("Epoch")
             add_run_metadata(fig, df)
@@ -256,7 +256,7 @@ def analyze_single_run(df, output_dir: Path):
             title_str = "Y-Axis Translation: Performance" + (" (Last 30 Epochs)" if zoom else "")
             ax.set_title(title_str, fontsize=11, fontweight='bold')
             ax.set_xlabel("Epoch")
-            ax.set_ylabel("Error [m or mm]")
+            ax.set_ylabel("Error [m]")
             ax.legend(fontsize=9)
             ax.grid(True, linestyle='--', alpha=0.6)
             add_run_metadata(fig, df)

@@ -1,0 +1,26 @@
+output_dir: "configs/generated/gated_concat_gating_ablation"
+
+# Ablation: which gating mechanism works best for concat-preserving fusion?
+# Crosses 4 gating variants (scalar vs. channel-wise x sigmoid vs. residual-sigmoid)
+# with 4 seeds for robustness. Template hyperparameters match the existing
+# single-seed configs for these fusions (configs/generated/gated_concat/*.yml).
+#
+# data.split_seed is pinned so all 16 runs share the identical train/val/test
+# partition -- only model init / dataloader shuffling / fusion type vary.
+# training.early_stopping stays disabled: the one_cycle/multi_cycle LR schedule
+# is shaped over the full epoch budget, so stopping early would anneal the LR
+# differently across runs and confound the comparison.
+
+fixed_overrides:
+  data.split_seed: 42
+  data.augmentation.enabled: false
+  training.deterministic: true
+  training.early_stopping.enabled: false
+
+grid:
+  training.seed: [43, 44, 45, 46]
+  model.fusion:
+    - "gated_concat"
+    - "channelwise_gated_concat"
+    - "residual_gated_concat"
+    - "channelwise_residual_gated_concat"

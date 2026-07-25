@@ -155,6 +155,19 @@ def log_train_step_to_tensorboard(
         mean_act = model.trans_adapter_activations.detach().mean()
         tb_writer.add_scalar("adapter/trans_mean", mean_act.item(), global_batch_step)
 
+    # Task-specific feature adaptation ("channel_attention" / "residual_gate",
+    # selected via model.task_feature_adapter.type) is only active when the
+    # relevant adapters were instantiated; both types share the same
+    # rotation_attention/translation_attention tensors, so the same logging
+    # code path covers both.
+    if hasattr(model, "rotation_attention") and model.rotation_attention is not None:
+        mean_attn = model.rotation_attention.detach().mean()
+        tb_writer.add_scalar("task_feature_adapter/rotation_mean", mean_attn.item(), global_batch_step)
+
+    if hasattr(model, "translation_attention") and model.translation_attention is not None:
+        mean_attn = model.translation_attention.detach().mean()
+        tb_writer.add_scalar("task_feature_adapter/translation_mean", mean_attn.item(), global_batch_step)
+
 
 def log_epoch_to_tensorboard(
     tb_writer, global_step, train_avg, val_avg, lr_stats, lr_schedule_scale,

@@ -7,6 +7,7 @@ from .gated import ARGatePlusFusion, SimpleGatedFusion, GatedSoftmaxFusion, Gate
 from .attention import AttentionFusion
 from .spatial_gated import SpatialGatedFusion2D
 from .gated_concat import (
+    ChannelWiseGatedConcatFusion,
     ChannelWiseResidualGatedConcatFusion,
     GatedConcatFusion,
     ResidualGatedConcatFusion,
@@ -22,6 +23,7 @@ FUSION_REGISTRY = {
     "attention": AttentionFusion,
     "spatial_gated_2d": SpatialGatedFusion2D,
     "gated_concat": GatedConcatFusion,
+    "channelwise_gated_concat": ChannelWiseGatedConcatFusion,
     "residual_gated_concat": ResidualGatedConcatFusion,
     "channelwise_residual_gated_concat": ChannelWiseResidualGatedConcatFusion,
 }

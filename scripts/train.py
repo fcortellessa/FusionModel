@@ -24,6 +24,7 @@ from utils.train_utils import (
     TrainingConfigBuilder,
     RunSetupManager,
     HeadLRDecayManager,
+    EarlyStoppingManager,
     EpochMetricsAggregator,
     build_epoch_metrics_row,
     _apply_metric_accumulation
@@ -425,6 +426,7 @@ def train_loop(
     tensorboard_log_dir=None,
     head_lr_decay_cfg=None,
     lr_schedule_cfg=None,
+    early_stopping_cfg=None,
     rotation_loss_type="geodesic",
     normalize_translation=True,
 ):
@@ -452,6 +454,9 @@ def train_loop(
         optimizer=optimizer,
         param_groups_by_name=param_groups_by_name,
     )
+
+    # Initialize early stopping manager (no-op when training.early_stopping.enabled is false)
+    early_stopper = EarlyStoppingManager(early_stopping_cfg)
 
     csv_file, csv_writer = init_metrics_csv(metrics_csv_path)
     tb_writer = init_tensorboard_writer(tensorboard_log_dir, metadata, logger)
@@ -536,6 +541,8 @@ def train_loop(
                 best_val_loss = val_avg["loss"]
                 save_checkpoint(model, optimizer, epoch, val_avg["loss"], checkpoint_path)
 
+            should_stop = early_stopper.update(val_avg["loss"])
+
             log_epoch_summary(
                 logger=logger,
                 epoch=epoch,
@@ -575,7 +582,7 @@ def train_loop(
                 epoch_time=epoch_time,
             )
 
-            if epoch == num_epochs - 1:
+            if epoch == num_epochs - 1 or should_stop:
                 log_hparams_to_tensorboard(
                     tb_writer=tb_writer,
                     metadata=metadata,
@@ -608,6 +615,13 @@ def train_loop(
                 checkpoint_path=checkpoint_path,
             )
             write_epoch_metrics_csv(csv_writer, row)
+
+            if should_stop:
+                logger.info(
+                    f"Early stopping at epoch {epoch + 1}: val_loss did not improve by >{early_stopper.min_delta} "
+                    f"for {early_stopper.patience} consecutive epochs (best={early_stopper.best_value:.6f})."
+                )
+                break
     finally:
         close_run_writers(csv_file, tb_writer)
 
@@ -703,6 +717,7 @@ def main(
     # Prepare training metadata
     head_lr_cfg = cfg.get("training", {}).get("head_lr_decay", {})
     lr_schedule_cfg = cfg.get("training", {}).get("lr_schedule", {})
+    early_stopping_cfg = cfg.get("training", {}).get("early_stopping", {})
     task_weighting_cfg = cfg.get("training", {}).get("task_weighting", cfg.get("training", {}).get("uncertainty_weighting", {}))
     
     resolved_head_lr_cfg = {
@@ -728,6 +743,7 @@ def main(
         "head_lr_decay": resolved_head_lr_cfg,
         "lr_schedule": lr_schedule_cfg if lr_schedule_cfg else {"enabled": False},
         "task_weighting": task_weighting_cfg if uncertainty_module is not None else {"enabled": False},
+        "early_stopping": early_stopping_cfg if early_stopping_cfg else {"enabled": False},
     }
     
     # Save manifest
@@ -752,6 +768,7 @@ def main(
         tensorboard_log_dir=tensorboard_log_dir,
         head_lr_decay_cfg=resolved_head_lr_cfg,
         lr_schedule_cfg=lr_schedule_cfg,
+        early_stopping_cfg=early_stopping_cfg,
         rotation_loss_type=rotation_loss_type,
         normalize_translation=cfg.get("data", {}).get("normalize_translation", True),
     )

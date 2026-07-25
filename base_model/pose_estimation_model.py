@@ -114,6 +114,7 @@ class PoseEstimationNet(nn.Module):
             concat_output_fusions = {
                 "concat",
                 "gated_concat",
+                "channelwise_gated_concat",
                 "residual_gated_concat",
                 "channelwise_residual_gated_concat",
             }

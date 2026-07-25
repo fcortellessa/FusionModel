@@ -246,13 +246,20 @@ def preprocess_data(
     aug_overwrite=False,
     aug_output_folder="train_augmentation_default",
     use_preaugmented_train_dir=False,
+    split_seed=None,
+    force_split=False,
 ):
-    """Main preprocessing pipeline: split, augment (if needed), and preprocess all splits."""
+    """Main preprocessing pipeline: split, augment (if needed), and preprocess all splits.
+
+    split_seed/force_split are forwarded to split_dataset(): the split is only
+    reshuffled when its manifest doesn't already match (seed/ratios/source data),
+    or when force_split is True. See GripFusionNet_split.py::split_dataset.
+    """
     output_path = os.path.join(root_dir, "Data_split/")
-    
+
     # ---- Stage 1: Dataset splitting ----
     print("Splitting dataset into train/val/test")
-    split_dataset(root_dir, output_path)
+    split_dataset(root_dir, output_path, seed=split_seed, force=force_split)
 
     train_split_dir = os.path.join(output_path, "train")
 

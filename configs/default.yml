@@ -49,9 +49,22 @@ training:
     patience: 5
     factor: 0.2
     min_lr_mult: 0.00001
+  early_stopping:
+    enabled: false
+    # Stop once val_loss hasn't improved by more than min_delta for this many
+    # consecutive epochs (checked against the same val_loss used for checkpoint
+    # selection). Training still stops no later than `epochs`.
+    patience: 10
+    min_delta: 0.0
 
 data:
   root: ""
+  # Optional: seed used only for the train/val/test split. Defaults to training.seed
+  # when omitted, so existing configs are unaffected. Set this explicitly (and keep it
+  # fixed) when sweeping training.seed, so the sweep measures model/training variance
+  # rather than data-partition variance. The split is only rebuilt when split_seed (or
+  # the ratios/source data) actually changes -- see Data_split/split_manifest.json.
+  split_seed: null
   streams: ["mono_cam", "tactile"]
   image_size: 640
   use_rgb: true

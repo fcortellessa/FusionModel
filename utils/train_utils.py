@@ -294,6 +294,29 @@ class HeadLRDecayManager:
             group["lr"] = base_group_lr * current_lr_scale * group_multiplier
 
 
+class EarlyStoppingManager:
+    """Stops training when val_loss stops improving by more than min_delta."""
+
+    def __init__(self, early_stopping_cfg):
+        early_stopping_cfg = early_stopping_cfg or {}
+        self.enabled = bool(early_stopping_cfg.get("enabled", False))
+        self.patience = int(early_stopping_cfg.get("patience", 10))
+        self.min_delta = float(early_stopping_cfg.get("min_delta", 0.0))
+        self.best_value = float("inf")
+        self.bad_epochs = 0
+
+    def update(self, val_loss):
+        """Call once per epoch with val_avg['loss']. Returns True if training should stop now."""
+        if not self.enabled:
+            return False
+        if val_loss < self.best_value - self.min_delta:
+            self.best_value = val_loss
+            self.bad_epochs = 0
+        else:
+            self.bad_epochs += 1
+        return self.bad_epochs >= self.patience
+
+
 class EpochMetricsAggregator:
     """Aggregates and provides easy access to epoch metrics."""
     
@@ -619,18 +642,41 @@ class DataPipelineManager:
     def preprocess_if_needed(self):
         """Preprocess data if needed."""
         from data_processing.preprocess_data import preprocess_data
-        
+        from data_processing.GripFusionNet_split import split_manifest_matches
+
         data_dir = self._get_data_dir()
-        
+
         aug_cfg = self.cfg.get("data", {}).get("augmentation", {})
         use_photo_aug = bool(aug_cfg.get("enabled", False))
-        preprocessed_dir = os.path.join(data_dir, "Data_split", "train", "train_preprocessing")
-        should_preprocess = self.force_preprocess or (not os.path.exists(preprocessed_dir))
-        
+
+        # split_seed is independent of training.seed so a training.seed sweep can
+        # reuse one fixed split; falls back to training.seed when unset so existing
+        # configs keep their current (implicit) behavior.
+        split_seed = self.cfg.get("data", {}).get(
+            "split_seed", self.cfg.get("training", {}).get("seed")
+        )
+
+        split_root = os.path.join(data_dir, "Data_split")
+        preprocessed_dir = os.path.join(split_root, "train", "train_preprocessing")
+        cache_exists = os.path.exists(preprocessed_dir)
+
+        # Cheap check (listdir + manifest read) so a split_seed change is picked
+        # up automatically even when the preprocessing cache already exists.
+        split_is_current = split_manifest_matches(data_dir, split_root, seed=split_seed)
+
+        should_preprocess = self.force_preprocess or not cache_exists or not split_is_current
+
         if should_preprocess:
+            if self.force_preprocess:
+                reason = "--force_preprocess"
+            elif not split_is_current:
+                reason = "data.split_seed (or ratios/source data) changed"
+            else:
+                reason = "preprocessing cache missing"
+
             if self.logger:
-                self.logger.info(f"Preprocessing data from {data_dir}")
-            
+                self.logger.info(f"Preprocessing data from {data_dir} ({reason})")
+
             preprocess_data(
                 root_dir=data_dir,
                 use_photometric_augmentation=use_photo_aug,
@@ -639,6 +685,8 @@ class DataPipelineManager:
                 aug_overwrite=bool(aug_cfg.get("overwrite", False)),
                 aug_output_folder=str(aug_cfg.get("output_folder", "train_augmentation_default")),
                 use_preaugmented_train_dir=False,
+                split_seed=split_seed,
+                force_split=self.force_preprocess,
             )
         elif use_photo_aug:
             if self.logger:

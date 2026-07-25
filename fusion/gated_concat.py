@@ -75,6 +75,27 @@ class ResidualGatedConcatFusion(_BaseGatedConcatFusion):
         return out, weights
 
 
+@register_fusion("channelwise_gated_concat")
+class ChannelWiseGatedConcatFusion(_BaseGatedConcatFusion):
+    """Apply an independent sigmoid gate to every channel of every stream, then concatenate."""
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, gate_outputs=num_streams * dim)
+
+    def forward(self, features_list):
+        # Reshape flat gate logits into one (num_streams, dim) gate map per item.
+        combined = self._gate_inputs(features_list)
+        weights = self.gate(combined).reshape(-1, self.num_streams, self.dim)
+        weights = torch.sigmoid(weights)  # (B, num_streams, dim)
+
+        weighted_features = [
+            weights[:, stream_idx, :] * feature
+            for stream_idx, feature in enumerate(features_list)
+        ]
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
 @register_fusion("channelwise_residual_gated_concat")
 class ChannelWiseResidualGatedConcatFusion(_BaseGatedConcatFusion):
     """Concatenate streams after independently residual-gating every channel."""
