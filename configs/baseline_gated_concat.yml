@@ -31,9 +31,9 @@ training:
   lr_schedule:
     enabled: true
     type: one_cycle
-    pct_start: 0.2         # Shorten the warm-up so it doesn't build too much momentum
+    pct_start: 0.15        # Shorten the warm-up so it doesn't build too much momentum
     start_lr_mult: 0.2     # Start low
-    max_lr_mult: 2.0       # Be aware of strange behavior if the LR to exceeds the base LR
+    max_lr_mult: 1.0       # Be aware of strange behavior if the LR to exceeds the base LR
     final_lr_mult: 0.001   # Drop much lower to allow fine-tuning of the rotation angle
   head_lr_decay:
     enabled: false

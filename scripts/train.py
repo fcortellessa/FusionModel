@@ -207,6 +207,7 @@ def _train_single_epoch(
     epoch,
     num_epochs,
     normalize_translation=True,
+    grad_clip_max_norm=None,
 ):
     model.train()
     train_metrics = _init_epoch_metrics()
@@ -267,6 +268,9 @@ def _train_single_epoch(
         )
 
         loss.backward()
+
+        if grad_clip_max_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm)
 
         log_train_step_to_tensorboard(
             tb_writer=tb_writer,
@@ -429,6 +433,7 @@ def train_loop(
     early_stopping_cfg=None,
     rotation_loss_type="geodesic",
     normalize_translation=True,
+    grad_clip_max_norm=None,
 ):
     best_val_loss = float("inf")
     csv_file = None
@@ -487,6 +492,7 @@ def train_loop(
                 epoch=epoch,
                 num_epochs=num_epochs,
                 normalize_translation=normalize_translation,
+                grad_clip_max_norm=grad_clip_max_norm,
             )
             global_batch_step = train_epoch["global_batch_step"]
             train_avg = train_epoch["train_avg"]
@@ -719,6 +725,8 @@ def main(
     lr_schedule_cfg = cfg.get("training", {}).get("lr_schedule", {})
     early_stopping_cfg = cfg.get("training", {}).get("early_stopping", {})
     task_weighting_cfg = cfg.get("training", {}).get("task_weighting", cfg.get("training", {}).get("uncertainty_weighting", {}))
+    grad_clip_cfg = cfg.get("training", {}).get("grad_clip", {})
+    grad_clip_max_norm = float(grad_clip_cfg["max_norm"]) if grad_clip_cfg.get("enabled", False) else None
     
     resolved_head_lr_cfg = {
         "enabled": bool(head_lr_cfg.get("enabled", True)),
@@ -744,6 +752,7 @@ def main(
         "lr_schedule": lr_schedule_cfg if lr_schedule_cfg else {"enabled": False},
         "task_weighting": task_weighting_cfg if uncertainty_module is not None else {"enabled": False},
         "early_stopping": early_stopping_cfg if early_stopping_cfg else {"enabled": False},
+        "grad_clip": {"enabled": grad_clip_max_norm is not None, "max_norm": grad_clip_max_norm},
     }
     
     # Save manifest
@@ -771,6 +780,7 @@ def main(
         early_stopping_cfg=early_stopping_cfg,
         rotation_loss_type=rotation_loss_type,
         normalize_translation=cfg.get("data", {}).get("normalize_translation", True),
+        grad_clip_max_norm=grad_clip_max_norm,
     )
 
 
