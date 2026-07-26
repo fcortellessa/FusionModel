@@ -1,0 +1,94 @@
+output_dir: "configs/generated/lr_ablation"
+
+fixed_overrides:
+  data.root: "/home/MA_Flavia/Documents/FusionModel/Data"
+  data.augmentation.enabled: false
+  data.split_seed: 42
+  training.batch_size: 32
+  training.epochs: 50
+  training.deterministic: true
+  model.fusion: "gated_concat"
+
+variants:
+  - name: one_cycle_seed43
+    overrides:
+      training.seed: 43
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "one_cycle"
+      training.lr_schedule.pct_start: 0.15
+      training.lr_schedule.start_lr_mult: 0.2
+      training.lr_schedule.max_lr_mult: 1.0
+      training.lr_schedule.final_lr_mult: 0.001
+      training.head_lr_decay.enabled: false
+  - name: one_cycle_seed43_grad_clipping
+    overrides:
+      training.seed: 43
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "one_cycle"
+      training.lr_schedule.pct_start: 0.15
+      training.lr_schedule.start_lr_mult: 0.2
+      training.lr_schedule.max_lr_mult: 1.0
+      training.lr_schedule.final_lr_mult: 0.001
+      training.head_lr_decay.enabled: false
+      training.grad_clip.enabled: true
+      training.grad_clip.max_norm: 1.0
+  - name: fixed_lr_plateau_seed43
+    overrides:
+      training.seed: 43
+      training.lr_schedule.enabled: false
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr_mult: 0.00001
+  - name: fixed_lr_plateau_seed43_grad_clipping
+    overrides:
+      training.seed: 43
+      training.lr_schedule.enabled: false
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr_mult: 0.00001
+      training.head_lr_decay.enabled: false
+      training.grad_clip.enabled: true
+      training.grad_clip.max_norm: 1.0
+  - name: one_cycle_seed44
+    overrides:
+      training.seed: 44
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "one_cycle"
+      training.lr_schedule.pct_start: 0.15
+      training.lr_schedule.start_lr_mult: 0.2
+      training.lr_schedule.max_lr_mult: 1.0
+      training.lr_schedule.final_lr_mult: 0.001
+      training.head_lr_decay.enabled: false
+  - name: one_cycle_seed44_grad_clipping
+    overrides:
+      training.seed: 44
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "one_cycle"
+      training.lr_schedule.pct_start: 0.15
+      training.lr_schedule.start_lr_mult: 0.2
+      training.lr_schedule.max_lr_mult: 1.0
+      training.lr_schedule.final_lr_mult: 0.001
+      training.head_lr_decay.enabled: false
+      training.grad_clip.enabled: true
+      training.grad_clip.max_norm: 1.0
+  - name: fixed_lr_plateau_seed44
+    overrides:
+      training.seed: 44
+      training.lr_schedule.enabled: false
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr_mult: 0.00001
+  - name: fixed_lr_plateau_seed44_grad_clipping
+    overrides:
+      training.seed: 44
+      training.lr_schedule.enabled: false
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr_mult: 0.00001
+      training.head_lr_decay.enabled: false
+      training.grad_clip.enabled: true
+      training.grad_clip.max_norm: 1.0

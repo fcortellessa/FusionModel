@@ -138,6 +138,21 @@ def _compute_uncertainty_stats(uncertainty_module):
         }
 
 
+def _reduce_dual_fusion_branches(value):
+    """Collapse a dual_fusion {"rotation": T, "translation": T} dict into one tensor.
+
+    Averages the two task-specific branches so the existing single-fusion gate-stat/
+    TensorBoard pipeline (built around one fusion module) keeps working unchanged for
+    dual_fusion runs. Plain tensors/None (the non-dual_fusion case) pass through as-is.
+    """
+    if not isinstance(value, dict):
+        return value
+    branches = [v for v in value.values() if v is not None]
+    if not branches:
+        return None
+    return torch.stack(branches, dim=0).mean(dim=0)
+
+
 def _init_fusion_gate_stats():
     """Create accumulators for compact, per-stream gate diagnostics."""
     return {"sum": None, "sum_sq": None, "count": None, "lt_0_1": None, "gt_0_9": None}
@@ -225,7 +240,8 @@ def _train_single_epoch(
         pose = batch["pose"].to(device)
 
         pose_pred, fusion_weights = model(batch, aux_losses=aux_losses)
-        fusion_targets = model.last_fusion_targets
+        fusion_weights = _reduce_dual_fusion_branches(fusion_weights)
+        fusion_targets = _reduce_dual_fusion_branches(model.last_fusion_targets)
 
         loss, loss_q, loss_y, loss_z, _ = rotation_handler.compute_loss(
             pose_pred, pose, uncertainty_module
@@ -244,7 +260,7 @@ def _train_single_epoch(
             pose_pred_unnorm, pose_unnorm
         )
 
-        _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights)
+        _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights))
 
         _apply_metric_accumulation(
             train_metrics,
@@ -366,7 +382,7 @@ def validation_loop(
             aux_losses = batch.pop("aux_losses", None)
             pose = batch["pose"].to(device)
             pose_pred, _ = model(batch, aux_losses=aux_losses)
-            _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights)
+            _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights))
             
             # Compute loss and metrics using rotation handler
             loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(

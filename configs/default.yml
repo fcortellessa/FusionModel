@@ -3,6 +3,12 @@ model:
   freeze_backbone: false
   streams: ["rgb_image", "digit_image"]
   fusion: "concat"
+  # True dual fusion: build two independent instances of the `fusion` module above
+  # (separate learned parameters), one combining the RGB/tactile streams for the
+  # rotation branch and one for the translation branch, instead of sharing a single
+  # fused vector between both heads. Off by default; incompatible with head_type
+  # 'se3_direct' (that head needs one joint fused vector).
+  dual_fusion: false
   head_type: quaternion
   activation: GELU
   mlp_quat_1: 1024
@@ -34,6 +40,11 @@ training:
     # gradnorm_alpha: 0.5
     # DWA-only settings:
     # dwa_temperature: 2.0
+  # Gradient-norm clipping (applied to all model parameters, after loss.backward()
+  # and before optimizer.step()). Disabled by default to preserve existing baselines.
+  grad_clip:
+    enabled: false
+    max_norm: 1.0
   dropout_rot: 0.3
   dropout_trans: 0.1
   use_batchnorm: True

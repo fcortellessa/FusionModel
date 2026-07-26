@@ -1,15 +1,19 @@
-output_dir: "configs/generated/task_specific_fusion_ablation"
+output_dir: "configs/generated/dual_fusion"
 
 fixed_overrides:
   data.augmentation.enabled: false
+  model.fusion: gated_concat
   training.batch_size: 32
   training.epochs: 50
   training.deterministic: true
-  training.lr_schedule.type: "multi_cycle"
+  training.lr_schedule.type: "one_cycle"
+  training.grad_clip.enabled: true
+  training.grad_clip.max_norm: 1.0
   data.root: D:/MA/FusionModel/data
   task_feature_adapter.enabled: true
 
 grid:
   training.seed: [43, 44, 45]
-  model.fusion: ["concat"]
-  task_feature_adapter.type: ["channel_attention", "residual_gate"]
+  model.dual_fusion: [true, false]
+  task_feature_adapter.type: ["gated_concat"] #, "residual_gated_concat"]
+

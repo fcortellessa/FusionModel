@@ -414,7 +414,9 @@ class TrainingConfigBuilder:
             dropout_trans=self.cfg["training"]["dropout_trans"],
             use_batchnorm=self.cfg["training"]["use_batchnorm"],
             task_adapter=self.cfg["model"].get("task_adapter", None),
-            task_feature_adapter=self._is_task_feature_adapter_enabled()
+            task_feature_adapter=self._is_task_feature_adapter_enabled(),
+            task_feature_adapter_type=self._get_task_feature_adapter_type(),
+            dual_fusion=bool(self.cfg["model"].get("dual_fusion", False))
         )
         return model.to(self.device)
 
@@ -428,6 +430,13 @@ class TrainingConfigBuilder:
         if isinstance(task_feature_adapter_cfg, dict):
             return bool(task_feature_adapter_cfg.get("enabled", False))
         return bool(task_feature_adapter_cfg)
+
+    def _get_task_feature_adapter_type(self):
+        """Read `model.task_feature_adapter.type` from config, defaulting to "channel_attention"."""
+        task_feature_adapter_cfg = self.cfg["model"].get("task_feature_adapter", False)
+        if isinstance(task_feature_adapter_cfg, dict):
+            return task_feature_adapter_cfg.get("type", "channel_attention")
+        return "channel_attention"
     
     def build_loss_function(self):
         """Build loss function from config."""
