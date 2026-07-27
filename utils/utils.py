@@ -13,6 +13,27 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
+def resolve_data_root(cfg, repo_root):
+    """Resolve the dataset root directory from `data.root`, defaulting to <repo_root>/Data.
+
+    Shared by every entry point that needs to locate a run's data (training and
+    testing) so they all agree on the same folder for the same config.
+    """
+    configured_root = cfg.get("data", {}).get("root", "")
+    if configured_root:
+        return os.path.abspath(configured_root)
+    return os.path.abspath(os.path.join(repo_root, "Data"))
+
+
+def resolve_split_seed(cfg):
+    """Resolve the seed used for the train/val/test split.
+
+    `data.split_seed` when set, otherwise `training.seed` (matching the split's
+    historical implicit behavior). See data_processing/GripFusionNet_split.py.
+    """
+    return cfg.get("data", {}).get("split_seed", cfg.get("training", {}).get("seed"))
+
+
 def sanitize_filename(value):
     value = str(value)
     value = re.sub(r'[<>:"/\\|?*]+', "_", value)

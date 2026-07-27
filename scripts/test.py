@@ -25,8 +25,11 @@ sys.path.insert(0, parent_dir)
 
 from base_model.pose_estimation_model import PoseEstimationNet
 from data_processing.dataloader_preprocessed import get_test_dataloader
-from utils.utils import load_checkpoint, load_config, get_optimizer
+from data_processing.preprocess_data import ensure_test_split_current
+from utils.utils import load_checkpoint, load_config, get_optimizer, resolve_data_root
 from utils.train_utils import _build_named_param_groups
+
+REPO_ROOT = parent_dir
 
 
 def _normalize_quaternions(quaternions):
@@ -55,7 +58,6 @@ def _quaternion_geodesic_error_deg(pred_quat, target_quat):
 
 
 config_path = "configs/gated.yml"
-root_data_path = "Data/Data_split/"
 
 def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, device):
     model = PoseEstimationNet(
@@ -71,9 +73,16 @@ def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, d
         dropout_trans=config["training"]["dropout_trans"],
         use_batchnorm=config["training"]["use_batchnorm"]
     )
+    # Resolve this run's own data root (config["data"]["root"], same fallback as
+    # training) and make sure its test split matches the run's split seed before
+    # reading it -- rebuilding it if it's missing or stale.
+    data_root = resolve_data_root(config, REPO_ROOT)
+    ensure_test_split_current(config, data_root)
+    split_root = os.path.join(data_root, "Data_split")
+
     # load state dict
     test_loader = get_test_dataloader(
-        root_dir=root_data_path,
+        root_dir=split_root,
         batch_size=config["training"]["batch_size"],
         shuffle=False # Typically False for testing
     )

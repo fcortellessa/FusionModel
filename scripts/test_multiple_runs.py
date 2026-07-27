@@ -2,8 +2,17 @@
 This script runs test.py for multiple run folders.
 """
 
+import json
 import os
 import subprocess
+import sys
+from pathlib import Path
+
+CURRENT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = CURRENT_DIR.parent
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 # ==============================================================================
 # CONFIGURATION: Paste your folders here
@@ -21,6 +30,40 @@ ABLATION_FOLDER = "runs/data_augmentation/"
 # Subdirectories within the ablation folder to completely skip
 IGNORE_FOLDERS = ["results"]
 
+
+def _resolve_run_config_path(folder_path):
+    manifest_candidates = [
+        os.path.join(folder_path, "manifest.json"),
+        os.path.join(folder_path, "run_manifest.json"),
+    ]
+
+    for manifest_path in manifest_candidates:
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+
+            config_path = manifest.get("config_snapshot_path") or manifest.get("config_path")
+            if config_path and os.path.exists(config_path):
+                return config_path
+
+    for fallback_name in ["config.yml", "config.resolved.yml"]:
+        fallback_path = os.path.join(folder_path, fallback_name)
+        if os.path.exists(fallback_path):
+            return fallback_path
+
+    raise FileNotFoundError(f"Could not resolve a config file for run folder: {folder_path}")
+
+
+def _ensure_matching_split(cfg, folder_path):
+    from utils.utils import resolve_data_root
+    from data_processing.preprocess_data import ensure_test_split_current
+
+    data_root = resolve_data_root(cfg, REPO_ROOT)
+    split_seed = ensure_test_split_current(
+        cfg, data_root, log=lambda msg: print(f"\U0001f504 {msg} ({folder_path})")
+    )
+    print(f"✅ Split ready (seed={split_seed}) for {folder_path}")
+
 # ==============================================================================
 # EXECUTION LOGIC
 # ==============================================================================
@@ -29,13 +72,20 @@ def run_inference_on_folder(folder_path):
     print(f"\n" + "="*80)
     print(f"🚀 Processing: {folder_path}")
     print("="*80 + "\n")
+
+    from utils.utils import load_config
+
+    cfg_path = _resolve_run_config_path(folder_path)
+    cfg = load_config(cfg_path)
+    _ensure_matching_split(cfg, folder_path)
     
     # Constructs the exact command line arguments for your test.py
-    cmd = ["python", "test.py", "--run_folder", folder_path]
+    test_script = REPO_ROOT / "scripts" / "test.py"
+    cmd = [sys.executable, str(test_script), "--run_folder", folder_path]
     
     try:
         # Runs the script and streams output directly to your current console
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, cwd=str(REPO_ROOT))
     except subprocess.CalledProcessError as e:
         print(f"❌ Error occurred while processing: {folder_path}")
         print(f"Details: {e}\n")
@@ -68,8 +118,9 @@ def main():
 
     # Loop through and run inference sequentially
     for folder in folders_to_process:
-        if os.path.exists(folder):
-            run_inference_on_folder(folder)
+        absolute_folder = os.path.abspath(folder)
+        if os.path.exists(absolute_folder):
+            run_inference_on_folder(absolute_folder)
         else:
             print(f"⚠️ Warning: Folder path does not exist, skipping: {folder}")
 

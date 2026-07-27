@@ -303,4 +303,36 @@ def preprocess_data(
         )
 
     _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_std)
-        
+
+
+def ensure_test_split_current(cfg, data_root, log=print):
+    """Make sure <data_root>/Data_split/test/test_preprocessing matches this run's
+    configured split seed/ratios/source data before it's read for evaluation,
+    rebuilding it (via preprocess_data) if it doesn't or is missing.
+
+    Shared by scripts/test.py and scripts/test_multiple_runs.py so evaluation
+    always reads the split that corresponds to the run's own training-time seed
+    (data.split_seed, falling back to training.seed), not whatever happens to
+    already be on disk at data_root.
+    """
+    from data_processing.GripFusionNet_split import split_manifest_matches
+    from utils.utils import resolve_split_seed
+
+    split_root = os.path.join(data_root, "Data_split")
+    split_seed = resolve_split_seed(cfg)
+    test_cache_dir = os.path.join(split_root, "test", "test_preprocessing")
+
+    split_matches = split_manifest_matches(data_root, split_root, seed=split_seed)
+    cache_exists = os.path.exists(test_cache_dir)
+
+    if split_matches and cache_exists:
+        return split_seed
+
+    reason = []
+    if not split_matches:
+        reason.append("split manifest mismatch")
+    if not cache_exists:
+        reason.append("test preprocessing cache missing")
+    log(f"Preparing split at {data_root} (seed={split_seed}, reason={', '.join(reason)})")
+    preprocess_data(root_dir=data_root, split_seed=split_seed, force_split=False)
+    return split_seed
