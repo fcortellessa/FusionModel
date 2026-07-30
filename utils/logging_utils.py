@@ -288,9 +288,8 @@ def log_run_start(logger, log_file, artifacts, tensorboard_log_dir, run_metadata
     if bool(lr_schedule_cfg.get("enabled", False)):
         logger.info(
             "lr_schedule enabled=true "
-            f"type={lr_schedule_cfg.get('type', 'one_cycle')} "
+            f"type={lr_schedule_cfg.get('type', 'warmup_cosine')} "
             f"start_lr_mult={lr_schedule_cfg.get('start_lr_mult', 0.2)} "
-            f"max_lr_mult={lr_schedule_cfg.get('max_lr_mult', 3.0)} "
             f"final_lr_mult={lr_schedule_cfg.get('final_lr_mult', 0.05)}"
         )
 

@@ -25,7 +25,7 @@ RUN_FOLDERS_TO_BE_INFERENCED = [
 ]
 
 # Option 2: Provide a parent directory (it will scan all direct subdirectories)
-ABLATION_FOLDER = "runs/data_augmentation/"
+ABLATION_FOLDER = "runs/gated_concat_gating_ablation"
 
 # Subdirectories within the ablation folder to completely skip
 IGNORE_FOLDERS = ["results"]
@@ -79,12 +79,17 @@ def run_inference_on_folder(folder_path):
     cfg = load_config(cfg_path)
     _ensure_matching_split(cfg, folder_path)
     
-    # Constructs the exact command line arguments for your test.py
+    # Explicitly specify results subfolder inside the run folder
+    results_dir = os.path.join(folder_path, "results")
+    
     test_script = REPO_ROOT / "scripts" / "test.py"
-    cmd = [sys.executable, str(test_script), "--run_folder", folder_path]
+    cmd = [
+        sys.executable, str(test_script),
+        "--run_folder", folder_path,
+        "--results_dir", results_dir
+    ]
     
     try:
-        # Runs the script and streams output directly to your current console
         subprocess.run(cmd, check=True, cwd=str(REPO_ROOT))
     except subprocess.CalledProcessError as e:
         print(f"❌ Error occurred while processing: {folder_path}")

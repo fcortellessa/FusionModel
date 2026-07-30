@@ -304,71 +304,75 @@ def plot_results(results_directory, csv_results, config_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--run_folder", type=str, default=None, help="Path to a structured run folder containing config, checkpoints, etc.")
-    # folder or each config and checkpoint specified separately
-    parser.add_argument("--config", type=str, default=config_path, help="Path to the training config used for the run")
+    parser.add_argument("--config", type=str, default=None, help="Path to the training config used for the run")
     parser.add_argument("--run_dir", type=str, default=None, help="Specific run directory to load instead of the latest run")
     parser.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint path to load")
     parser.add_argument("--results_dir", type=str, default=None, help="Override the directory where test CSVs are saved")
     
     args = parser.parse_args()
 
-    # --run_folder input
-    if args.run_folder is not None:
-        manifest_path = os.path.join(args.run_folder, "manifest.json")
+    # Normalize run folder if provided
+    target_folder = args.run_folder or args.run_dir
+
+    if target_folder is not None:
+        target_folder = os.path.abspath(target_folder)
+        manifest_path = os.path.join(target_folder, "manifest.json")
+        legacy_manifest = os.path.join(target_folder, "run_manifest.json")
         
+        manifest = {}
         if os.path.exists(manifest_path):
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
-        else:
-            # Fallback layout mapping based on your structure
-            manifest = {
-                "config_snapshot_path": os.path.join(args.run_folder, "config.yml"),
-                "checkpoint_path": os.path.join(args.run_folder, "checkpoint_best.pth"),
-                "results_dir": os.path.join(args.run_folder, "results"),
-            }
-
-    # separate inputs for config and checkpoint
-    elif args.run_dir is not None:
-        manifest_path = os.path.join(args.run_dir, "manifest.json")
-        legacy_manifest_path = os.path.join(args.run_dir, "run_manifest.json")
-        if os.path.exists(manifest_path):
-            with open(manifest_path, "r", encoding="utf-8") as f:
+        elif os.path.exists(legacy_manifest):
+            with open(legacy_manifest, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
-        elif os.path.exists(legacy_manifest_path):
-            with open(legacy_manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        else:
-            manifest = {
-                "config_snapshot_path": os.path.join(args.run_dir, "config.yml"),
-                "checkpoint_path": os.path.join(args.run_dir, "checkpoint_best.pth"),
-                "run_dir": args.run_dir,
-                "results_dir": os.path.join(args.run_dir, "results"),
-            }
 
-            if not os.path.exists(manifest["config_snapshot_path"]):
-                manifest["config_snapshot_path"] = os.path.join(args.run_dir, "config.resolved.yml")
-            if not os.path.exists(manifest["checkpoint_path"]):
-                manifest["checkpoint_path"] = os.path.join(args.run_dir, "checkpoints", "best.pth")
+        # 1. Resolve Config Path (Prefer local file if manifest path is broken)
+        cfg_path = manifest.get("config_snapshot_path") or manifest.get("config_path")
+        if not cfg_path or not os.path.exists(cfg_path):
+            for candidate in ["config.yml", "config.resolved.yml"]:
+                cand_path = os.path.join(target_folder, candidate)
+                if os.path.exists(cand_path):
+                    cfg_path = cand_path
+                    break
+
+        # 2. Resolve Checkpoint Path (Prefer local checkpoint if manifest path points elsewhere)
+        model_path = args.checkpoint or manifest.get("checkpoint_path")
+        if not model_path or not os.path.exists(model_path):
+            for candidate in ["checkpoint_best.pth", "checkpoints/best.pth", "best.pth", "model.pth"]:
+                cand_path = os.path.join(target_folder, candidate)
+                if os.path.exists(cand_path):
+                    model_path = cand_path
+                    break
+
+        # 3. Resolve Results Directory inside the run folder
+        results_dir = args.results_dir or os.path.join(target_folder, "results")
+
     else:
         if args.checkpoint is None:
             raise ValueError("Provide either --run_folder, --run_dir, or an explicit --checkpoint.")
-        manifest = {
-            "config_snapshot_path": args.config,
-            "checkpoint_path": args.checkpoint,
-            "results_dir": "results",
-        }
+        cfg_path = args.config
+        model_path = args.checkpoint
+        results_dir = args.results_dir or "results"
 
-    # Execute inference and evaluation
-    cfg_path = manifest.get("config_snapshot_path") or args.config
-    cfg = load_config(cfg_path)
-    model_path = args.checkpoint or manifest["checkpoint_path"]
-    results_dir = args.results_dir or manifest.get("results_dir") or os.path.join(os.path.dirname(model_path), "..", "results")
-    
+    if not cfg_path or not os.path.exists(cfg_path):
+        raise FileNotFoundError(f"Could not locate a valid config file for run: {target_folder}")
+    if not model_path or not os.path.exists(model_path):
+        raise FileNotFoundError(f"Could not locate a valid checkpoint file for run: {target_folder}")
+
     os.makedirs(results_dir, exist_ok=True)
     
+    cfg = load_config(cfg_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Loading weights from: {model_path}")
+    print(f"Saving outputs to: {results_dir}\n")
 
     infer_and_evaluate(cfg, model_path, None, results_dir, device)
     
-    plot_results(results_dir, pd.read_csv(os.path.join(results_dir, os.listdir(results_dir)[-1])), cfg_path)
+    # Plotting using the generated CSV in the specific run's results_dir
+    csv_files = [os.path.join(results_dir, f) for f in os.listdir(results_dir) if f.endswith(".csv")]
+    if csv_files:
+        latest_csv = max(csv_files, key=os.path.getmtime)
+        plot_results(results_dir, pd.read_csv(latest_csv), cfg_path)
+        

@@ -51,23 +51,29 @@ def _build_named_param_groups(model, base_lr):
     return param_groups
 
 def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
+    """Warmup + cosine decay schedule, expressed as a per-epoch multiplier on base_lr.
+
+    Ramps linearly from `start_lr_mult` to 1.0 over the warmup epochs, then cosine-decays
+    from 1.0 down to `final_lr_mult` over the remaining epochs.
+    """
     schedule_cfg = schedule_cfg or {}
     if not bool(schedule_cfg.get("enabled", False)):
         return lambda epoch_idx: 1.0
 
-    schedule_type = str(schedule_cfg.get("type", "one_cycle")).lower()
-    if schedule_type not in {"one_cycle", "warmup_cosine", "multi_cycle"}:
+    schedule_type = str(schedule_cfg.get("type", "warmup_cosine")).lower()
+    # one_cycle/multi_cycle are retired; old configs using those names now just get
+    # warmup_cosine behavior (their max_lr_mult key, if present, is ignored).
+    if schedule_type not in {"warmup_cosine", "one_cycle", "multi_cycle"}:
         raise ValueError(
-            f"Unsupported lr_schedule type: {schedule_type}. Supported options: one_cycle, warmup_cosine, multi_cycle."
+            f"Unsupported lr_schedule type: {schedule_type}. Supported options: warmup_cosine."
         )
 
     start_lr_mult = float(schedule_cfg.get("start_lr_mult", 0.2))
-    peak_lr_mult = float(schedule_cfg.get("max_lr_mult", 3.0))
     final_lr_mult = float(schedule_cfg.get("final_lr_mult", 0.05))
     if "warmup_epochs" in schedule_cfg:
         warmup_epochs = int(schedule_cfg.get("warmup_epochs", 1))
     else:
-        pct_start = float(schedule_cfg.get("pct_start", 0.2))
+        pct_start = float(schedule_cfg.get("pct_start", 0.2))   # pct = percentage of total epochs for warmup
         warmup_epochs = int(round(num_epochs * pct_start))
     warmup_epochs = max(1, min(warmup_epochs, max(1, num_epochs - 1)))
     warmup_end_epoch = warmup_epochs - 1
@@ -75,19 +81,17 @@ def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
 
     def lr_scale(epoch_idx):
         if num_epochs <= 1:
-            return peak_lr_mult if schedule_type == "one_cycle" else 1.0
+            return 1.0
 
         if epoch_idx <= warmup_end_epoch:
             if warmup_end_epoch == 0:
-                return peak_lr_mult if schedule_type == "one_cycle" else 1.0
+                return 1.0
             progress = epoch_idx / float(warmup_end_epoch)
-            target_peak = peak_lr_mult if schedule_type == "one_cycle" else 1.0
-            return start_lr_mult + (target_peak - start_lr_mult) * progress
+            return start_lr_mult + (1.0 - start_lr_mult) * progress
 
         progress = min(max((epoch_idx - warmup_end_epoch) / float(decay_span), 0.0), 1.0)
         cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
-        target_peak = peak_lr_mult if schedule_type == "one_cycle" else 1.0
-        return final_lr_mult + (target_peak - final_lr_mult) * cosine
+        return final_lr_mult + (1.0 - final_lr_mult) * cosine
 
     return lr_scale
 
@@ -175,123 +179,115 @@ def build_epoch_metrics_row(
 # Manager Classes for Training Organization
 # ============================================================================
 
+class _MultiplierOptimizer(torch.optim.Optimizer):
+    """A single-param-group no-op Optimizer whose `lr` is a pure multiplier in [min_lr_mult, 1.0].
+
+    ReduceLROnPlateau requires a real torch.optim.Optimizer and only ever reads/writes
+    param_groups[0]["lr"]. Running it over this shadow multiplier (instead of the real,
+    cosine-scaled group LR) lets the plateau reduction persist independently of the
+    epoch's cosine scale, which is re-applied separately every epoch in
+    `HeadLRDecayManager.apply_lr_scale`.
+    """
+
+    def __init__(self):
+        dummy_param = nn.Parameter(torch.zeros(1), requires_grad=False)
+        super().__init__([dummy_param], {"lr": 1.0})
+
+    def step(self, closure=None):
+        pass
+
+
 class HeadLRDecayManager:
-    """Manages per-head learning rate decay based on validation performance."""
-    
-    def __init__(self, head_lr_decay_cfg, base_lr, optimizer, param_groups_by_name):
+    """Per-head ReduceLROnPlateau: decays each head's LR off that head's own best-ever val loss."""
+
+    def __init__(self, head_lr_decay_cfg, optimizer, param_groups_by_name):
         """
         Args:
             head_lr_decay_cfg: Config dict with 'enabled', 'patience', 'factor', 'min_lr_mult'
-            base_lr: Base learning rate
             optimizer: PyTorch optimizer
             param_groups_by_name: Dict mapping group names to param groups
         """
         self.enabled = bool(head_lr_decay_cfg.get("enabled", True))
-        self.patience = int(head_lr_decay_cfg.get("patience", 3))
-        self.reduce_factor = float(head_lr_decay_cfg.get("factor", 0.3))
-        self.min_lr_mult = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
-        
+        patience = int(head_lr_decay_cfg.get("patience", 3))
+        factor = float(head_lr_decay_cfg.get("factor", 0.3))
+        min_lr_mult = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
+
         self.optimizer = optimizer
         self.param_groups_by_name = param_groups_by_name
-        
-        # Track base LRs for each group
+
+        # Track base LRs for each group so the global cosine schedule can be re-applied
+        # on top of the plateau-reduced multiplier every epoch.
         self.base_group_lrs = {
             group_name: float(group["lr"])
             for group_name, group in param_groups_by_name.items()
         }
-        
-        # Track multipliers for each group
-        self.group_lr_multipliers = {group_name: 1.0 for group_name in self.base_group_lrs}
-        
-        # Per-head tracking state
-        self.head_state = {
-            "q": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_rot"},
-            "y": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_y"},
-            "z": {"best_val": float("inf"), "bad_epochs": 0, "group_name": "head_z"},
-        }
-        
-        self.min_lrs = {
-            "q": base_lr * self.min_lr_mult,
-            "y": base_lr * self.min_lr_mult,
-            "z": base_lr * self.min_lr_mult,
-        }
-    
+
+        head_to_group = {"q": "head_rot", "y": "head_y", "z": "head_z"}
+        self.group_to_head = {v: k for k, v in head_to_group.items()}
+        self.plateau_schedulers = {}
+        self.multiplier_views = {}
+        for head_key, group_name in head_to_group.items():
+            if group_name not in param_groups_by_name:
+                continue
+            view = _MultiplierOptimizer()
+            self.multiplier_views[head_key] = view
+            self.plateau_schedulers[head_key] = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                view,
+                mode="min",
+                factor=factor,
+                patience=patience,
+                min_lr=min_lr_mult,
+            )
+
     def update(self, train_metrics, val_metrics, current_lr_scale, logger=None):
         """
-        Update head LR multipliers based on training and validation metrics.
-        
+        Step each head's ReduceLROnPlateau scheduler on that head's own val loss.
+
         Args:
-            train_metrics: Dict with 'loss_q', 'loss_y', 'loss_z'
+            train_metrics: Dict with 'loss_q', 'loss_y', 'loss_z' (unused; kept for call-site compatibility)
             val_metrics: Dict with 'loss_q', 'loss_y', 'loss_z'
-            current_lr_scale: Current LR schedule scale factor
+            current_lr_scale: Current LR schedule scale factor (unused here; the plateau
+                multiplier is combined with it in apply_lr_scale)
             logger: Optional logger for decay notifications
         """
         if not self.enabled:
             return
-        
-        per_head_losses = {
-            "q": {"train": train_metrics["loss_q"], "val": val_metrics["loss_q"]},
-            "y": {"train": train_metrics["loss_y"], "val": val_metrics["loss_y"]},
-            "z": {"train": train_metrics["loss_z"], "val": val_metrics["loss_z"]},
+
+        val_by_head = {
+            "q": val_metrics["loss_q"],
+            "y": val_metrics["loss_y"],
+            "z": val_metrics["loss_z"],
         }
-        
-        for head_key, head_vals in per_head_losses.items():
-            state = self.head_state[head_key]
-            best_val = state["best_val"]
-            val_head = head_vals["val"]
-            train_head = head_vals["train"]
-            
-            # Check if validation improved
-            if val_head < best_val:
-                state["best_val"] = val_head
-                state["bad_epochs"] = 0
-                continue
-            
-            # Check for overfitting
-            overfit_detected = val_head > train_head
-            if overfit_detected:
-                state["bad_epochs"] += 1
-            else:
-                state["bad_epochs"] = 0
-            
-            # Apply decay if patience exceeded
-            if state["bad_epochs"] < self.patience:
-                continue
-            
-            group_name = state["group_name"]
-            group = self.param_groups_by_name.get(group_name)
-            if group is None:
-                continue
-            
-            old_lr = float(group["lr"])
-            new_multiplier = max(
-                self.group_lr_multipliers.get(group_name, 1.0) * self.reduce_factor,
-                self.min_lr_mult
-            )
-            self.group_lr_multipliers[group_name] = new_multiplier
-            new_lr = max(
-                self.base_group_lrs.get(group_name, old_lr) * current_lr_scale * new_multiplier,
-                self.min_lrs[head_key]
-            )
-            
-            if new_lr < old_lr:
-                group["lr"] = new_lr
-                if logger:
-                    logger.info(
-                        f"head_lr_reduce head={head_key} group={group_name} "
-                        f"old_lr={old_lr:.8f} new_lr={new_lr:.8f} train_head={train_head:.6f} "
-                        f"val_head={val_head:.6f} bad_epochs={state['bad_epochs']}"
-                    )
-            
-            state["bad_epochs"] = 0
-    
+
+        for head_key, scheduler in self.plateau_schedulers.items():
+            view = self.multiplier_views[head_key]
+            old_mult = float(view.param_groups[0]["lr"])
+            scheduler.step(val_by_head[head_key])
+            new_mult = float(view.param_groups[0]["lr"])
+            if new_mult < old_mult and logger:
+                group_name = {"q": "head_rot", "y": "head_y", "z": "head_z"}[head_key]
+                logger.info(
+                    f"head_lr_reduce head={head_key} group={group_name} "
+                    f"old_mult={old_mult:.6f} new_mult={new_mult:.6f} val_head={val_by_head[head_key]:.6f} "
+                    f"num_bad_epochs={scheduler.num_bad_epochs}"
+                )
+
     def apply_lr_scale(self, current_lr_scale):
-        """Apply global LR schedule scale to all groups."""
+        """Apply the global LR schedule scale to all groups, layered on top of each head's
+        persistent plateau multiplier."""
         for group_idx, group in enumerate(self.optimizer.param_groups):
             group_name = group.get("name", f"group_{group_idx}")
             base_group_lr = self.base_group_lrs.get(group_name, float(group["lr"]))
-            group_multiplier = self.group_lr_multipliers.get(group_name, 1.0)
-            group["lr"] = base_group_lr * current_lr_scale * group_multiplier
+            group["lr"] = base_group_lr * current_lr_scale * self._plateau_multiplier(group_name)
+
+    def _plateau_multiplier(self, group_name):
+        head_key = self.group_to_head.get(group_name)
+        if head_key is None:
+            return 1.0
+        view = self.multiplier_views.get(head_key)
+        if view is None:
+            return 1.0
+        return float(view.param_groups[0]["lr"])
 
 
 class EarlyStoppingManager:
@@ -738,28 +734,30 @@ class DataPipelineManager:
 class RunSetupManager:
     """Manages run setup: logging, artifacts, tensorboard, manifests."""
     
-    def __init__(self, config_path, cfg, batch_size, logger=None):
+    def __init__(self, config_path, cfg, batch_size, logger=None, run_directory=None):
         """
         Args:
             config_path: Path to config file
             cfg: Config dict
             batch_size: Batch size
             logger: Optional logger
+            run_directory: Optional override for the run output root (default "runs")
         """
         self.config_path = config_path
         self.cfg = cfg
         self.batch_size = batch_size
         self.logger = logger
         self.artifacts = None
-    
+        self.run_directory = run_directory or "runs"
+
     def setup_artifacts(self):
         """Build run artifacts directory structure."""
-        
+
         self.artifacts = build_run_artifacts(
             self.config_path,
             self.cfg,
             self.batch_size,
-            output_root="runs"
+            output_root=self.run_directory
         )
         save_yaml(self.cfg, self.artifacts["config_snapshot_path"])
         

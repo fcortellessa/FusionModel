@@ -50,10 +50,9 @@ training:
   use_batchnorm: True
   lr_schedule:
     enabled: true
-    type: one_cycle
+    type: warmup_cosine
     pct_start: 0.2
     start_lr_mult: 0.2
-    max_lr_mult: 3.0
     final_lr_mult: 0.05
   head_lr_decay:
     enabled: false

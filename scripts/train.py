@@ -459,9 +459,7 @@ def train_loop(
     global_batch_step = 0
 
     lr_scale_fn = _build_epoch_lr_scale_fn(num_epochs, lr_schedule_cfg)
-    base_group = next((g for g in optimizer.param_groups if g.get("name") == "base"), optimizer.param_groups[0])
-    base_lr = float(base_group["lr"])
-    
+
     param_groups_by_name = {
         group.get("name", f"group_{idx}"): group
         for idx, group in enumerate(optimizer.param_groups)
@@ -471,7 +469,6 @@ def train_loop(
     head_lr_decay_cfg = head_lr_decay_cfg or {}
     head_lr_manager = HeadLRDecayManager(
         head_lr_decay_cfg=head_lr_decay_cfg,
-        base_lr=base_lr,
         optimizer=optimizer,
         param_groups_by_name=param_groups_by_name,
     )
@@ -655,6 +652,7 @@ def main(
     tensorboard_root_dir=None,
     tensorboard_port=6006,
     force_preprocess=False,
+    run_directory=None,
 ):
     """Main training entry point."""
     global logger, log_file
@@ -683,7 +681,7 @@ def main(
     nested_run_name = Path(fusion_type) / head_type / f"{optimizer_name}_{timestamp}_bs{resolved_batch_size}"
     
     # Setup run artifacts, logging, and tensorboard
-    run_setup = RunSetupManager(config_path, cfg, resolved_batch_size)
+    run_setup = RunSetupManager(config_path, cfg, resolved_batch_size, run_directory=run_directory)
     artifacts = run_setup.setup_artifacts()
 
     # Overwrite the default tensorboard target directory with nested layout
@@ -822,6 +820,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Force rebuild of Data_split and *_preprocessed folders before training",
     )
+    parser.add_argument(
+        "--run_directory",
+        type=str,
+        default=None,
+        help="Root directory for run outputs (default: runs)",
+    )
 
     args = parser.parse_args()
 
@@ -832,4 +836,5 @@ if __name__ == "__main__":
         tensorboard_root_dir=args.tensorboard_root,
         tensorboard_port=args.tensorboard_port,
         force_preprocess=args.force_preprocess,
+        run_directory=args.run_directory,
     )

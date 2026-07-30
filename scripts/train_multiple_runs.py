@@ -34,7 +34,13 @@ def discover_configs_from_folder(config_dir):
     return configs
 
 
-def run_multiple_trainings(configs, batch_sizes, tb_port, reset_tb_dir=True, cleanup_tb_dir=False):
+def run_multiple_trainings(configs, batch_sizes, tb_port, run_directory=None, reset_tb_dir=True, cleanup_tb_dir=False):
+    """Run training for each (batch_size, config) pair.
+
+    Args:
+        run_directory: Optional root directory for run outputs, passed through to
+            train.py's --run_directory. Defaults to train.py's own default ("runs").
+    """
     session_tag = datetime.now().strftime("multi_run_%Y%m%d_%H%M%S")
     tensorboard_root = os.path.join("logs", "tensorboard", session_tag)
 
@@ -60,6 +66,8 @@ def run_multiple_trainings(configs, batch_sizes, tb_port, reset_tb_dir=True, cle
                 "--tensorboard_port",
                 str(tb_port),
             ]
+            if run_directory is not None:
+                command += ["--run_directory", run_directory]
             subprocess.run(command, check=True)
 
     if cleanup_tb_dir:
@@ -95,6 +103,12 @@ if __name__ == "__main__":
         help="Port for TensorBoard attach/start behavior",
     )
     parser.add_argument(
+        "--run_directory",
+        type=str,
+        default=None,
+        help="Root directory where run outputs are saved (passed through to train.py, default: runs)",
+    )
+    parser.add_argument(
         "--no_reset_tb_dir",
         action="store_true",
         help="Do not clear the TensorBoard session root before running",
@@ -112,6 +126,7 @@ if __name__ == "__main__":
         configs=configs,
         batch_sizes=args.batch_sizes,
         tb_port=args.tensorboard_port,
+        run_directory=args.run_directory,
         reset_tb_dir=not args.no_reset_tb_dir,
         cleanup_tb_dir=args.cleanup_tb_dir,
     )

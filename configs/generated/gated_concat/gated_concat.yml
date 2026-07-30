@@ -26,7 +26,7 @@ training:
   use_batchnorm: true
   lr_schedule:
     enabled: true
-    type: multi_cycle
+    type: one_cycle
     pct_start: 0.2
     start_lr_mult: 0.2
     max_lr_mult: 3.0
