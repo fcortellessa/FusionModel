@@ -2,6 +2,7 @@
 This script runs test.py for multiple run folders.
 """
 
+import argparse
 import json
 import os
 import subprocess
@@ -24,10 +25,7 @@ RUN_FOLDERS_TO_BE_INFERENCED = [
     # "runs/run2",
 ]
 
-# Option 2: Provide a parent directory (it will scan all direct subdirectories)
-ABLATION_FOLDER = "runs/gated_concat_gating_ablation"
-
-# Subdirectories within the ablation folder to completely skip
+# Subdirectories within the ablation/run folder to completely skip
 IGNORE_FOLDERS = ["results"]
 
 
@@ -60,15 +58,16 @@ def _ensure_matching_split(cfg, folder_path):
 
     data_root = resolve_data_root(cfg, REPO_ROOT)
     split_seed = ensure_test_split_current(
-        cfg, data_root, log=lambda msg: print(f"\U0001f504 {msg} ({folder_path})")
+        cfg, data_root, log=lambda msg: print(f"🔄 {msg} ({folder_path})")
     )
     print(f"✅ Split ready (seed={split_seed}) for {folder_path}")
+
 
 # ==============================================================================
 # EXECUTION LOGIC
 # ==============================================================================
 
-def run_inference_on_folder(folder_path):
+def run_inference_on_folder(folder_path, plot_formats):
     print(f"\n" + "="*80)
     print(f"🚀 Processing: {folder_path}")
     print("="*80 + "\n")
@@ -86,7 +85,8 @@ def run_inference_on_folder(folder_path):
     cmd = [
         sys.executable, str(test_script),
         "--run_folder", folder_path,
-        "--results_dir", results_dir
+        "--results_dir", results_dir,
+        "--plot_format", *plot_formats
     ]
     
     try:
@@ -95,28 +95,54 @@ def run_inference_on_folder(folder_path):
         print(f"❌ Error occurred while processing: {folder_path}")
         print(f"Details: {e}\n")
 
+
 def main():
+    parser = argparse.ArgumentParser(description="Batch inference runner")
+    parser.add_argument(
+        "--plot_format", 
+        nargs="+", 
+        choices=["png", "svg", "html", "all"], 
+        default=["all"],
+        help="Plot formats to generate (default: all)"
+    )
+    parser.add_argument(
+        "--run_dir", 
+        type=str, 
+        default=None, 
+        help="Directory containing sub-run folders, or a single run directory."
+    )
+    args = parser.parse_args()
+
     folders_to_process = []
 
-    # 1. Add explicitly listed folders
+    # 1. Add explicitly listed folders from top configuration
     if RUN_FOLDERS_TO_BE_INFERENCED:
         folders_to_process.extend(RUN_FOLDERS_TO_BE_INFERENCED)
 
-    # 2. Automatically find and add subfolders from the ablation directory
-    if ABLATION_FOLDER and os.path.isdir(ABLATION_FOLDER):
-        subdirs = []
-        for d in os.listdir(ABLATION_FOLDER):
-            # Check if it's a directory and NOT in our ignore list
-            if os.path.isdir(os.path.join(ABLATION_FOLDER, d)) and d not in IGNORE_FOLDERS:
-                subdirs.append(os.path.join(ABLATION_FOLDER, d))
-        subdirs.sort()  # Sorts them alphabetically/numerically
-        folders_to_process.extend(subdirs)
+    # 2. Add folders specified by --run_dir argument
+    if args.run_dir:
+        run_path = Path(args.run_dir)
+        if run_path.is_dir():
+            # Find subdirectories inside run_dir that aren't ignored
+            subdirs = [
+                str(d) for d in run_path.iterdir() 
+                if d.is_dir() and d.name not in IGNORE_FOLDERS
+            ]
+            
+            if subdirs:
+                subdirs.sort()
+                folders_to_process.extend(subdirs)
+            else:
+                # If no child run folders exist, assume run_dir itself is the run directory
+                folders_to_process.append(str(run_path))
+        else:
+            print(f"⚠️ Warning: Provided --run_dir does not exist: {args.run_dir}")
 
     # Remove duplicates while preserving order
     folders_to_process = list(dict.fromkeys(folders_to_process))
 
     if not folders_to_process:
-        print("⚠️ No folders found to process. Please check your configuration at the top of the script.")
+        print("⚠️ No folders found to process. Please check your CLI arguments or script config.")
         return
 
     print(f"📋 Total runs found to process: {len(folders_to_process)}")
@@ -125,11 +151,12 @@ def main():
     for folder in folders_to_process:
         absolute_folder = os.path.abspath(folder)
         if os.path.exists(absolute_folder):
-            run_inference_on_folder(absolute_folder)
+            run_inference_on_folder(absolute_folder, args.plot_format)
         else:
             print(f"⚠️ Warning: Folder path does not exist, skipping: {folder}")
 
     print("\n✅ All runs processed successfully.")
+
 
 if __name__ == "__main__":
     main()

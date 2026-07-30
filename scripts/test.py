@@ -1,8 +1,3 @@
-# test script
-
-# usage: 
-# python .\scripts\test.py --config runs\20260511_152356_bs16_gated\config.yml 
-# --checkpoint runs\20260511_152356_bs16_gated\checkpoint_best.pth --results_dir runs\20260511_152356_bs16_gated\results
 import argparse
 import json
 import time
@@ -57,9 +52,7 @@ def _quaternion_geodesic_error_deg(pred_quat, target_quat):
     return np.degrees(2.0 * np.arccos(dot))
 
 
-config_path = "configs/gated.yml"
-
-def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, device):
+def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     model = PoseEstimationNet(
         model_name=config["model"]["backbone"],
         streams=config["model"]["streams"],
@@ -73,29 +66,23 @@ def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, d
         dropout_trans=config["training"]["dropout_trans"],
         use_batchnorm=config["training"]["use_batchnorm"]
     )
-    # Resolve this run's own data root (config["data"]["root"], same fallback as
-    # training) and make sure its test split matches the run's split seed before
-    # reading it -- rebuilding it if it's missing or stale.
+    
     data_root = resolve_data_root(config, REPO_ROOT)
     ensure_test_split_current(config, data_root)
     split_root = os.path.join(data_root, "Data_split")
 
-    # load state dict
     test_loader = get_test_dataloader(
         root_dir=split_root,
         batch_size=config["training"]["batch_size"],
-        shuffle=False # Typically False for testing
+        shuffle=False
     )
-    # Create a dummy optimizer for checkpoint loading (optimizer state not needed for inference)
+    
     optimizer = get_optimizer(model_or_params=model, optimizer_name=config["training"]["optimizer"], lr=config["training"]["lr"])
     load_checkpoint(model, optimizer, model_path, device="cpu", load_optimizer=False)
-    # load_checkpoint(model, checkpoint_path=model_path, device="cpu", load_optimizer=False)
     print("Model loaded successfully!")
 
-    # run inference
     model.eval()
     
-    # Store raw results efficiently across batches
     pred_translations = []
     pred_rotations = []
     pred_poses = []
@@ -104,33 +91,30 @@ def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, d
     with torch.no_grad():
         for sample in test_loader:
             inputs = {k: v for k, v in sample.items() if k != "pose"}
-            target = sample["pose"] # Assumed shape [B, D]
+            target = sample["pose"]
 
             model_out, fusion_weights = model(inputs)
-            trans = model_out["trans"]       # [B, 3]
-            rotation = model_out["rotation"] # [B, 3] or [B, 4]
+            trans = model_out["trans"]
+            rotation = model_out["rotation"]
             
             pred_translations.append(trans.cpu().numpy())
             pred_rotations.append(rotation.cpu().numpy())
             pred_poses.append(model_out["pose"].cpu().numpy())
             gt_poses.append(target.cpu().numpy())
 
-    # Flatten collected batches into single arrays
     pred_translations = np.concatenate(pred_translations, axis=0)
     pred_rotations = np.concatenate(pred_rotations, axis=0)
     pred_poses = np.concatenate(pred_poses, axis=0)
     gt_poses = np.concatenate(gt_poses, axis=0)
     
-    # Pose tensors in this project are [x, y, z, qx, qy, qz, qw].
     gt_translations = gt_poses[:, :3]
     gt_rotations = gt_poses[:, 3:7]
     pred_rotations = pred_poses[:, 3:7]
     
     num_samples = gt_poses.shape[0]
 
-    # Compute errors (fixing the data flow issue in original script)
     val_abs_trans_vec = np.abs(pred_translations - gt_translations)
-    val_abs_trans = np.linalg.norm(val_abs_trans_vec, axis=1) # Vector magnitude
+    val_abs_trans = np.linalg.norm(val_abs_trans_vec, axis=1)
     val_abs_x = val_abs_trans_vec[:, 0]
     val_abs_y = val_abs_trans_vec[:, 1]
     val_abs_z = val_abs_trans_vec[:, 2]
@@ -142,18 +126,14 @@ def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, d
     val_abs_rot_x = np.degrees(roll_diff)
     val_abs_rot_z = _quaternion_geodesic_error_deg(pred_rotations, gt_rotations)
 
-    # Assemble results into a clean dictionary
-    # Storing raw numpy arrays here will fail with DataFrame, convert to simple lists or keep as flat arrays
     csv_results = {
         "sample_id": np.arange(num_samples),
-        # Store individual components for easy plotting/analysis
         "pred_trans_x": pred_translations[:, 0],
         "pred_trans_y": pred_translations[:, 1],
         "pred_trans_z": pred_translations[:, 2],
         "gt_trans_x": gt_translations[:, 0],
         "gt_trans_y": gt_translations[:, 1],
         "gt_trans_z": gt_translations[:, 2],
-        # Mandatory columns needed by the original metrics code
         "val_abs_trans": val_abs_trans,
         "val_abs_x": val_abs_x,
         "val_abs_y": val_abs_y,
@@ -162,14 +142,12 @@ def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, d
         "val_abs_rot_z": val_abs_rot_z,
     }
 
-    # Save results to CSV
     df = pd.DataFrame(csv_results)
     timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
     csv_name = f"results_{timestamp}.csv"
     df.to_csv(os.path.join(results_dir, csv_name), index=False)
     print(f"Saved inference results to {os.path.join(results_dir, csv_name)}")
 
-    # Compute metrics (best, worst, mean, variance) and save to a text file
     metrics_name = f"metrics_{timestamp}.txt"
     with open(os.path.join(results_dir, metrics_name), "w") as f:
         if "val_abs_trans" in df.columns:
@@ -205,8 +183,8 @@ def infer_and_evaluate(config, checkpoint_model, test_data, results_directory, d
     print(f"Saved metrics to {os.path.join(results_dir, metrics_name)}")
 
 
-def plot_results(results_directory, csv_results, config_path):
-    print("Generating visualization plots...")
+def plot_results_matplotlib(results_directory, csv_results, config_path, timestamp, formats):
+    print(f"Generating Matplotlib visualization plots ({', '.join(formats)})...")
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, axs = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle(f"Pose Estimation Test Results\nRun: {os.path.basename(config_path)}", fontsize=16)
@@ -238,32 +216,24 @@ def plot_results(results_directory, csv_results, config_path):
     ax.set_ylabel("Frequency")
     ax.legend()
 
-    # Plot 4: Boxplot of Translation Errors by Axis (Per-component analysis) and Rotation Error (geodesic)
-    data_to_plot = [csv_results['val_abs_x'], csv_results['val_abs_y'], csv_results['val_abs_z'], csv_results['val_abs_rot_x']]
-    
+    # Plot 4: Boxplot
     ax_trans = axs[1, 1]
     ax_rot = ax_trans.twinx()
     ax_rot.grid(False) 
 
-    # Plot Translation errors on the primary left axis
     bp_trans = ax_trans.boxplot([csv_results['val_abs_y'], csv_results['val_abs_z']], positions=[1, 2], widths=0.5, patch_artist=True, notch=True)
     bp_rot = ax_rot.boxplot([csv_results['val_abs_rot_x']], positions=[3], widths=0.5, patch_artist=True, notch=True)
 
-    # --- Styling ---
-    # Colors for: [Translation Y, Translation Z, Rotation X]
     colors = ['#3498db', '#de8f05', '#029e73']
     
-    # Apply colors and styles to Translation boxes
     for patch, color in zip(bp_trans['boxes'], colors[0:2]):
         patch.set_facecolor(color)
         patch.set_alpha(0.6)
     
-    # Apply color and style to Rotation box
     for patch in bp_rot['boxes']:
         patch.set_facecolor(colors[2])
         patch.set_alpha(0.6)
 
-    # Uniform styling across all whiskers, caps, medians, and fliers
     for bp in [bp_trans, bp_rot]:
         for whisker in bp['whiskers']:
             whisker.set(color='#7f8c8d', linewidth=1.5, linestyle=":")
@@ -274,31 +244,106 @@ def plot_results(results_directory, csv_results, config_path):
         for flier in bp['fliers']:
             flier.set(marker='o', color='#e74c3c', alpha=0.5)
 
-    # --- Axis Limits & Labels ---
-    # Set the x-axis limits to frame our 3 positions nicely
     ax_trans.set_xlim(0.5, 3.5)
     ax_trans.set_xticks([1, 2, 3])
     ax_trans.set_xticklabels(['Error Y', 'Error Z', 'Rot Error X'])
     
-    # Title and separate Y labels
     ax_trans.set_title("Component Error Breakdown")
     ax_trans.set_ylabel("Translation Error (meters)", color='#3498db')
     ax_rot.set_ylabel("Rotation Error (degrees)", color='#029e73')
     
-    # Optional: Color the axis tick labels to match the data
     ax_trans.tick_params(axis='y', labelcolor='#3498db')
     ax_rot.tick_params(axis='y', labelcolor='#029e73')
 
-    # --- Save & Finalize ---
-    plt.tight_layout(rect=[0, 0.03, 1, 0.97]) # Adjust layout to not cut off title
+    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
 
-    # Save the figure
-    timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
-    plot_name = f"summary_plots_{timestamp}.png"
-    plt.savefig(os.path.join(results_directory, plot_name), dpi=150)
-    print(f"Saved visualization plots to {os.path.join(results_directory, plot_name)}")
+    for fmt in formats:
+        plot_name = f"summary_plots_{timestamp}.{fmt}"
+        save_path = os.path.join(results_directory, plot_name)
+        plt.savefig(save_path, dpi=150)
+        print(f"Saved {fmt.upper()} plot to {save_path}")
 
     plt.close()
+
+
+def plot_results_plotly(results_directory, csv_results, config_path, timestamp):
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+    except ImportError:
+        print("⚠️ Plotly is not installed (`pip install plotly`). Skipping HTML export.")
+        return
+
+    print("Generating interactive Plotly dashboard (HTML)...")
+    
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=(
+            "Y-Translation Error Distribution",
+            "Z-Translation Error Distribution",
+            "Rotation Error Distribution (Axis X)",
+            "Component Error Breakdown"
+        ),
+        specs=[[{}, {}], [{}, {"secondary_y": True}]]
+    )
+
+    # 1. Y Error Hist
+    fig.add_trace(go.Histogram(x=csv_results['val_abs_y'], name="Y Error", marker_color='#3498db', opacity=0.7), row=1, col=1)
+    mean_y = csv_results['val_abs_y'].mean()
+    fig.add_vline(x=mean_y, line_dash="dash", line_color="red", annotation_text=f"Mean: {mean_y:.4f}", row=1, col=1)
+
+    # 2. Z Error Hist
+    fig.add_trace(go.Histogram(x=csv_results['val_abs_z'], name="Z Error", marker_color='#de8f05', opacity=0.7), row=1, col=2)
+    mean_z = csv_results['val_abs_z'].mean()
+    fig.add_vline(x=mean_z, line_dash="dash", line_color="red", annotation_text=f"Mean: {mean_z:.4f}", row=1, col=2)
+
+    # 3. Rot X Error Hist
+    fig.add_trace(go.Histogram(x=csv_results['val_abs_rot_x'], name="Rot X Error", marker_color='#029e73', opacity=0.7), row=2, col=1)
+    mean_rot = csv_results['val_abs_rot_x'].mean()
+    fig.add_vline(x=mean_rot, line_dash="dash", line_color="red", annotation_text=f"Mean: {mean_rot:.4f}", row=2, col=1)
+
+    # 4. Boxplots
+    fig.add_trace(go.Box(y=csv_results['val_abs_y'], name="Error Y", marker_color='#3498db'), row=2, col=2, secondary_y=False)
+    fig.add_trace(go.Box(y=csv_results['val_abs_z'], name="Error Z", marker_color='#de8f05'), row=2, col=2, secondary_y=False)
+    fig.add_trace(go.Box(y=csv_results['val_abs_rot_x'], name="Rot Error X", marker_color='#029e73'), row=2, col=2, secondary_y=True)
+
+    fig.update_layout(
+        title_text=f"Pose Estimation Test Results — Run: {os.path.basename(config_path)}",
+        showlegend=False,
+        template="plotly_white"
+    )
+    
+    fig.update_xaxes(title_text="Absolute Error (meters)", row=1, col=1)
+    fig.update_xaxes(title_text="Absolute Error (meters)", row=1, col=2)
+    fig.update_xaxes(title_text="Absolute Error (degrees/radians)", row=2, col=1)
+    
+    fig.update_yaxes(title_text="Translation Error (meters)", row=2, col=2, secondary_y=False)
+    fig.update_yaxes(title_text="Rotation Error (degrees)", row=2, col=2, secondary_y=True)
+
+    html_path = os.path.join(results_directory, f"summary_plots_{timestamp}.html")
+    fig.write_html(html_path, include_plotlyjs='cdn')
+    print(f"Saved interactive HTML plot to {html_path}")
+
+
+def dispatch_plots(results_directory, csv_results, config_path, formats):
+    # Parse choice combinations
+    requested_formats = set()
+    for fmt in formats:
+        if fmt == "all":
+            requested_formats.update(["png", "svg", "html"])
+        else:
+            requested_formats.add(fmt)
+
+    timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
+    
+    # Static plots via Matplotlib
+    mpl_formats = [f for f in ["png", "svg"] if f in requested_formats]
+    if mpl_formats:
+        plot_results_matplotlib(results_directory, csv_results, config_path, timestamp, mpl_formats)
+        
+    # Interactive HTML via Plotly
+    if "html" in requested_formats:
+        plot_results_plotly(results_directory, csv_results, config_path, timestamp)
 
 
 if __name__ == "__main__":
@@ -308,10 +353,16 @@ if __name__ == "__main__":
     parser.add_argument("--run_dir", type=str, default=None, help="Specific run directory to load instead of the latest run")
     parser.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint path to load")
     parser.add_argument("--results_dir", type=str, default=None, help="Override the directory where test CSVs are saved")
+    parser.add_argument(
+        "--plot_format", 
+        nargs="+", 
+        choices=["png", "svg", "html", "all"], 
+        default=["all"],
+        help="Plot formats to generate (e.g., --plot_format svg html). Default: all"
+    )
     
     args = parser.parse_args()
 
-    # Normalize run folder if provided
     target_folder = args.run_folder or args.run_dir
 
     if target_folder is not None:
@@ -327,7 +378,6 @@ if __name__ == "__main__":
             with open(legacy_manifest, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
 
-        # 1. Resolve Config Path (Prefer local file if manifest path is broken)
         cfg_path = manifest.get("config_snapshot_path") or manifest.get("config_path")
         if not cfg_path or not os.path.exists(cfg_path):
             for candidate in ["config.yml", "config.resolved.yml"]:
@@ -336,7 +386,6 @@ if __name__ == "__main__":
                     cfg_path = cand_path
                     break
 
-        # 2. Resolve Checkpoint Path (Prefer local checkpoint if manifest path points elsewhere)
         model_path = args.checkpoint or manifest.get("checkpoint_path")
         if not model_path or not os.path.exists(model_path):
             for candidate in ["checkpoint_best.pth", "checkpoints/best.pth", "best.pth", "model.pth"]:
@@ -345,7 +394,6 @@ if __name__ == "__main__":
                     model_path = cand_path
                     break
 
-        # 3. Resolve Results Directory inside the run folder
         results_dir = args.results_dir or os.path.join(target_folder, "results")
 
     else:
@@ -370,9 +418,7 @@ if __name__ == "__main__":
 
     infer_and_evaluate(cfg, model_path, None, results_dir, device)
     
-    # Plotting using the generated CSV in the specific run's results_dir
     csv_files = [os.path.join(results_dir, f) for f in os.listdir(results_dir) if f.endswith(".csv")]
     if csv_files:
         latest_csv = max(csv_files, key=os.path.getmtime)
-        plot_results(results_dir, pd.read_csv(latest_csv), cfg_path)
-        
+        dispatch_plots(results_dir, pd.read_csv(latest_csv), cfg_path, args.plot_format)
