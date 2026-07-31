@@ -55,17 +55,25 @@ def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
 
     Ramps linearly from `start_lr_mult` to 1.0 over the warmup epochs, then cosine-decays
     from 1.0 down to `final_lr_mult` over the remaining epochs.
+
+    Only handles `lr_schedule.type: warmup_cosine`. `reduce_on_plateau` is a stateful,
+    val-loss-driven schedule and is handled separately by `GlobalPlateauLRManager` in
+    the train loop instead of this stateless per-epoch function.
     """
     schedule_cfg = schedule_cfg or {}
     if not bool(schedule_cfg.get("enabled", False)):
         return lambda epoch_idx: 1.0
 
     schedule_type = str(schedule_cfg.get("type", "warmup_cosine")).lower()
+    if schedule_type == "reduce_on_plateau":
+        return lambda epoch_idx: 1.0
+
     # one_cycle/multi_cycle are retired; old configs using those names now just get
     # warmup_cosine behavior (their max_lr_mult key, if present, is ignored).
     if schedule_type not in {"warmup_cosine", "one_cycle", "multi_cycle"}:
         raise ValueError(
-            f"Unsupported lr_schedule type: {schedule_type}. Supported options: warmup_cosine."
+            f"Unsupported lr_schedule type: {schedule_type}. "
+            f"Supported options: warmup_cosine, reduce_on_plateau."
         )
 
     start_lr_mult = float(schedule_cfg.get("start_lr_mult", 0.2))
@@ -203,14 +211,19 @@ class HeadLRDecayManager:
     def __init__(self, head_lr_decay_cfg, optimizer, param_groups_by_name):
         """
         Args:
-            head_lr_decay_cfg: Config dict with 'enabled', 'patience', 'factor', 'min_lr_mult'
+            head_lr_decay_cfg: Config dict with 'enabled', 'patience', 'factor', and either
+                'min_lr' (absolute LR floor per head, aligned with GlobalPlateauLRManager's
+                'min_lr' -- both express the floor as an absolute LR) or the legacy
+                'min_lr_mult' (floor as a fraction of that head's base_lr, kept for backward
+                compatibility with existing configs; 'min_lr' takes precedence if both are set)
             optimizer: PyTorch optimizer
             param_groups_by_name: Dict mapping group names to param groups
         """
         self.enabled = bool(head_lr_decay_cfg.get("enabled", True))
         patience = int(head_lr_decay_cfg.get("patience", 3))
         factor = float(head_lr_decay_cfg.get("factor", 0.3))
-        min_lr_mult = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
+        min_lr = head_lr_decay_cfg.get("min_lr", None)
+        min_lr_mult_legacy = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
 
         self.optimizer = optimizer
         self.param_groups_by_name = param_groups_by_name
@@ -231,6 +244,15 @@ class HeadLRDecayManager:
                 continue
             view = _MultiplierOptimizer()
             self.multiplier_views[head_key] = view
+            # The shadow view's "lr" is a pure multiplier starting at 1.0. When 'min_lr' is
+            # given (absolute LR, matching GlobalPlateauLRManager), convert it to the
+            # equivalent multiplier floor for this head's own base LR; otherwise fall back
+            # to the legacy 'min_lr_mult' fraction directly.
+            if min_lr is not None:
+                group_base_lr = self.base_group_lrs.get(group_name, 0.0)
+                min_lr_mult = (float(min_lr) / group_base_lr) if group_base_lr > 0 else 0.0
+            else:
+                min_lr_mult = min_lr_mult_legacy
             self.plateau_schedulers[head_key] = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 view,
                 mode="min",
@@ -275,10 +297,26 @@ class HeadLRDecayManager:
     def apply_lr_scale(self, current_lr_scale):
         """Apply the global LR schedule scale to all groups, layered on top of each head's
         persistent plateau multiplier."""
+        self.apply_reference_lrs({
+            group.get("name", f"group_{idx}"): self.base_group_lrs.get(
+                group.get("name", f"group_{idx}"), float(group["lr"])
+            ) * current_lr_scale
+            for idx, group in enumerate(self.optimizer.param_groups)
+        })
+
+    def apply_reference_lrs(self, reference_lr_by_group):
+        """Multiply each head's persistent plateau factor onto an externally-computed
+        reference LR per group.
+
+        `reference_lr_by_group` is whatever the base schedule (warmup_cosine's per-epoch
+        scale, or GlobalPlateauLRManager's own live LR) has decided each group's LR should
+        be *before* per-head decay is layered on -- this lets per-head decay compose with
+        either base schedule, since it never assumes who produced the reference value.
+        """
         for group_idx, group in enumerate(self.optimizer.param_groups):
             group_name = group.get("name", f"group_{group_idx}")
-            base_group_lr = self.base_group_lrs.get(group_name, float(group["lr"]))
-            group["lr"] = base_group_lr * current_lr_scale * self._plateau_multiplier(group_name)
+            reference_lr = reference_lr_by_group.get(group_name, float(group["lr"]))
+            group["lr"] = reference_lr * self._plateau_multiplier(group_name)
 
     def _plateau_multiplier(self, group_name):
         head_key = self.group_to_head.get(group_name)
@@ -288,6 +326,63 @@ class HeadLRDecayManager:
         if view is None:
             return 1.0
         return float(view.param_groups[0]["lr"])
+
+
+class GlobalPlateauLRManager:
+    """Global ReduceLROnPlateau: decays every param group's LR together off overall val_loss.
+
+    Runs the stock `torch.optim.lr_scheduler.ReduceLROnPlateau` over a shadow
+    `_MultiplierOptimizer` (the same trick `HeadLRDecayManager` uses) rather than the real
+    optimizer directly, so its reduction is a pure, persistent multiplier independent of
+    whatever else (e.g. per-head decay) also writes to `optimizer.param_groups[*]["lr"]`.
+    That keeps this manager composable with `HeadLRDecayManager`: this produces the
+    per-group *reference* LR for the epoch, which `HeadLRDecayManager.apply_reference_lrs`
+    then multiplies its own per-head factor onto -- so "per-head decay compatible with any
+    base schedule" also covers reduce_on_plateau as the base, not just warmup_cosine.
+    """
+
+    def __init__(self, lr_schedule_cfg, optimizer, param_groups_by_name):
+        lr_schedule_cfg = lr_schedule_cfg or {}
+        self.enabled = (
+            bool(lr_schedule_cfg.get("enabled", False))
+            and str(lr_schedule_cfg.get("type", "warmup_cosine")).lower() == "reduce_on_plateau"
+        )
+        self.optimizer = optimizer
+        self.base_group_lrs = {
+            group_name: float(group["lr"])
+            for group_name, group in param_groups_by_name.items()
+        }
+        self.multiplier_view = None
+        self.scheduler = None
+        if self.enabled:
+            self.multiplier_view = _MultiplierOptimizer()
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.multiplier_view,
+                mode="min",
+                factor=float(lr_schedule_cfg.get("factor", 0.2)),
+                patience=int(lr_schedule_cfg.get("patience", 5)),
+                min_lr=float(lr_schedule_cfg.get("min_lr", 0.0)),
+            )
+
+    def update(self, val_loss, logger=None):
+        """Call once per epoch with val_avg['loss']."""
+        if not self.enabled:
+            return
+        old_mult = float(self.multiplier_view.param_groups[0]["lr"])
+        self.scheduler.step(val_loss)
+        new_mult = float(self.multiplier_view.param_groups[0]["lr"])
+        if logger and new_mult < old_mult:
+            logger.info(
+                f"global_lr_reduce val_loss={val_loss:.6f} "
+                f"old_mult={old_mult:.6f} new_mult={new_mult:.6f} "
+                f"num_bad_epochs={self.scheduler.num_bad_epochs}"
+            )
+
+    def reference_lrs(self):
+        """Return this epoch's per-group reference LR (base_lr * persistent plateau mult),
+        for `HeadLRDecayManager.apply_reference_lrs` to layer per-head decay on top of."""
+        mult = float(self.multiplier_view.param_groups[0]["lr"]) if self.enabled else 1.0
+        return {group_name: base_lr * mult for group_name, base_lr in self.base_group_lrs.items()}
 
 
 class EarlyStoppingManager:

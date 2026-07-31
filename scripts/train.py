@@ -24,6 +24,7 @@ from utils.train_utils import (
     TrainingConfigBuilder,
     RunSetupManager,
     HeadLRDecayManager,
+    GlobalPlateauLRManager,
     EarlyStoppingManager,
     EpochMetricsAggregator,
     build_epoch_metrics_row,
@@ -473,6 +474,13 @@ def train_loop(
         param_groups_by_name=param_groups_by_name,
     )
 
+    # Initialize global plateau LR manager (no-op unless lr_schedule.type == reduce_on_plateau)
+    global_plateau_manager = GlobalPlateauLRManager(
+        lr_schedule_cfg=lr_schedule_cfg,
+        optimizer=optimizer,
+        param_groups_by_name=param_groups_by_name,
+    )
+
     # Initialize early stopping manager (no-op when training.early_stopping.enabled is false)
     early_stopper = EarlyStoppingManager(early_stopping_cfg)
 
@@ -488,8 +496,16 @@ def train_loop(
 
     try:
         for epoch in range(last_epoch, num_epochs):
-            current_lr_scale = lr_scale_fn(epoch)
-            head_lr_manager.apply_lr_scale(current_lr_scale)
+            # Base schedule (warmup_cosine or reduce_on_plateau) produces this epoch's
+            # per-group reference LR; per-head decay then multiplies its own persistent
+            # factor on top, so it composes with either base schedule.
+            if global_plateau_manager.enabled:
+                reference_lrs = global_plateau_manager.reference_lrs()
+                head_lr_manager.apply_reference_lrs(reference_lrs)
+                current_lr_scale = float(global_plateau_manager.multiplier_view.param_groups[0]["lr"])
+            else:
+                current_lr_scale = lr_scale_fn(epoch)
+                head_lr_manager.apply_lr_scale(current_lr_scale)
 
             epoch_start = time.perf_counter()
             train_epoch = _train_single_epoch(
@@ -546,6 +562,8 @@ def train_loop(
                 current_lr_scale=current_lr_scale,
                 logger=logger,
             )
+
+            global_plateau_manager.update(val_avg["loss"], logger=logger)
 
             if uncertainty_module is not None and hasattr(uncertainty_module, "update_epoch"):
                 try:
@@ -746,8 +764,13 @@ def main(
         "enabled": bool(head_lr_cfg.get("enabled", True)),
         "patience": int(head_lr_cfg.get("patience", 3)),
         "factor": float(head_lr_cfg.get("factor", 0.3)),
-        "min_lr_mult": float(head_lr_cfg.get("min_lr_mult", 0.05)),
     }
+    # 'min_lr' (absolute, aligned with lr_schedule.min_lr) takes precedence; falls back to
+    # the legacy 'min_lr_mult' (fraction of each head's base_lr) for existing configs.
+    if "min_lr" in head_lr_cfg:
+        resolved_head_lr_cfg["min_lr"] = float(head_lr_cfg["min_lr"])
+    else:
+        resolved_head_lr_cfg["min_lr_mult"] = float(head_lr_cfg.get("min_lr_mult", 0.05))
     
     run_metadata = {
         "model_name": cfg["model"]["backbone"],

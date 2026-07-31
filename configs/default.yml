@@ -50,15 +50,26 @@ training:
   use_batchnorm: True
   lr_schedule:
     enabled: true
-    type: warmup_cosine
+    type: warmup_cosine   # warmup_cosine | reduce_on_plateau
+    # warmup_cosine-only settings:
     pct_start: 0.2
     start_lr_mult: 0.2
     final_lr_mult: 0.05
+    # reduce_on_plateau-only settings (stock torch.optim.lr_scheduler.ReduceLROnPlateau,
+    # applied to every param group together, stepped on val_loss each epoch):
+    # patience: 5
+    # factor: 0.2
+    # min_lr: 0.0
   head_lr_decay:
     enabled: false
     patience: 5
     factor: 0.2
+    # Per-head torch ReduceLROnPlateau floor, one scheduler per head off that head's own
+    # val loss -- same mechanism as lr_schedule's reduce_on_plateau, scoped per head. Legacy
+    # key: floor as a fraction of each head's base_lr. Prefer 'min_lr' (absolute LR floor,
+    # aligned with lr_schedule.min_lr) in new configs; 'min_lr' takes precedence if both are set.
     min_lr_mult: 0.00001
+    # min_lr: 0.0
   early_stopping:
     enabled: false
     # Stop once val_loss hasn't improved by more than min_delta for this many

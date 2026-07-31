@@ -231,7 +231,7 @@ def _build_epoch_lr_scale_fn(num_epochs, schedule_cfg):
             f"Unsupported lr_schedule type: {schedule_type}. Supported options: one_cycle, warmup_cosine, multi_cycle."
         )
 
-    start_lr_mult = float(schedule_cfg.get("start_lr_mult", 0.2))
+    start_lr_mult = float(schedule_cfg.get("start_lr_mult", 0.1))
     peak_lr_mult = float(schedule_cfg.get("max_lr_mult", 3.0))
     final_lr_mult = float(schedule_cfg.get("final_lr_mult", 0.05))
     if "warmup_epochs" in schedule_cfg:
