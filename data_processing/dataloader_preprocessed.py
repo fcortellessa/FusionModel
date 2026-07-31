@@ -64,13 +64,25 @@ def _build_raw_samples(folder_path):
     return samples
 
 
+_REQUIRED_NORM_STATS_KEYS = (
+    "digit_mean", "digit_std", "rgb_mean", "rgb_std",
+    "trans_mean_y", "trans_std_y", "trans_mean_z", "trans_std_z",
+)
+
+
 def _load_or_compute_norm_stats(stats_path, train_raw_dir):
     from data_processing.preprocess_data import compute_translation_norm_stats
 
     stats_file = Path(stats_path)
     if stats_file.exists():
         with open(stats_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+            cached = json.load(f)
+        # A stats file written by an older code version (before translation
+        # normalization was added) will be missing the trans_* keys -- recompute
+        # rather than silently handing back a partial dict that later KeyErrors
+        # deep in training.
+        if all(key in cached for key in _REQUIRED_NORM_STATS_KEYS):
+            return cached
 
     digit_mean, digit_std = compute_mean_std_digit_images(train_raw_dir)
     rgb_mean, rgb_std = compute_mean_std_rgb_images_no_crop(train_raw_dir)

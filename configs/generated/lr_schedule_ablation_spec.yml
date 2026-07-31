@@ -7,7 +7,7 @@ fixed_overrides:
   data.augmentation.enabled: false
   data.split_seed: 42
   training.batch_size: 16
-  training.epochs: 150
+  training.epochs: 3
   training.deterministic: true
   model.fusion: "channelwise_gated_concat"
   model.translation_head_mode: "separate"
