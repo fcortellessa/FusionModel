@@ -15,6 +15,7 @@ model:
   mlp_trans_1: 256
   mlp_trans_2: 128
   mlp_trans_3: 64
+  translation_head_mode: joint
   dual_fusion: false
 training:
   seed: 44

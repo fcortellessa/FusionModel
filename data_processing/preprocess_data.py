@@ -73,8 +73,13 @@ def _process_image(image_path, transform, use_letterbox=True):
     return tensor
 
 
-def _process_pose(pose_path, transf_matrix):
-    """Load and transform pose from JSON file."""
+def _hub_frame_pose(pose_path, transf_matrix):
+    """Load a raw pose JSON and transform it into the hub frame.
+
+    Returns a plain numpy array [x, y, z, qx, qy, qz, qw] in raw (un-normalized)
+    units. Shared by per-sample caching and train-split translation stats so
+    both read the exact same transform.
+    """
     with open(pose_path, 'r') as f:
         data = json.load(f)
 
@@ -91,18 +96,56 @@ def _process_pose(pose_path, transf_matrix):
 
     hub_pose = np.linalg.inv(homo_tcp) @ np.array(transf_matrix)
 
-    pose_vec = torch.tensor(
-        np.concatenate([
-            hub_pose[:3, 3],
-            R.from_matrix(hub_pose[:3, :3]).as_quat()
-        ]),
-        dtype=torch.float32
-    )
-    return pose_vec
+    return np.concatenate([
+        hub_pose[:3, 3],
+        R.from_matrix(hub_pose[:3, :3]).as_quat()
+    ])
+
+
+def _process_pose(pose_path, transf_matrix, trans_norm_stats=None):
+    """Load and transform pose from JSON file, normalizing y/z if stats are given.
+
+    trans_norm_stats: optional dict with mean_y/std_y/mean_z/std_z (computed from
+    the train split only; see compute_translation_norm_stats). When None, y/z are
+    left in raw meters (matches historical no-op behavior).
+    """
+    pose_vec = _hub_frame_pose(pose_path, transf_matrix)
+
+    if trans_norm_stats is not None:
+        pose_vec[1] = (pose_vec[1] - trans_norm_stats["mean_y"]) / trans_norm_stats["std_y"]
+        pose_vec[2] = (pose_vec[2] - trans_norm_stats["mean_z"]) / trans_norm_stats["std_z"]
+
+    return torch.tensor(pose_vec, dtype=torch.float32)
+
+
+def compute_translation_norm_stats(folder_path, transf_matrix):
+    """Compute mean/std of hub-frame y and z translation over one split's raw poses.
+
+    Intended to be called on the train split only; val/test reuse these stats
+    (see preprocess_data) so normalization never leaks split-specific statistics.
+    """
+    valid_timestamps = _collect_valid_timestamps(folder_path)
+    ys, zs = [], []
+    for ts in valid_timestamps:
+        pose_path = os.path.join(folder_path, f"{ts}.json")
+        hub_pose = _hub_frame_pose(pose_path, transf_matrix)
+        ys.append(hub_pose[1])
+        zs.append(hub_pose[2])
+
+    ys = np.array(ys, dtype=np.float64)
+    zs = np.array(zs, dtype=np.float64)
+
+    return {
+        "mean_y": float(ys.mean()),
+        "std_y": float(ys.std()),
+        "mean_z": float(zs.mean()),
+        "std_z": float(zs.std()),
+    }
 
 
 def process_sample(ts, folder_path, output_dir,
-                   transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std):
+                   transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std,
+                   trans_norm_stats=None):
     """Process a single sample: load, transform, and save."""
     try:
         print(f"Processing {ts}", flush=True)
@@ -130,7 +173,7 @@ def process_sample(ts, folder_path, output_dir,
         digit_tensor = _process_image(digit_path, digit_transform, use_letterbox=True)
 
         # ---- Process pose ----
-        pose_vec = _process_pose(pose_path, transf_matrix)
+        pose_vec = _process_pose(pose_path, transf_matrix, trans_norm_stats=trans_norm_stats)
 
         # ---- Save ----
         torch.save({
@@ -166,17 +209,20 @@ def _collect_valid_timestamps(folder_path):
 
 
 def _process_samples_serial(valid_timestamps, folder_path, output_dir,
-                           transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std):
+                           transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std,
+                           trans_norm_stats=None):
     """Process samples sequentially (no multiprocessing)."""
     for ts in tqdm(valid_timestamps, desc="DEBUG preprocessing"):
         process_sample(
             ts, folder_path, output_dir,
-            transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std
+            transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std,
+            trans_norm_stats=trans_norm_stats
         )
 
 
 def _process_samples_parallel(valid_timestamps, folder_path, output_dir,
-                             transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std):
+                             transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std,
+                             trans_norm_stats=None):
     """Process samples in parallel using multiprocessing."""
     with Pool(NUM_WORKERS) as pool:
         process_fn = partial(
@@ -187,7 +233,8 @@ def _process_samples_parallel(valid_timestamps, folder_path, output_dir,
             rgb_mean=rgb_mean,
             rgb_std=rgb_std,
             digit_mean=digit_mean,
-            digit_std=digit_std
+            digit_std=digit_std,
+            trans_norm_stats=trans_norm_stats
         )
 
         list(tqdm(
@@ -205,6 +252,7 @@ def preprocess_and_save(
     rgb_std,
     digit_mean,
     digit_std,
+    trans_norm_stats=None,
 ):
     """Preprocess and save all samples in a folder."""
     os.makedirs(output_dir, exist_ok=True)
@@ -216,13 +264,15 @@ def preprocess_and_save(
     # ---- Process samples ----
     if DEBUG:
         _process_samples_serial(valid_timestamps, folder_path, output_dir,
-                               transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std)
+                               transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std,
+                               trans_norm_stats=trans_norm_stats)
     else:
         _process_samples_parallel(valid_timestamps, folder_path, output_dir,
-                                 transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std)
+                                 transf_matrix, rgb_mean, rgb_std, digit_mean, digit_std,
+                                 trans_norm_stats=trans_norm_stats)
 
 
-def _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_std):
+def _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_std, trans_norm_stats):
     stats_path = os.path.join(output_path, "normalization_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(
@@ -231,6 +281,10 @@ def _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_
                 "digit_std": digit_std,
                 "rgb_mean": rgb_mean,
                 "rgb_std": rgb_std,
+                "trans_mean_y": trans_norm_stats["mean_y"],
+                "trans_std_y": trans_norm_stats["std_y"],
+                "trans_mean_z": trans_norm_stats["mean_z"],
+                "trans_std_z": trans_norm_stats["std_z"],
             },
             f,
             indent=2,
@@ -286,6 +340,10 @@ def preprocess_data(
     print("Computing normalization stats...", flush=True)
     digit_mean, digit_std = compute_mean_std_digit_images(train_split_dir)
     rgb_mean, rgb_std = compute_mean_std_rgb_images_no_crop(train_split_dir)
+    # Translation (y/z) stats are computed from the train split only, then reused
+    # to normalize val/test as well, so normalization never leaks split-specific
+    # statistics (same convention as the RGB/digit image stats above).
+    trans_norm_stats = compute_translation_norm_stats(train_split_dir, transf_matrix)
 
     print("Preprocessing all splits")
     for split in ["train", "val", "test"]:
@@ -300,9 +358,12 @@ def preprocess_data(
             rgb_std=rgb_std,
             digit_mean=digit_mean,
             digit_std=digit_std,
+            trans_norm_stats=trans_norm_stats,
         )
 
-    _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_std)
+    _save_normalization_stats(output_path, digit_mean, digit_std, rgb_mean, rgb_std, trans_norm_stats)
+
+    return trans_norm_stats
 
 
 def ensure_test_split_current(cfg, data_root, log=print):

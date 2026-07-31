@@ -2,7 +2,9 @@ model:
   backbone: yolo26n.pt
   freeze_backbone: false
   streams: ["rgb_image", "digit_image"]
-  fusion: "concat"
+  fusion: "concat" # concat | gated_concat | residual_gated_concat | 
+  # channelwise_gated_concat | channelwise_residual_gated_concat | 
+  
   # True dual fusion: build two independent instances of the `fusion` module above
   # (separate learned parameters), one combining the RGB/tactile streams for the
   # rotation branch and one for the translation branch, instead of sharing a single
@@ -10,6 +12,9 @@ model:
   # 'se3_direct' (that head needs one joint fused vector).
   dual_fusion: false
   head_type: quaternion
+  # separate: independent y_head/z_head MLPs (default, current behavior).
+  # joint: single trans_head MLP outputting both y and z together.
+  translation_head_mode: separate
   activation: GELU
   mlp_quat_1: 1024
   mlp_quat_2: 1024
@@ -50,7 +55,7 @@ training:
   use_batchnorm: True
   lr_schedule:
     enabled: true
-    type: warmup_cosine   # warmup_cosine | reduce_on_plateau
+    type: warmup_cosine   # warmup_cosine | reduce_on_plateau | none
     # warmup_cosine-only settings:
     pct_start: 0.2
     start_lr_mult: 0.2
@@ -60,16 +65,18 @@ training:
     # patience: 5
     # factor: 0.2
     # min_lr: 0.0
+    # min_delta: 0.0   # min absolute val_loss improvement to reset patience; filters noise
   head_lr_decay:
     enabled: false
     patience: 5
     factor: 0.2
+    # min_delta: 0.0   # min absolute val-loss improvement (per head) to reset patience; filters noise
     # Per-head torch ReduceLROnPlateau floor, one scheduler per head off that head's own
     # val loss -- same mechanism as lr_schedule's reduce_on_plateau, scoped per head. Legacy
     # key: floor as a fraction of each head's base_lr. Prefer 'min_lr' (absolute LR floor,
     # aligned with lr_schedule.min_lr) in new configs; 'min_lr' takes precedence if both are set.
+    min_lr: 0.00001
     min_lr_mult: 0.00001
-    # min_lr: 0.0
   early_stopping:
     enabled: false
     # Stop once val_loss hasn't improved by more than min_delta for this many
@@ -96,6 +103,15 @@ data:
     seed: 42
     photo_count: 1
     overwrite: false
+  # Whether translation targets (y/z) are z-scored before being handed to the
+  # model. When true, mean/std are computed from this run's own train split
+  # (see data_processing/preprocess_data.py::compute_translation_norm_stats)
+  # and written into `translation_norm_stats` below at training time -- do not
+  # set that sub-key by hand, it's populated automatically and snapshotted into
+  # every run's config.yml so predictions can be un-normalized consistently
+  # at eval time (see scripts/test.py).
+  normalize_translation: true
+  translation_norm_stats: {}
 
 # Set `data.root` to the folder containing your samples:
 # {timestamp}.json, {timestamp}.png, {timestamp}_digit.png

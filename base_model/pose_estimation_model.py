@@ -38,7 +38,7 @@ from fusion.adapters import TaskSpecificResidualGate, TaskSpecificChannelAttenti
 class PoseEstimationNet(nn.Module):
     def __init__(self, model_name='yolo26n.pt', streams=("mono_cam", "tactile"), fusion="concat", freeze_backbone=False, rotation_parametrisation="quaternion", activation=nn.GELU(),
                  rotation_layers = [256, 1024, 16], translation_layers = [1024, 1024, 0], dropout_rot = 0.0, dropout_trans = 0.0, use_batchnorm = True, task_adapter=None,
-                 task_feature_adapter=False, task_feature_adapter_type="channel_attention", dual_fusion=False):
+                 task_feature_adapter=False, task_feature_adapter_type="channel_attention", dual_fusion=False, translation_head_mode="separate"):
         super().__init__()
 
         if dual_fusion and rotation_parametrisation == "se3_direct":
@@ -47,6 +47,13 @@ class PoseEstimationNet(nn.Module):
                 "head consumes a single joint feature vector, but dual_fusion produces two "
                 "independent (rotation/translation) fused vectors with no shared 'fused' tensor."
             )
+
+        if translation_head_mode not in ("separate", "joint"):
+            raise ValueError(
+                f"Unsupported translation_head_mode: {translation_head_mode}. "
+                f"Supported options: separate, joint."
+            )
+        self.translation_head_mode = translation_head_mode
 
         self.streams = streams
         self.fusion_type = fusion
@@ -251,24 +258,34 @@ class PoseEstimationNet(nn.Module):
         else:
             raise ValueError(f"Unsupported rotation parametrisation: {rotation_parametrisation}")
         
-        # Translation Heads (only for non-SE3-direct modes)
+        # Translation Head(s) (only for non-SE3-direct modes)
         if rotation_parametrisation != "se3_direct":
-            self.y_head = MLPHead(
-                in_dim=fused_dim,
-                out_dim=1,
-                hidden_dims=trans_hidden,
-                dropout=dropout_trans,
-                bn=use_batchnorm,
-                activation=self.activation
-            )
-            self.z_head = MLPHead(
-                in_dim=fused_dim,
-                out_dim=1,
-                hidden_dims=trans_hidden,
-                dropout=dropout_trans,
-                bn=use_batchnorm,
-                activation=self.activation
-            )
+            if self.translation_head_mode == "joint":
+                self.trans_head = MLPHead(
+                    in_dim=fused_dim,
+                    out_dim=2,
+                    hidden_dims=trans_hidden,
+                    dropout=dropout_trans,
+                    bn=use_batchnorm,
+                    activation=self.activation
+                )
+            else:
+                self.y_head = MLPHead(
+                    in_dim=fused_dim,
+                    out_dim=1,
+                    hidden_dims=trans_hidden,
+                    dropout=dropout_trans,
+                    bn=use_batchnorm,
+                    activation=self.activation
+                )
+                self.z_head = MLPHead(
+                    in_dim=fused_dim,
+                    out_dim=1,
+                    hidden_dims=trans_hidden,
+                    dropout=dropout_trans,
+                    bn=use_batchnorm,
+                    activation=self.activation
+                )
 
 
 
@@ -436,8 +453,12 @@ class PoseEstimationNet(nn.Module):
             if self.rotation_parametrisation == "quaternion":
                 rotation = torch.nn.functional.normalize(rotation, p=2, dim=1, eps=1e-12)
         
-            y = self.y_head(translation_features)
-            z = self.z_head(translation_features)
+            if self.translation_head_mode == "joint":
+                trans = self.trans_head(translation_features)
+                y, z = trans[:, 0:1], trans[:, 1:2]
+            else:
+                y = self.y_head(translation_features)
+                z = self.z_head(translation_features)
 
             # Return as a dictionary or concatenated vector, x=0
             x_coord = torch.zeros_like(y)

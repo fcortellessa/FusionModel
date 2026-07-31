@@ -8,7 +8,6 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as T
 
-from utils.normalization import MEAN_Y, STD_Y, MEAN_Z, STD_Z
 from data_processing.GripFusionNet_get_norm_params import (
     compute_mean_std_digit_images,
     compute_mean_std_rgb_images_no_crop,
@@ -18,23 +17,32 @@ from data_processing.augment_data import (
     _apply_tactile_augmentation,
     _rng_for,
 )
+from data_processing.preprocess_data import _hub_frame_pose
+
+# Hub-frame calibration matrix; must match data_processing/preprocess_data.py's
+# transf_matrix so online-augmented samples land in the same frame as the cached
+# (non-augmented) preprocessing path.
+_HUB_TRANSF_MATRIX = [
+    [1.0, 0.0, 0.0, 0.456577],
+    [0.0, 1.0, 0.0, -0.163301],
+    [0.0, 0.0, 1.0, -0.024417],
+    [0.0, 0.0, 0.0, 1.0]
+]
 
 
-def _pose_json_to_tensor(json_path, normalize_translation=True):
-    with open(json_path, "r", encoding="utf-8") as f:
-        pose_data = json.load(f)
-
-    y = float(pose_data["position"]["y"])
-    z = float(pose_data["position"]["z"])
-    x = float(pose_data["position"]["x"])
+def _pose_json_to_tensor(json_path, normalize_translation=True, trans_norm_stats=None):
+    pose_vec = _hub_frame_pose(json_path, _HUB_TRANSF_MATRIX)
 
     if normalize_translation:
-        y = (y - MEAN_Y) / STD_Y
-        z = (z - MEAN_Z) / STD_Z
+        stats = trans_norm_stats or {}
+        mean_y = stats.get("trans_mean_y", 0.0)
+        std_y = stats.get("trans_std_y", 1.0)
+        mean_z = stats.get("trans_mean_z", 0.0)
+        std_z = stats.get("trans_std_z", 1.0)
+        pose_vec[1] = (pose_vec[1] - mean_y) / std_y
+        pose_vec[2] = (pose_vec[2] - mean_z) / std_z
 
-    pos = [x, y, z]
-    quat = [float(pose_data["orientation"][k]) for k in ("x", "y", "z", "w")]
-    return torch.tensor(pos + quat, dtype=torch.float32)
+    return torch.tensor(pose_vec, dtype=torch.float32)
 
 
 def _build_raw_samples(folder_path):
@@ -57,6 +65,8 @@ def _build_raw_samples(folder_path):
 
 
 def _load_or_compute_norm_stats(stats_path, train_raw_dir):
+    from data_processing.preprocess_data import compute_translation_norm_stats
+
     stats_file = Path(stats_path)
     if stats_file.exists():
         with open(stats_file, "r", encoding="utf-8") as f:
@@ -64,11 +74,16 @@ def _load_or_compute_norm_stats(stats_path, train_raw_dir):
 
     digit_mean, digit_std = compute_mean_std_digit_images(train_raw_dir)
     rgb_mean, rgb_std = compute_mean_std_rgb_images_no_crop(train_raw_dir)
+    trans_stats = compute_translation_norm_stats(train_raw_dir, _HUB_TRANSF_MATRIX)
     stats = {
         "digit_mean": digit_mean,
         "digit_std": digit_std,
         "rgb_mean": rgb_mean,
         "rgb_std": rgb_std,
+        "trans_mean_y": trans_stats["mean_y"],
+        "trans_std_y": trans_stats["std_y"],
+        "trans_mean_z": trans_stats["mean_z"],
+        "trans_std_z": trans_stats["std_z"],
     }
     stats_file.parent.mkdir(parents=True, exist_ok=True)
     with open(stats_file, "w", encoding="utf-8") as f:
@@ -111,6 +126,7 @@ class RawOnlineAugmentedTactileDataset(Dataset):
         rgb_std = norm_stats.get("rgb_std", [0.229, 0.224, 0.225])
         digit_mean = norm_stats.get("digit_mean", [0.5, 0.5, 0.5])
         digit_std = norm_stats.get("digit_std", [0.5, 0.5, 0.5])
+        self.trans_norm_stats = norm_stats
 
         self.rgb_transform = T.Compose(
             [
@@ -152,7 +168,11 @@ class RawOnlineAugmentedTactileDataset(Dataset):
 
         rgb_tensor = self.rgb_transform(rgb_img)
         digit_tensor = self.digit_transform(digit_img)
-        pose_tensor = _pose_json_to_tensor(sample["json_path"], normalize_translation=self.normalize_translation)
+        pose_tensor = _pose_json_to_tensor(
+            sample["json_path"],
+            normalize_translation=self.normalize_translation,
+            trans_norm_stats=self.trans_norm_stats,
+        )
 
         return rgb_tensor, digit_tensor, pose_tensor
 
@@ -180,8 +200,13 @@ def get_dataloaders(
     val_dir = os.path.join(root_dir, "val", "val_preprocessing")
     test_dir = os.path.join(root_dir, "test", "test_preprocessing")
 
+    # normalization_stats.json is written by preprocess_data() (which always runs
+    # before this, see DataPipelineManager.get_loaders); loaded here regardless of
+    # augmentation mode so the caller can snapshot the translation stats actually
+    # used for this split into the run's config.
+    stats = _load_or_compute_norm_stats(os.path.join(root_dir, "normalization_stats.json"), train_raw_dir)
+
     if use_online_augmentation:
-        stats = _load_or_compute_norm_stats(os.path.join(root_dir, "normalization_stats.json"), train_raw_dir)
         train_set = RawOnlineAugmentedTactileDataset(
             train_raw_dir,
             image_size=image_size,
@@ -205,7 +230,14 @@ def get_dataloaders(
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, **loader_args)
     test_loader = DataLoader(test_set, batch_size=1, shuffle=False, **loader_args)
 
-    return train_loader, val_loader, test_loader
+    trans_norm_stats = {
+        "mean_y": stats.get("trans_mean_y", 0.0),
+        "std_y": stats.get("trans_std_y", 1.0),
+        "mean_z": stats.get("trans_mean_z", 0.0),
+        "std_z": stats.get("trans_std_z", 1.0),
+    }
+
+    return train_loader, val_loader, test_loader, trans_norm_stats
 
 def get_test_dataloader(
     root_dir,

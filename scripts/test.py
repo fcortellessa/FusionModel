@@ -64,7 +64,8 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
         translation_layers=[config["model"]["mlp_trans_1"], config["model"]["mlp_trans_2"],config["model"]["mlp_trans_3"]],
         dropout_rot=config["training"]["dropout_rot"],
         dropout_trans=config["training"]["dropout_trans"],
-        use_batchnorm=config["training"]["use_batchnorm"]
+        use_batchnorm=config["training"]["use_batchnorm"],
+        translation_head_mode=config["model"].get("translation_head_mode", "separate")
     )
     
     data_root = resolve_data_root(config, REPO_ROOT)
@@ -106,11 +107,24 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     pred_rotations = np.concatenate(pred_rotations, axis=0)
     pred_poses = np.concatenate(pred_poses, axis=0)
     gt_poses = np.concatenate(gt_poses, axis=0)
-    
+
     gt_translations = gt_poses[:, :3]
     gt_rotations = gt_poses[:, 3:7]
     pred_rotations = pred_poses[:, 3:7]
-    
+
+    if config.get("data", {}).get("normalize_translation", True):
+        stats = config.get("data", {}).get("translation_norm_stats", {})
+        mean_y = stats.get("mean_y", 0.0)
+        std_y = stats.get("std_y", 1.0)
+        mean_z = stats.get("mean_z", 0.0)
+        std_z = stats.get("std_z", 1.0)
+        pred_translations = pred_translations.copy()
+        gt_translations = gt_translations.copy()
+        pred_translations[:, 1] = pred_translations[:, 1] * std_y + mean_y
+        pred_translations[:, 2] = pred_translations[:, 2] * std_z + mean_z
+        gt_translations[:, 1] = gt_translations[:, 1] * std_y + mean_y
+        gt_translations[:, 2] = gt_translations[:, 2] * std_z + mean_z
+
     num_samples = gt_poses.shape[0]
 
     val_abs_trans_vec = np.abs(pred_translations - gt_translations)

@@ -49,7 +49,6 @@ from utils.logging_utils import (
     close_run_writers,
 )
 from losses.rotation_loss_handlers import get_rotation_handler
-from utils.normalization import MEAN_Y, STD_Y, MEAN_Z, STD_Z
 
 logger = logging.getLogger("GripFusionNet")
 log_file = None
@@ -223,9 +222,11 @@ def _train_single_epoch(
     epoch,
     num_epochs,
     normalize_translation=True,
+    trans_norm_stats=None,
     grad_clip_max_norm=None,
 ):
     model.train()
+    stats = trans_norm_stats or {"mean_y": 0.0, "std_y": 1.0, "mean_z": 0.0, "std_z": 1.0}
     train_metrics = _init_epoch_metrics()
 
     fusion_weights = None
@@ -249,13 +250,19 @@ def _train_single_epoch(
         )
         pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items()}
         if normalize_translation:
-            pose_pred_unnorm["trans"][:, 1] = pose_pred_unnorm["trans"][:, 1] * STD_Y + MEAN_Y
-            pose_pred_unnorm["trans"][:, 2] = pose_pred_unnorm["trans"][:, 2] * STD_Z + MEAN_Z
+            pose_pred_unnorm["trans"][:, 1] = pose_pred_unnorm["trans"][:, 1] * stats["std_y"] + stats["mean_y"]
+            pose_pred_unnorm["trans"][:, 2] = pose_pred_unnorm["trans"][:, 2] * stats["std_z"] + stats["mean_z"]
+            # "pose" ([x,y,z,qx,qy,qz,qw]) is a separate tensor from "trans" (see
+            # PoseEstimationNet.forward's torch.cat) -- QuaternionHandler.compute_metrics
+            # reads "pose" directly, so it must be un-normalized too or metrics compare
+            # a normalized prediction against unnormalized ground truth.
+            pose_pred_unnorm["pose"][:, 1] = pose_pred_unnorm["pose"][:, 1] * stats["std_y"] + stats["mean_y"]
+            pose_pred_unnorm["pose"][:, 2] = pose_pred_unnorm["pose"][:, 2] * stats["std_z"] + stats["mean_z"]
 
         pose_unnorm = pose.clone()
         if normalize_translation:
-            pose_unnorm[:, 0] = pose_unnorm[:, 0] * STD_Y + MEAN_Y
-            pose_unnorm[:, 1] = pose_unnorm[:, 1] * STD_Z + MEAN_Z
+            pose_unnorm[:, 1] = pose_unnorm[:, 1] * stats["std_y"] + stats["mean_y"]
+            pose_unnorm[:, 2] = pose_unnorm[:, 2] * stats["std_z"] + stats["mean_z"]
 
         abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = rotation_handler.compute_metrics(
             pose_pred_unnorm, pose_unnorm
@@ -357,21 +364,23 @@ def validation_loop(
     device,
     uncertainty_module=None,
     normalize_translation=True,
+    trans_norm_stats=None,
 ):
     """
     Run a single validation epoch.
-    
+
     Args:
         model: The model to evaluate
         val_loader: Validation data loader
         rotation_handler: RotationLossHandler instance for computing losses/metrics
         device: Device to run on
         uncertainty_module: Optional uncertainty weighting module
-    
+
     Returns:
         Dictionary with validation metrics
     """
     model.eval()
+    stats = trans_norm_stats or {"mean_y": 0.0, "std_y": 1.0, "mean_z": 0.0, "std_z": 1.0}
     val_metrics = _init_epoch_metrics()
     fusion_gate_stats = _init_fusion_gate_stats()
     rotation_errors = []
@@ -392,13 +401,18 @@ def validation_loop(
             
             pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items()}
             if normalize_translation:
-                pose_pred_unnorm["trans"][:, 1] = pose_pred_unnorm["trans"][:, 1] * STD_Y + MEAN_Y
-                pose_pred_unnorm["trans"][:, 2] = pose_pred_unnorm["trans"][:, 2] * STD_Z + MEAN_Z
+                pose_pred_unnorm["trans"][:, 1] = pose_pred_unnorm["trans"][:, 1] * stats["std_y"] + stats["mean_y"]
+                pose_pred_unnorm["trans"][:, 2] = pose_pred_unnorm["trans"][:, 2] * stats["std_z"] + stats["mean_z"]
+                # "pose" is a separate tensor from "trans" (see forward()'s torch.cat);
+                # QuaternionHandler.compute_metrics reads "pose" directly, so it must be
+                # un-normalized too -- see matching comment in _train_single_epoch.
+                pose_pred_unnorm["pose"][:, 1] = pose_pred_unnorm["pose"][:, 1] * stats["std_y"] + stats["mean_y"]
+                pose_pred_unnorm["pose"][:, 2] = pose_pred_unnorm["pose"][:, 2] * stats["std_z"] + stats["mean_z"]
 
             pose_unnorm = pose.clone()
             if normalize_translation:
-                pose_unnorm[:, 0] = pose_unnorm[:, 0] * STD_Y + MEAN_Y
-                pose_unnorm[:, 1] = pose_unnorm[:, 1] * STD_Z + MEAN_Z
+                pose_unnorm[:, 1] = pose_unnorm[:, 1] * stats["std_y"] + stats["mean_y"]
+                pose_unnorm[:, 2] = pose_unnorm[:, 2] * stats["std_z"] + stats["mean_z"]
 
             abs_trans_y, abs_trans_z, abs_trans, abs_rot_x = rotation_handler.compute_metrics(
                 pose_pred_unnorm, pose_unnorm
@@ -450,6 +464,7 @@ def train_loop(
     early_stopping_cfg=None,
     rotation_loss_type="geodesic",
     normalize_translation=True,
+    trans_norm_stats=None,
     grad_clip_max_norm=None,
 ):
     best_val_loss = float("inf")
@@ -521,6 +536,7 @@ def train_loop(
                 epoch=epoch,
                 num_epochs=num_epochs,
                 normalize_translation=normalize_translation,
+                trans_norm_stats=trans_norm_stats,
                 grad_clip_max_norm=grad_clip_max_norm,
             )
             global_batch_step = train_epoch["global_batch_step"]
@@ -540,6 +556,7 @@ def train_loop(
                 device=device,
                 uncertainty_module=uncertainty_module,
                 normalize_translation=normalize_translation,
+                trans_norm_stats=trans_norm_stats,
             )
 
             lr_base = _get_lr_by_group(optimizer, "base")
@@ -727,14 +744,22 @@ def main(
         )
     
     tensorboard_log_dir, _ = run_setup.setup_tensorboard(tensorboard_port, tensorboard_root_dir)
-    
+
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Load data
+
+    # Load data (this preprocesses the train split if needed, which is where
+    # translation normalization stats are computed from)
     data_pipeline = DataPipelineManager(cfg, base_dir, force_preprocess=force_preprocess, logger=logger)
-    train_loader, val_loader, _ = data_pipeline.get_loaders(resolved_batch_size)
-    
+    train_loader, val_loader, _, trans_norm_stats = data_pipeline.get_loaders(resolved_batch_size)
+
+    # Snapshot the resolved translation normalization stats into cfg before writing
+    # config.yml, so every run self-documents the mean/std it actually trained
+    # under (computed from this run's own train split -- see
+    # compute_translation_norm_stats).
+    cfg.setdefault("data", {})["translation_norm_stats"] = dict(trans_norm_stats)
+    run_setup.save_config_snapshot()
+
     # Build training components from config
     config_builder = TrainingConfigBuilder(cfg, device, logger=logger)
     model, optimizer, uncertainty_module, loss_function, param_groups = config_builder.build()
@@ -764,6 +789,7 @@ def main(
         "enabled": bool(head_lr_cfg.get("enabled", True)),
         "patience": int(head_lr_cfg.get("patience", 3)),
         "factor": float(head_lr_cfg.get("factor", 0.3)),
+        "min_delta": float(head_lr_cfg.get("min_delta", 0.0)),
     }
     # 'min_lr' (absolute, aligned with lr_schedule.min_lr) takes precedence; falls back to
     # the legacy 'min_lr_mult' (fraction of each head's base_lr) for existing configs.
@@ -817,6 +843,7 @@ def main(
         early_stopping_cfg=early_stopping_cfg,
         rotation_loss_type=rotation_loss_type,
         normalize_translation=cfg.get("data", {}).get("normalize_translation", True),
+        trans_norm_stats=trans_norm_stats,
         grad_clip_max_norm=grad_clip_max_norm,
     )
 
@@ -841,7 +868,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "--force_preprocess",
         action="store_true",
-        help="Force rebuild of Data_split and *_preprocessed folders before training",
+        help=(
+            "Force rebuild of Data_split and *_preprocessed folders before training "
+            "(also recomputes RGB/digit/translation normalization stats from this "
+            "run's train split -- see --force_renormalize for an alias of this same "
+            "flag named for that specific effect)."
+        ),
+    )
+    parser.add_argument(
+        "--force_renormalize",
+        action="store_true",
+        help=(
+            "Alias for --force_preprocess. Use this when your goal is specifically to "
+            "recompute normalization stats (e.g. data.translation_norm_stats) from the "
+            "train split -- for example after upgrading to real translation "
+            "normalization, when the existing Data_split cache still has the old "
+            "un-normalized/no-op stats baked in."
+        ),
     )
     parser.add_argument(
         "--run_directory",
@@ -858,6 +901,6 @@ if __name__ == "__main__":
         optimizer_name=args.optimizer,
         tensorboard_root_dir=args.tensorboard_root,
         tensorboard_port=args.tensorboard_port,
-        force_preprocess=args.force_preprocess,
+        force_preprocess=args.force_preprocess or args.force_renormalize,
         run_directory=args.run_directory,
     )

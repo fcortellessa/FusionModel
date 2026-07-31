@@ -21,6 +21,7 @@ def _build_named_param_groups(model, base_lr):
         "head_rot": [],
         "head_y": [],
         "head_z": [],
+        "head_trans": [],
     }
 
     for name, param in model.named_parameters():
@@ -32,11 +33,13 @@ def _build_named_param_groups(model, base_lr):
             grouped_params["head_y"].append(param)
         elif name.startswith("z_head."):
             grouped_params["head_z"].append(param)
+        elif name.startswith("trans_head."):
+            grouped_params["head_trans"].append(param)
         else:
             grouped_params["base"].append(param)
 
     param_groups = []
-    for group_name in ["base", "head_rot", "head_y", "head_z"]:
+    for group_name in ["base", "head_rot", "head_y", "head_z", "head_trans"]:
         params = grouped_params[group_name]
         if not params:
             continue
@@ -211,17 +214,23 @@ class HeadLRDecayManager:
     def __init__(self, head_lr_decay_cfg, optimizer, param_groups_by_name):
         """
         Args:
-            head_lr_decay_cfg: Config dict with 'enabled', 'patience', 'factor', and either
-                'min_lr' (absolute LR floor per head, aligned with GlobalPlateauLRManager's
-                'min_lr' -- both express the floor as an absolute LR) or the legacy
-                'min_lr_mult' (floor as a fraction of that head's base_lr, kept for backward
-                compatibility with existing configs; 'min_lr' takes precedence if both are set)
+            head_lr_decay_cfg: Config dict with 'enabled', 'patience', 'factor', 'min_delta'
+                (minimum absolute val-loss improvement to reset a head's patience counter --
+                same idea as EarlyStoppingManager's min_delta, so tiny fluctuations don't
+                reset the count; default 0.0 matches PyTorch's own tiny default tolerance
+                behavior of requiring *some* improvement, just without a relative threshold),
+                and either 'min_lr' (absolute LR floor per head, aligned with
+                GlobalPlateauLRManager's 'min_lr' -- both express the floor as an absolute LR)
+                or the legacy 'min_lr_mult' (floor as a fraction of that head's base_lr, kept
+                for backward compatibility with existing configs; 'min_lr' takes precedence
+                if both are set)
             optimizer: PyTorch optimizer
             param_groups_by_name: Dict mapping group names to param groups
         """
         self.enabled = bool(head_lr_decay_cfg.get("enabled", True))
         patience = int(head_lr_decay_cfg.get("patience", 3))
         factor = float(head_lr_decay_cfg.get("factor", 0.3))
+        min_delta = float(head_lr_decay_cfg.get("min_delta", 0.0))
         min_lr = head_lr_decay_cfg.get("min_lr", None)
         min_lr_mult_legacy = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
 
@@ -235,7 +244,14 @@ class HeadLRDecayManager:
             for group_name, group in param_groups_by_name.items()
         }
 
-        head_to_group = {"q": "head_rot", "y": "head_y", "z": "head_z"}
+        # "trans" is used instead of separate "y"/"z" keys when the model has a single
+        # joint translation head (both live in the same "head_trans" param group, so they
+        # can only be decayed together, off the combined y+z val loss).
+        if "head_trans" in param_groups_by_name:
+            head_to_group = {"q": "head_rot", "trans": "head_trans"}
+        else:
+            head_to_group = {"q": "head_rot", "y": "head_y", "z": "head_z"}
+        self.head_to_group = head_to_group
         self.group_to_head = {v: k for k, v in head_to_group.items()}
         self.plateau_schedulers = {}
         self.multiplier_views = {}
@@ -258,6 +274,8 @@ class HeadLRDecayManager:
                 mode="min",
                 factor=factor,
                 patience=patience,
+                threshold=min_delta,
+                threshold_mode="abs",
                 min_lr=min_lr_mult,
             )
 
@@ -279,6 +297,7 @@ class HeadLRDecayManager:
             "q": val_metrics["loss_q"],
             "y": val_metrics["loss_y"],
             "z": val_metrics["loss_z"],
+            "trans": val_metrics["loss_y"] + val_metrics["loss_z"],
         }
 
         for head_key, scheduler in self.plateau_schedulers.items():
@@ -287,7 +306,7 @@ class HeadLRDecayManager:
             scheduler.step(val_by_head[head_key])
             new_mult = float(view.param_groups[0]["lr"])
             if new_mult < old_mult and logger:
-                group_name = {"q": "head_rot", "y": "head_y", "z": "head_z"}[head_key]
+                group_name = self.head_to_group[head_key]
                 logger.info(
                     f"head_lr_reduce head={head_key} group={group_name} "
                     f"old_mult={old_mult:.6f} new_mult={new_mult:.6f} val_head={val_by_head[head_key]:.6f} "
@@ -361,6 +380,8 @@ class GlobalPlateauLRManager:
                 mode="min",
                 factor=float(lr_schedule_cfg.get("factor", 0.2)),
                 patience=int(lr_schedule_cfg.get("patience", 5)),
+                threshold=float(lr_schedule_cfg.get("min_delta", 0.0)),
+                threshold_mode="abs",
                 min_lr=float(lr_schedule_cfg.get("min_lr", 0.0)),
             )
 
@@ -507,7 +528,8 @@ class TrainingConfigBuilder:
             task_adapter=self.cfg["model"].get("task_adapter", None),
             task_feature_adapter=self._is_task_feature_adapter_enabled(),
             task_feature_adapter_type=self._get_task_feature_adapter_type(),
-            dual_fusion=bool(self.cfg["model"].get("dual_fusion", False))
+            dual_fusion=bool(self.cfg["model"].get("dual_fusion", False)),
+            translation_head_mode=self.cfg["model"].get("translation_head_mode", "separate")
         )
         return model.to(self.device)
 
@@ -796,20 +818,24 @@ class DataPipelineManager:
     
     def get_loaders(self, batch_size):
         """Get train, val, test dataloaders.
-        
+
         Args:
             batch_size: Batch size
-            
+
         Returns:
-            Tuple of (train_loader, val_loader, test_loader)
+            Tuple of (train_loader, val_loader, test_loader, trans_norm_stats). The
+            last element is the {mean_y, std_y, mean_z, std_z} dict actually used to
+            normalize translation targets, computed from this run's own train split
+            (see compute_translation_norm_stats) -- callers should snapshot it into
+            the run's config so predictions can be un-normalized consistently later.
         """
         from data_processing.dataloader_preprocessed import get_dataloaders
-        
+
         self.preprocess_if_needed()
-        
+
         data_dir = self._get_data_dir()
         aug_cfg = self.cfg.get("data", {}).get("augmentation", {})
-        train_loader, val_loader, test_loader = get_dataloaders(
+        train_loader, val_loader, test_loader, trans_norm_stats = get_dataloaders(
             root_dir=os.path.join(data_dir, "Data_split"),
             batch_size=batch_size,
             shuffle=True,
@@ -819,11 +845,11 @@ class DataPipelineManager:
             image_size=int(self.cfg.get("data", {}).get("image_size", 640)),
             normalize_translation=bool(self.cfg.get("data", {}).get("normalize_translation", True)),
         )
-        
+
         if self.logger:
             self.logger.info(f"Loaded dataloaders with batch_size={batch_size}")
-        
-        return train_loader, val_loader, test_loader
+
+        return train_loader, val_loader, test_loader, trans_norm_stats
 
 
 class RunSetupManager:
@@ -846,7 +872,13 @@ class RunSetupManager:
         self.run_directory = run_directory or "runs"
 
     def setup_artifacts(self):
-        """Build run artifacts directory structure."""
+        """Build the run artifacts directory structure.
+
+        Does NOT write config.yml yet -- call save_config_snapshot() once cfg is
+        fully resolved (e.g. after data preprocessing has filled in
+        data.translation_norm_stats), so the snapshot reflects what the run
+        actually trained with.
+        """
 
         self.artifacts = build_run_artifacts(
             self.config_path,
@@ -854,13 +886,18 @@ class RunSetupManager:
             self.batch_size,
             output_root=self.run_directory
         )
-        save_yaml(self.cfg, self.artifacts["config_snapshot_path"])
-        
+
         if self.logger:
             self.logger.info(f"Created run directory: {self.artifacts['run_dir']}")
-        
+
         return self.artifacts
-    
+
+    def save_config_snapshot(self):
+        """Write config.yml. Call after cfg has been finalized (see setup_artifacts)."""
+        if self.artifacts is None:
+            raise ValueError("Must call setup_artifacts() first")
+        save_yaml(self.cfg, self.artifacts["config_snapshot_path"])
+
     def setup_tensorboard(self, tb_port, tb_root=None):
         """Setup tensorboard logging.
         

@@ -1,8 +1,9 @@
-output_dir: "configs/generated/dual_fusion"
+output_dir: "configs/generated/dual_fusion_joint_trans"
 
 fixed_overrides:
   data.augmentation.enabled: false
   model.fusion: gated_concat
+  model.translation_head_mode: "joint"
   training.batch_size: 32
   training.epochs: 50
   training.deterministic: true

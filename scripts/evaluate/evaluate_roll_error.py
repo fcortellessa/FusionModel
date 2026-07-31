@@ -71,7 +71,7 @@ def evaluate_roll(checkpoint_path, config_path, data_dir="Data/Data_split"):
     print(f"Model head_type: {cfg['model']['head_type']}")
     
     # Load data
-    _, val_loader, _ = get_dataloaders(
+    _, val_loader, _, _ = get_dataloaders(
         root_dir=data_dir,
         batch_size=16,
         shuffle=False

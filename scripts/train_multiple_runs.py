@@ -34,12 +34,16 @@ def discover_configs_from_folder(config_dir):
     return configs
 
 
-def run_multiple_trainings(configs, batch_sizes, tb_port, run_directory=None, reset_tb_dir=True, cleanup_tb_dir=False):
+def run_multiple_trainings(configs, batch_sizes, tb_port, run_directory=None, reset_tb_dir=True, cleanup_tb_dir=False, force_renormalize=False):
     """Run training for each (batch_size, config) pair.
 
     Args:
         run_directory: Optional root directory for run outputs, passed through to
             train.py's --run_directory. Defaults to train.py's own default ("runs").
+        force_renormalize: Passed through to train.py's --force_renormalize (alias of
+            --force_preprocess) on every invocation in the sweep, so each config's own
+            split/seed gets a fresh, correctly-normalized Data_split cache instead of
+            silently reusing whatever is already on disk.
     """
     session_tag = datetime.now().strftime("multi_run_%Y%m%d_%H%M%S")
     tensorboard_root = os.path.join("logs", "tensorboard", session_tag)
@@ -68,6 +72,8 @@ def run_multiple_trainings(configs, batch_sizes, tb_port, run_directory=None, re
             ]
             if run_directory is not None:
                 command += ["--run_directory", run_directory]
+            if force_renormalize:
+                command += ["--force_renormalize"]
             subprocess.run(command, check=True)
 
     if cleanup_tb_dir:
@@ -93,7 +99,7 @@ if __name__ == "__main__":
         "--batch_sizes",
         nargs="+",
         type=int,
-        default=[16, 32, 64],
+        default=[16],
         help="List of batch sizes",
     )
     parser.add_argument(
@@ -118,6 +124,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Delete the TensorBoard session root after the sweep finishes",
     )
+    parser.add_argument(
+        "--force_renormalize",
+        action="store_true",
+        help=(
+            "Passed through to each train.py invocation as --force_renormalize, "
+            "forcing every config in the sweep to rebuild its Data_split cache with "
+            "freshly computed normalization stats (RGB/digit/translation) instead of "
+            "silently reusing whatever is already on disk."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -129,4 +145,5 @@ if __name__ == "__main__":
         run_directory=args.run_directory,
         reset_tb_dir=not args.no_reset_tb_dir,
         cleanup_tb_dir=args.cleanup_tb_dir,
+        force_renormalize=args.force_renormalize,
     )

@@ -454,7 +454,22 @@ def analyze_folder_ablation(runs_dir: Path, output_dir: Path, fmt: str = "png"):
         return
 
     config_df = pd.DataFrame.from_dict(all_configs, orient='index')
-    ignore_keys = ["data.augmentation.seed", "training.task_weighting.init_log_var_rot", "training.task_weighting.init_log_var_trans", "training.uncertainty_weighting.init_log_var_rot", "training.uncertainty_weighting.init_log_var_trans", "seed"]
+    ignore_keys = [
+        "data.augmentation.seed",
+        "training.task_weighting.init_log_var_rot",
+        "training.task_weighting.init_log_var_trans",
+        "training.uncertainty_weighting.init_log_var_rot",
+        "training.uncertainty_weighting.init_log_var_trans",
+        "seed",
+        # Computed per-run from that run's own train split (see
+        # compute_translation_norm_stats); differs slightly run-to-run even when
+        # nothing experimentally meaningful changed, so it's not a real ablated
+        # variable and would otherwise pollute the auto-detected variant labels.
+        "data.translation_norm_stats.mean_y",
+        "data.translation_norm_stats.std_y",
+        "data.translation_norm_stats.mean_z",
+        "data.translation_norm_stats.std_z",
+    ]
     config_df = config_df.drop(columns=[c for c in ignore_keys if c in config_df.columns], errors='ignore')
     
     unique_counts = config_df.nunique()
