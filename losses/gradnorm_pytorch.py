@@ -29,7 +29,14 @@ SOFTWARE.
 
 from __future__ import annotations
 
-from functools import cache, partial
+import sys
+from functools import partial, lru_cache
+from typing import NamedTuple
+
+try:
+    from functools import cache
+except ImportError:
+    cache = lru_cache(maxsize=None)
 
 import torch
 import torch.distributed as dist
@@ -42,8 +49,11 @@ from einops import rearrange, repeat
 
 from accelerate import Accelerator
 
-from beartype import beartype
-from beartype.typing import NamedTuple
+if sys.version_info < (3, 10):
+    def beartype(obj):
+        return obj
+else:
+    from beartype import beartype
 
 # helper functions
 
@@ -325,3 +335,5 @@ class GradNormLossWeighter(Module):
         self.loss_weights[mask] = renormalized_loss_weights
 
         self.loss_weights_grad[mask] = 0.
+
+        return total_weighted_loss

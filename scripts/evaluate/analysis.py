@@ -338,7 +338,7 @@ def analyze_single_run(df, output_dir: Path, fmt: str = "png"):
         if any(col in df.columns for col in ["train_abs_y", "val_abs_y", "train_abs_z", "val_abs_z"]):
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
             plot_train_val(df, ax1, "epoch", "train_abs_y", "val_abs_y", "Y-Axis Alignment Error", "Abs Error [m]", zoom_last_30=zoom)
-            plot_train_val(df, ax2, "epoch", "train_abs_z", "val_abs_z", "Z-Axis Alignment Error", "Abs Error [m]", 
+            plot_train_val(df, ax2, "epoch", "train_abs_z", "val_abs_z", "Z-Axis Alignment Error", "Abs Error [m]",
                            train_color="#2ca02c", val_color="#9467bd", zoom_last_30=zoom)
             ax2.set_xlabel("Epoch")
             add_run_metadata(fig, df)
@@ -531,8 +531,8 @@ def analyze_folder_ablation(runs_dir: Path, output_dir: Path, fmt: str = "png"):
             leg = ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
             
             plt.savefig(
-                output_dir / f"ablation_comparison_{metric}{suffix}{ext}", 
-                dpi=150, 
+                output_dir / f"ablation_comparison_{metric}{suffix}{ext}",
+                dpi=150,
                 bbox_extra_artists=(leg,), 
                 bbox_inches='tight'
             )

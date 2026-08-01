@@ -292,7 +292,11 @@ def _train_single_epoch(
             q_wt=f"{loss_q.item():.4f}"
         )
 
-        loss.backward()
+        if not (
+            uncertainty_module is not None
+            and getattr(uncertainty_module, "kind", None) == "gradnorm"
+        ):
+            loss.backward()
 
         if grad_clip_max_norm is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm)
@@ -387,6 +391,11 @@ def validation_loop(
     val_metrics = _init_epoch_metrics()
     fusion_gate_stats = _init_fusion_gate_stats()
     rotation_errors = []
+    uncertainty_for_loss = (
+        None
+        if uncertainty_module is not None and getattr(uncertainty_module, "kind", None) == "gradnorm"
+        else uncertainty_module
+    )
     
     num_val = len(val_loader)
     with torch.no_grad():
@@ -399,7 +408,7 @@ def validation_loop(
             
             # Compute loss and metrics using rotation handler
             loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(
-                pose_pred, pose, uncertainty_module
+                pose_pred, pose, uncertainty_for_loss
             )
             
             pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items()}

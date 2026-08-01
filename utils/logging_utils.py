@@ -14,6 +14,15 @@ except ImportError:  # pragma: no cover
     SummaryWriter = None
 
 
+def _to_float_or_none(value):
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 METRICS_FIELDNAMES = [
     "timestamp", "epoch", "train_loss", "val_loss", "loss_q", "loss_y", "loss_z",
     "val_loss_q", "val_loss_y", "val_loss_z",
@@ -193,21 +202,26 @@ def log_epoch_to_tensorboard(
     tb_writer.add_scalars("training/lr", {**lr_stats, "schedule_scale": lr_schedule_scale}, global_step)
 
     if uncertainty_module is not None and uncertainty_stats:
-        log_var_stats = {
-            "rot": uncertainty_stats["uncertainty_log_var_rot"],
-            "trans": uncertainty_stats["uncertainty_log_var_trans"],
+        log_var_scalars = {
+            key: value
+            for key, value in {
+                "rot": _to_float_or_none(uncertainty_stats["uncertainty_log_var_rot"]),
+                "trans": _to_float_or_none(uncertainty_stats["uncertainty_log_var_trans"]),
+            }.items()
+            if value is not None
         }
-        log_var_stats = {k: v for k, v in log_var_stats.items() if isinstance(v, (int, float))}
-        if log_var_stats:
-            tb_writer.add_scalars("uncertainty/log_var", log_var_stats, global_step)
-
-        weight_stats = {
-            "rot": uncertainty_stats["uncertainty_weight_rot"],
-            "trans": uncertainty_stats["uncertainty_weight_trans"],
+        weight_scalars = {
+            key: value
+            for key, value in {
+                "rot": _to_float_or_none(uncertainty_stats["uncertainty_weight_rot"]),
+                "trans": _to_float_or_none(uncertainty_stats["uncertainty_weight_trans"]),
+            }.items()
+            if value is not None
         }
-        weight_stats = {k: v for k, v in weight_stats.items() if isinstance(v, (int, float))}
-        if weight_stats:
-            tb_writer.add_scalars("uncertainty/weight", weight_stats, global_step)
+        if log_var_scalars:
+            tb_writer.add_scalars("uncertainty/log_var", log_var_scalars, global_step)
+        if weight_scalars:
+            tb_writer.add_scalars("uncertainty/weight", weight_scalars, global_step)
 
     for group_name, group in param_groups_by_name.items():
         tb_writer.add_scalar(f"training/lr_groups/{group_name}", group["lr"], global_step)
@@ -343,11 +357,17 @@ def log_epoch_summary(
 
     if uncertainty_stats:
         try:
+            rot_log_var = _to_float_or_none(uncertainty_stats['uncertainty_log_var_rot'])
+            trans_log_var = _to_float_or_none(uncertainty_stats['uncertainty_log_var_trans'])
+            rot_weight = _to_float_or_none(uncertainty_stats['uncertainty_weight_rot'])
+            trans_weight = _to_float_or_none(uncertainty_stats['uncertainty_weight_trans'])
+            if None in (rot_log_var, trans_log_var, rot_weight, trans_weight):
+                return
             logger.info(
-                f"uncertainty rot_log_var={float(uncertainty_stats['uncertainty_log_var_rot']):.6f} "
-                f"trans_log_var={float(uncertainty_stats['uncertainty_log_var_trans']):.6f} "
-                f"rot_weight={float(uncertainty_stats['uncertainty_weight_rot']):.6f} "
-                f"trans_weight={float(uncertainty_stats['uncertainty_weight_trans']):.6f}"
+                f"uncertainty rot_log_var={rot_log_var:.6f} "
+                f"trans_log_var={trans_log_var:.6f} "
+                f"rot_weight={rot_weight:.6f} "
+                f"trans_weight={trans_weight:.6f}"
             )
         except (ValueError, TypeError):
             pass
