@@ -1,0 +1,55 @@
+output_dir: "configs/generated/combined_fusion_task_weighting"
+name_prefix: "combined_ablation"
+
+fixed_overrides:
+  model.backbone: "yolo26n.pt"
+  model.freeze_backbone: false
+  model.streams: ["rgb_image", "digit_image"]
+  model.head_type: quaternion
+  model.activation: GELU
+  model.fusion: "gated_concat"
+  
+  # Keeping your successful MLP sizes
+  model.mlp_quat_1: 1024
+  model.mlp_quat_2: 1024
+  model.mlp_quat_3: 512
+  model.mlp_trans_1: 256
+  model.mlp_trans_2: 128
+  model.mlp_trans_3: 64
+  
+  training.lr: 0.0005
+  training.batch_size: 32
+  training.epochs: 80      
+  training.optimizer: AdamW
+  training.dropout_rot: 0.1
+  training.dropout_trans: 0.1
+  training.use_batchnorm: false
+  
+  # Keeping your excellent multi_cycle LR schedule config
+  training.lr_schedule.enabled: true
+  training.lr_schedule.type: one_cycle
+  training.lr_schedule.pct_start: 0.2
+  training.lr_schedule.start_lr_mult: 0.2
+  training.lr_schedule.max_lr_mult: 2.0
+  training.lr_schedule.final_lr_mult: 0.05
+
+  data.root: "/home/MA_Flavia/Documents/FusionModel/Data"
+  data.streams: ["mono_cam", "tactile"]
+  data.image_size: 640
+  data.use_rgb: true
+  data.use_tactile: true
+  data.use_depth: false
+  data.augmentation.enabled: false
+
+# Grid search targeting the best-performing fusion types against the best weighting types across a couple of seeds
+grid:
+  training.seed: [43, 45] # Keeping 45 (the lucky seed) and 43 (a standard underperforming seed) to test variance reduction
+  
+  model.fusion:
+    - "gated_concat"
+    - "residual_gated_concat"
+  
+  training.task_weighting.enabled: [true]
+  training.task_weighting.type:
+    - "dwa"
+    - "uncertainty"

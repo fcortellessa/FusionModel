@@ -5,9 +5,10 @@ output_dir: "configs/generated/lr_schedule_ablation"
 # gated_concat is underperforming -- see configs/lr_schedule_ablation_base.yml).
 fixed_overrides:
   data.augmentation.enabled: false
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
   data.split_seed: 42
   training.batch_size: 16
-  training.epochs: 3
+  training.epochs: 150
   training.deterministic: true
   model.fusion: "channelwise_gated_concat"
   model.translation_head_mode: "separate"

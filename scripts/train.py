@@ -35,6 +35,7 @@ from utils.utils import (
     save_checkpoint,
     get_optimizer,
 )
+from utils.normalization import canonicalize_translation_norm_stats
 from utils.logging_utils import (
     format_fusion_weights,
     init_metrics_csv,
@@ -226,7 +227,7 @@ def _train_single_epoch(
     grad_clip_max_norm=None,
 ):
     model.train()
-    stats = trans_norm_stats or {"mean_y": 0.0, "std_y": 1.0, "mean_z": 0.0, "std_z": 1.0}
+    stats = canonicalize_translation_norm_stats(trans_norm_stats)
     train_metrics = _init_epoch_metrics()
 
     fusion_weights = None
@@ -314,19 +315,21 @@ def _train_single_epoch(
         # Per-step uncertainty logging for debugging (if available)
         if tb_writer is not None and uncertainty_module is not None:
             try:
-                stats = uncertainty_module.get_stats() if hasattr(uncertainty_module, "get_stats") else None
-                if stats:
+                uncertainty_stats = (
+                    uncertainty_module.get_stats() if hasattr(uncertainty_module, "get_stats") else None
+                )
+                if uncertainty_stats:
                     # log log-variances if present
-                    lv_rot = stats.get("uncertainty_log_var_rot", None)
-                    lv_trans = stats.get("uncertainty_log_var_trans", None)
+                    lv_rot = uncertainty_stats.get("uncertainty_log_var_rot", None)
+                    lv_trans = uncertainty_stats.get("uncertainty_log_var_trans", None)
                     if lv_rot is not None and lv_rot != "":
                         tb_writer.add_scalar("uncertainty/step_log_var_rot", float(lv_rot), global_batch_step)
                     if lv_trans is not None and lv_trans != "":
                         tb_writer.add_scalar("uncertainty/step_log_var_trans", float(lv_trans), global_batch_step)
 
                     # log weights if present
-                    w_rot = stats.get("uncertainty_weight_rot", None)
-                    w_trans = stats.get("uncertainty_weight_trans", None)
+                    w_rot = uncertainty_stats.get("uncertainty_weight_rot", None)
+                    w_trans = uncertainty_stats.get("uncertainty_weight_trans", None)
                     if w_rot is not None and w_rot != "":
                         tb_writer.add_scalar("uncertainty/step_weight_rot", float(w_rot), global_batch_step)
                     if w_trans is not None and w_trans != "":
@@ -380,7 +383,7 @@ def validation_loop(
         Dictionary with validation metrics
     """
     model.eval()
-    stats = trans_norm_stats or {"mean_y": 0.0, "std_y": 1.0, "mean_z": 0.0, "std_z": 1.0}
+    stats = canonicalize_translation_norm_stats(trans_norm_stats)
     val_metrics = _init_epoch_metrics()
     fusion_gate_stats = _init_fusion_gate_stats()
     rotation_errors = []
@@ -757,7 +760,9 @@ def main(
     # config.yml, so every run self-documents the mean/std it actually trained
     # under (computed from this run's own train split -- see
     # compute_translation_norm_stats).
-    cfg.setdefault("data", {})["translation_norm_stats"] = dict(trans_norm_stats)
+    cfg.setdefault("data", {})["translation_norm_stats"] = dict(
+        canonicalize_translation_norm_stats(trans_norm_stats)
+    )
     run_setup.save_config_snapshot()
 
     # Build training components from config

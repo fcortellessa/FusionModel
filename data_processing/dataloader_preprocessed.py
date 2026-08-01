@@ -18,6 +18,7 @@ from data_processing.augment_data import (
     _rng_for,
 )
 from data_processing.preprocess_data import _hub_frame_pose
+from utils.normalization import canonicalize_translation_norm_stats
 
 # Hub-frame calibration matrix; must match data_processing/preprocess_data.py's
 # transf_matrix so online-augmented samples land in the same frame as the cached
@@ -34,11 +35,11 @@ def _pose_json_to_tensor(json_path, normalize_translation=True, trans_norm_stats
     pose_vec = _hub_frame_pose(json_path, _HUB_TRANSF_MATRIX)
 
     if normalize_translation:
-        stats = trans_norm_stats or {}
-        mean_y = stats.get("trans_mean_y", 0.0)
-        std_y = stats.get("trans_std_y", 1.0)
-        mean_z = stats.get("trans_mean_z", 0.0)
-        std_z = stats.get("trans_std_z", 1.0)
+        stats = canonicalize_translation_norm_stats(trans_norm_stats)
+        mean_y = stats["mean_y"]
+        std_y = stats["std_y"]
+        mean_z = stats["mean_z"]
+        std_z = stats["std_z"]
         pose_vec[1] = (pose_vec[1] - mean_y) / std_y
         pose_vec[2] = (pose_vec[2] - mean_z) / std_z
 

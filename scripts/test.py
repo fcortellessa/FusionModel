@@ -21,6 +21,7 @@ sys.path.insert(0, parent_dir)
 from base_model.pose_estimation_model import PoseEstimationNet
 from data_processing.dataloader_preprocessed import get_test_dataloader
 from data_processing.preprocess_data import ensure_test_split_current
+from utils.normalization import canonicalize_translation_norm_stats
 from utils.utils import load_checkpoint, load_config, get_optimizer, resolve_data_root
 from utils.train_utils import _build_named_param_groups
 
@@ -113,11 +114,13 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     pred_rotations = pred_poses[:, 3:7]
 
     if config.get("data", {}).get("normalize_translation", True):
-        stats = config.get("data", {}).get("translation_norm_stats", {})
-        mean_y = stats.get("mean_y", 0.0)
-        std_y = stats.get("std_y", 1.0)
-        mean_z = stats.get("mean_z", 0.0)
-        std_z = stats.get("std_z", 1.0)
+        stats = canonicalize_translation_norm_stats(
+            config.get("data", {}).get("translation_norm_stats", {})
+        )
+        mean_y = stats["mean_y"]
+        std_y = stats["std_y"]
+        mean_z = stats["mean_z"]
+        std_z = stats["std_z"]
         pred_translations = pred_translations.copy()
         gt_translations = gt_translations.copy()
         pred_translations[:, 1] = pred_translations[:, 1] * std_y + mean_y
