@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "tactile_ablation"))
 from generate_config_variants import set_nested_value  # noqa: E402
 
 TRAIN_SCRIPT = REPO_ROOT / "scripts" / "train.py"
