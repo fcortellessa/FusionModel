@@ -1,0 +1,29 @@
+output_dir: "configs/generated/dual_fusion_vs_shared"
+
+# Single varying factor: model.dual_fusion (task-specific separate fusion instances for
+# rotation/translation vs. one shared fusion instance for both branches). Fixed per current
+# best-known settings: fusion=channelwise_gated_concat, translation_head_mode=joint,
+# lr_schedule.type=warmup_cosine (global schedule, head_lr_decay off -- matches the
+# warmup_cosine arm of configs/generated/lr_schedule_ablation_spec.yml).
+
+fixed_overrides:
+  data.augmentation.enabled: false
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
+  data.split_seed: 42
+  training.batch_size: 16
+  training.epochs: 30
+  training.early_stopping.enabled: false
+  training.deterministic: true
+  model.fusion: "channelwise_gated_concat"
+  model.translation_head_mode: "joint"
+  training.lr_schedule.enabled: true
+  training.lr_schedule.type: "warmup_cosine"
+  training.lr: 0.00001
+  training.lr_schedule.pct_start: 0.15
+  training.lr_schedule.start_lr_mult: 0.2
+  training.lr_schedule.final_lr_mult: 0.05
+  training.head_lr_decay.enabled: false
+
+grid:
+  training.seed: [43, 44, 45]
+  model.dual_fusion: [true, false]

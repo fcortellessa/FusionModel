@@ -157,22 +157,22 @@ def load_checkpoint(model, optimizer, checkpoint_path, device, strict=False, loa
 
 
 
-def get_optimizer(model_or_params, optimizer_name="Adam", lr=0.001):
+def get_optimizer(model_or_params, optimizer_name="Adam", lr=0.001, weight_decay=0.0):
     if hasattr(model_or_params, "parameters"):
         params = model_or_params.parameters()
     else:
         params = model_or_params
 
     if optimizer_name == "Adam":
-        return torch.optim.Adam(params, lr=lr)
+        return torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
     elif optimizer_name == "AdamW":
-        return torch.optim.AdamW(params, lr=lr)
+        return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
     elif optimizer_name == "RMSprop":
-        return torch.optim.RMSprop(params, lr=lr)
+        return torch.optim.RMSprop(params, lr=lr, weight_decay=weight_decay)
     elif optimizer_name == "SGD":
-        return torch.optim.SGD(params, lr=lr, momentum=0.9)
+        return torch.optim.SGD(params, lr=lr, momentum=0.9, weight_decay=weight_decay)
     elif optimizer_name == "MuSGD":
         from ultralytics.optim import MuSGD
-        return MuSGD(params, lr=lr, momentum=0.9)
+        return MuSGD(params, lr=lr, momentum=0.9, weight_decay=weight_decay)
     else:
         raise ValueError(f"Unsupported optimizer: {optimizer_name}. Available options: Adam, AdamW, RMSprop, SGD, MuSGD.")

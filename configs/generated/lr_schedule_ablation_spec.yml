@@ -3,25 +3,56 @@ output_dir: "configs/generated/lr_schedule_ablation"
 # Single varying factor: LR schedule mechanism. Fixed: fusion=channelwise_gated_concat,
 # translation_head_mode=separate (per current findings that dual_fusion/joint-head
 # gated_concat is underperforming -- see configs/lr_schedule_ablation_base.yml).
+
 fixed_overrides:
   data.augmentation.enabled: false
   data.root: /home/MA_Flavia/Documents/FusionModel/Data
   data.split_seed: 42
   training.batch_size: 16
-  training.epochs: 150
+  training.epochs: 100
+  training.early_stopping.enabled: false
   training.deterministic: true
   model.fusion: "channelwise_gated_concat"
-  model.translation_head_mode: "separate"
+  model.translation_head_mode: "joint"
   model.dual_fusion: false
 
 variants:
+  # --- Arm 3: Per-head ReduceLROnPlateau (fixed base LR, no global schedule) ---
+  - name: per_head_plateau_seed43
+    overrides:
+      training.seed: 43
+      training.lr_schedule.enabled: false
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr: 0.00001
+      training.head_lr_decay.min_delta: 0.005
+  - name: per_head_plateau_seed44
+    overrides:
+      training.seed: 44
+      training.lr_schedule.enabled: false
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr: 0.00001
+      training.head_lr_decay.min_delta: 0.005
+  - name: per_head_plateau_seed45
+    overrides:
+      training.seed: 45
+      training.lr_schedule.enabled: false
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr: 0.00001
+      training.head_lr_decay.min_delta: 0.005
+
   # --- Arm 1: Global warmup + cosine annealing ---
-  - name: warmup_cosine_seed43
+  # - name: warmup_cosine_seed43
     overrides:
       training.seed: 43
       training.lr_schedule.enabled: true
       training.lr_schedule.type: "warmup_cosine"
-      training.lr: 0.0001
+      training.lr: 0.00001
       training.lr_schedule.pct_start: 0.15
       training.lr_schedule.start_lr_mult: 0.2
       training.lr_schedule.final_lr_mult: 0.05
@@ -31,7 +62,7 @@ variants:
       training.seed: 44
       training.lr_schedule.enabled: true
       training.lr_schedule.type: "warmup_cosine"
-      training.lr: 0.0001
+      training.lr: 0.00001
       training.lr_schedule.pct_start: 0.15
       training.lr_schedule.start_lr_mult: 0.2
       training.lr_schedule.final_lr_mult: 0.05
@@ -41,7 +72,7 @@ variants:
       training.seed: 45
       training.lr_schedule.enabled: true
       training.lr_schedule.type: "warmup_cosine"
-      training.lr: 0.0001
+      training.lr: 0.00001
       training.lr_schedule.pct_start: 0.15
       training.lr_schedule.start_lr_mult: 0.2
       training.lr_schedule.final_lr_mult: 0.05
@@ -78,67 +109,3 @@ variants:
       training.lr_schedule.min_lr: 0.00001
       training.lr_schedule.min_delta: 0.005
       training.head_lr_decay.enabled: false
-
-  # --- Arm 3: Per-head ReduceLROnPlateau (fixed base LR, no global schedule) ---
-  - name: per_head_plateau_seed43
-    overrides:
-      training.seed: 43
-      training.lr_schedule.enabled: false
-      training.head_lr_decay.enabled: true
-      training.head_lr_decay.patience: 5
-      training.head_lr_decay.factor: 0.2
-      training.head_lr_decay.min_lr: 0.00001
-      training.head_lr_decay.min_delta: 0.005
-  - name: per_head_plateau_seed44
-    overrides:
-      training.seed: 44
-      training.lr_schedule.enabled: false
-      training.head_lr_decay.enabled: true
-      training.head_lr_decay.patience: 5
-      training.head_lr_decay.factor: 0.2
-      training.head_lr_decay.min_lr: 0.00001
-      training.head_lr_decay.min_delta: 0.005
-  - name: per_head_plateau_seed45
-    overrides:
-      training.seed: 45
-      training.lr_schedule.enabled: false
-      training.head_lr_decay.enabled: true
-      training.head_lr_decay.patience: 5
-      training.head_lr_decay.factor: 0.2
-      training.head_lr_decay.min_lr: 0.00001
-      training.head_lr_decay.min_delta: 0.005
-
-  - name: warmup_cosine_seed43_joint
-    overrides:
-      training.seed: 43
-      translation_head_mode: joint
-      training.lr_schedule.enabled: true
-      training.lr_schedule.type: "warmup_cosine"
-      training.lr: 0.0001
-      training.lr_schedule.pct_start: 0.15
-      training.lr_schedule.start_lr_mult: 0.2
-      training.lr_schedule.final_lr_mult: 0.05
-      training.head_lr_decay.enabled: false
-
-  - name: global_plateau_seed43_joint
-    overrides:
-      training.seed: 43
-      translation_head_mode: joint
-      training.lr_schedule.enabled: true
-      training.lr_schedule.type: "reduce_on_plateau"
-      training.lr_schedule.patience: 5
-      training.lr_schedule.factor: 0.2
-      training.lr_schedule.min_lr: 0.00001
-      training.lr_schedule.min_delta: 0.005
-      training.head_lr_decay.enabled: false
-
-  - name: per_head_plateau_seed43_joint
-    overrides:
-      training.seed: 43
-      translation_head_mode: joint
-      training.lr_schedule.enabled: false
-      training.head_lr_decay.enabled: true
-      training.head_lr_decay.patience: 5
-      training.head_lr_decay.factor: 0.2
-      training.head_lr_decay.min_lr: 0.00001
-      training.head_lr_decay.min_delta: 0.005

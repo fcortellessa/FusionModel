@@ -570,8 +570,9 @@ class TrainingConfigBuilder:
         
         optimizer_name = self.cfg["training"]["optimizer"]
         base_lr = float(self.cfg["training"]["lr"])
-        
-        return get_optimizer(param_groups, optimizer_name=optimizer_name, lr=base_lr)
+        weight_decay = float(self.cfg["training"].get("weight_decay", 0.0))
+
+        return get_optimizer(param_groups, optimizer_name=optimizer_name, lr=base_lr, weight_decay=weight_decay)
     
     def build_uncertainty_module(self, optimizer, base_lr, shared_parameter=None):
         """Build task weighting module if enabled."""

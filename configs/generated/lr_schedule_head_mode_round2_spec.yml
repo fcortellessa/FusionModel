@@ -1,0 +1,175 @@
+output_dir: "configs/generated/lr_schedule_head_mode_round2"
+
+# Round 2: fills the joint-vs-separate translation_head_mode gap left by round 1
+# (configs/generated/lr_schedule_ablation_spec.yml), which only ran translation_head_mode
+# in "separate" mode across 4 schedule arms (warmup_cosine, global_plateau, per_head_plateau,
+# fixed_lr+head_lr_decay) x 3 seeds, plus a single one-off joint-mode fixed+head_lr_decay run
+# at seed 43 (run 20260801_175824_bs16_channelwise_gated_concat) that was never replicated
+# or given a separate-mode counterpart.
+#
+# This grid (12 runs total):
+#   - adds a true "pure_fixed" baseline (lr_schedule disabled AND head_lr_decay disabled)
+#     in both head modes at seeds 43+44 -- no such baseline existed in round 1. (4 runs)
+#   - fills in joint-mode warmup_cosine, global_plateau, per_head_plateau at seed 43+44
+#     (per_head_plateau seed43 already exists as the one-off run above, so only seed44/45
+#     are added for that arm; the other two arms get fresh seed43+44 joint runs). (6 runs)
+#   - adds separate-mode counterparts at seed 43 for warmup_cosine and global_plateau, at
+#     the same lr=0.0005 used everywhere else in this grid (round 1's separate-mode runs for
+#     these arms used lr=0.0001, so they are not directly comparable to the new joint runs
+#     without a same-lr separate baseline). (2 runs)
+#
+# LR alignment across schedule arms (per explicit instruction): base/peak lr = 0.0005
+# (matches round 1's best-performing run, the fixed+head_lr_decay seed-43 run), with all
+# schedules sharing one absolute floor of 1e-5:
+#   - warmup_cosine: final_lr_mult = 0.02  (0.0005 * 0.02 = 1e-5)
+#   - global_plateau / per_head_plateau: min_lr = 0.00001
+#   - pure_fixed: constant 0.0005, no floor
+#
+# Not varied here: fusion (channelwise_gated_concat, per round 1), dual_fusion (false),
+# batch_size (16), epochs (100, matching round 1's actual runs despite the template's
+# epochs: 150 default).
+
+fixed_overrides:
+  data.augmentation.enabled: false
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
+  data.split_seed: 42
+  training.batch_size: 16
+  training.epochs: 100
+  training.early_stopping.enabled: false
+  training.deterministic: true
+  training.lr: 0.0005
+  model.fusion: "channelwise_gated_concat"
+  model.dual_fusion: false
+
+variants:
+  # --- Pure fixed-LR baseline (no global schedule, no head decay) — missing in round 1 ---
+  - name: pure_fixed_joint_seed43
+    overrides:
+      training.seed: 43
+      model.translation_head_mode: "joint"
+      training.lr_schedule.enabled: false
+      training.lr_schedule.type: "none"
+      training.head_lr_decay.enabled: false
+  - name: pure_fixed_separate_seed43
+    overrides:
+      training.seed: 43
+      model.translation_head_mode: "separate"
+      training.lr_schedule.enabled: false
+      training.lr_schedule.type: "none"
+      training.head_lr_decay.enabled: false
+  - name: pure_fixed_joint_seed44
+    overrides:
+      training.seed: 44
+      model.translation_head_mode: "joint"
+      training.lr_schedule.enabled: false
+      training.lr_schedule.type: "none"
+      training.head_lr_decay.enabled: false
+  - name: pure_fixed_separate_seed44
+    overrides:
+      training.seed: 44
+      model.translation_head_mode: "separate"
+      training.lr_schedule.enabled: false
+      training.lr_schedule.type: "none"
+      training.head_lr_decay.enabled: false
+
+  # --- Per-head ReduceLROnPlateau (fixed base LR, no global schedule), joint mode
+  #     (fills seeds 44/45; seed 43 already exists as
+  #     20260801_175824_bs16_channelwise_gated_concat) ---
+  - name: per_head_plateau_joint_seed44
+    overrides:
+      training.seed: 44
+      model.translation_head_mode: "joint"
+      training.lr_schedule.enabled: false
+      training.lr_schedule.type: "none"
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr: 0.00001
+      training.head_lr_decay.min_delta: 0.005
+  - name: per_head_plateau_joint_seed45
+    overrides:
+      training.seed: 45
+      model.translation_head_mode: "joint"
+      training.lr_schedule.enabled: false
+      training.lr_schedule.type: "none"
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr: 0.00001
+      training.head_lr_decay.min_delta: 0.005
+
+  # --- Global warmup + cosine annealing, joint mode ---
+  - name: warmup_cosine_joint_seed43
+    overrides:
+      training.seed: 43
+      model.translation_head_mode: "joint"
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "warmup_cosine"
+      training.lr_schedule.pct_start: 0.15
+      training.lr_schedule.start_lr_mult: 0.2
+      training.lr_schedule.max_lr_mult: 1.0
+      training.lr_schedule.final_lr_mult: 0.02
+      training.head_lr_decay.enabled: false
+  - name: warmup_cosine_joint_seed44
+    overrides:
+      training.seed: 44
+      model.translation_head_mode: "joint"
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "warmup_cosine"
+      training.lr_schedule.pct_start: 0.15
+      training.lr_schedule.start_lr_mult: 0.2
+      training.lr_schedule.max_lr_mult: 1.0
+      training.lr_schedule.final_lr_mult: 0.02
+      training.head_lr_decay.enabled: false
+
+  # --- Global ReduceLROnPlateau, joint mode ---
+  - name: global_plateau_joint_seed43
+    overrides:
+      training.seed: 43
+      model.translation_head_mode: "joint"
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "reduce_on_plateau"
+      training.lr_schedule.patience: 5
+      training.lr_schedule.factor: 0.2
+      training.lr_schedule.min_lr: 0.00001
+      training.lr_schedule.min_delta: 0.005
+      training.head_lr_decay.enabled: false
+  - name: global_plateau_joint_seed44
+    overrides:
+      training.seed: 44
+      model.translation_head_mode: "joint"
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "reduce_on_plateau"
+      training.lr_schedule.patience: 5
+      training.lr_schedule.factor: 0.2
+      training.lr_schedule.min_lr: 0.00001
+      training.lr_schedule.min_delta: 0.005
+      training.head_lr_decay.enabled: false
+
+  # --- Paired separate-mode counterparts at seed 43, so warmup_cosine and
+  #     global_plateau also get a same-seed joint-vs-separate comparison
+  #     (round 1's separate-mode runs for these used lr=0.0001, not 0.0005,
+  #     so they aren't directly comparable to the joint runs above). ---
+  - name: warmup_cosine_separate_seed43
+    overrides:
+      training.seed: 43
+      model.translation_head_mode: "separate"
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "warmup_cosine"
+      training.lr_schedule.pct_start: 0.15
+      training.lr_schedule.start_lr_mult: 0.2
+      training.lr_schedule.max_lr_mult: 1.0
+      training.lr_schedule.final_lr_mult: 0.02
+      training.head_lr_decay.enabled: false
+  - name: global_plateau_separate_seed43
+    overrides:
+      training.seed: 43
+      model.translation_head_mode: "separate"
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "reduce_on_plateau"
+      training.lr_schedule.patience: 5
+      training.lr_schedule.factor: 0.2
+      training.lr_schedule.min_lr: 0.00001
+      training.lr_schedule.min_delta: 0.005
+      training.head_lr_decay.enabled: false
+

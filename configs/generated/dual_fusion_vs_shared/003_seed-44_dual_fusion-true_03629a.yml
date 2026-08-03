@@ -1,0 +1,64 @@
+model:
+  backbone: yolo26n.pt
+  freeze_backbone: false
+  streams:
+  - rgb_image
+  - digit_image
+  fusion: channelwise_gated_concat
+  dual_fusion: true
+  head_type: quaternion
+  rotation_loss_type: geodesic
+  translation_head_mode: joint
+  activation: GELU
+  mlp_quat_1: 1024
+  mlp_quat_2: 1024
+  mlp_quat_3: 512
+  mlp_trans_1: 256
+  mlp_trans_2: 128
+  mlp_trans_3: 64
+training:
+  seed: 44
+  lr: 1.0e-05
+  batch_size: 16
+  epochs: 100
+  num_workers: 4
+  optimizer: AdamW
+  deterministic: true
+  task_weighting:
+    enabled: true
+    type: uncertainty
+    init_log_var_rot: 0.0
+    init_log_var_trans: 0.0
+    lr_mult: 1.0
+  grad_clip:
+    enabled: true
+    max_norm: 1.0
+  dropout_rot: 0.1
+  dropout_trans: 0.1
+  use_batchnorm: false
+  lr_schedule:
+    enabled: true
+    type: warmup_cosine
+    pct_start: 0.15
+    start_lr_mult: 0.2
+    final_lr_mult: 0.05
+  head_lr_decay:
+    enabled: false
+  early_stopping:
+    enabled: false
+data:
+  root: /home/MA_Flavia/Documents/FusionModel/Data
+  split_seed: 42
+  streams:
+  - mono_cam
+  - tactile
+  image_size: 640
+  use_rgb: true
+  use_tactile: true
+  use_depth: false
+  augmentation:
+    enabled: false
+    seed: 42
+    photo_count: 1
+    overwrite: false
+  normalize_translation: true

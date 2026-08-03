@@ -29,6 +29,9 @@ training:
   epochs: 50
   num_workers: 4
   optimizer: Adam
+  # L2 weight regularization, passed to the optimizer's native weight_decay kwarg
+  # (decoupled for AdamW). Defaults to 0.0 (off) to preserve existing baselines.
+  weight_decay: 0.0
   # Task weighting modes:
   # - uncertainty: learned log-variance weighting
   # - gradnorm: gradient-norm balancing
