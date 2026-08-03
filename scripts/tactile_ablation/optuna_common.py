@@ -1,54 +1,33 @@
 #!/usr/bin/env python3
 """
-Optuna hyperparameter search over regularization, LR schedule, and prediction-head
-architecture, driven on top of the existing scripts/train.py entry point.
+Shared machinery for the phased Optuna hyperparameter search (optuna_phase1_*.py,
+optuna_phase2_*.py, optuna_phase3_*.py). Not a standalone entry point.
 
 Design: scripts/train.py has no in-process return value or callback hook (it writes
 metrics.csv per epoch and exits), so each trial is run as a subprocess against a
 generated config file. A background thread tails metrics.csv as it grows and reports
 each new epoch's val_loss to Optuna via trial.report(), so Optuna's pruner can kill
-clearly-losing trials early (the model's own training.early_stopping, if enabled in the
-search space, independently stops a trial once ITS OWN val_loss plateaus -- pruning and
-early stopping are complementary, not duplicates: pruning compares against other trials,
-early stopping only looks at a trial's own history).
+clearly-losing trials early. This is independent of the model's own
+training.early_stopping (if enabled in a phase's search space): pruning compares a
+trial against OTHER trials' trajectories, early stopping only looks at a trial's own
+history -- the two are complementary, not duplicates.
 
 Final objective (minimize): the same "combined score" used by
 scripts/evaluate/analysis.py's leaderboard -- val_abs_rot_x (deg) + L2 norm of
 (val_abs_y, val_abs_z) in mm, averaged over the last N epochs actually logged.
-
-Search space (fixed at fusion=channelwise_gated_concat, translation_head_mode and
-dual_fusion taken from --template-config, epochs/batch_size from --template-config):
-    training.lr                          loguniform
-    training.weight_decay                loguniform (0 treated as "off" via a separate flag)
-    training.dropout_rot                 uniform
-    training.dropout_trans               uniform
-    training.use_batchnorm               categorical
-    training.lr_schedule.enabled/type    categorical (none | warmup_cosine | reduce_on_plateau)
-    training.head_lr_decay.enabled       categorical (only meaningful when lr_schedule is off,
-                                          matching the "per_head_plateau" arm from prior ablations)
-    model.mlp_quat_1/2/3                 categorical (rotation head widths, 3 layers fixed)
-    model.mlp_trans_1/2/3                categorical (translation head widths, 3 layers fixed)
-
-Usage:
-    python scripts/tactile_ablation/optuna_tune.py \\
-        --template-config configs/lr_schedule_ablation_base.yml \\
-        --n-trials 30 \\
-        --study-name lr_arch_search \\
-        --storage sqlite:///runs/optuna_lr_schedule_arch/study.db
-
-Resume an interrupted study by rerunning with the same --study-name/--storage.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import queue
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 import optuna
 import pandas as pd
@@ -69,64 +48,25 @@ def load_yaml(path: Path) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
+def resolve_path(path_str: str) -> Path:
+    path = Path(path_str)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
 def build_trial_config(template: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
-    import copy
     cfg = copy.deepcopy(template)
     for dotted_path, value in overrides.items():
         set_nested_value(cfg, dotted_path, value)
     return cfg
 
 
-def suggest_params(trial: optuna.Trial) -> Dict[str, Any]:
-    """Returns a dict of dotted-path -> value overrides for this trial."""
-    overrides: Dict[str, Any] = {}
-
-    overrides["training.lr"] = trial.suggest_float("lr", 1e-5, 1e-3, log=True)
-
-    use_weight_decay = trial.suggest_categorical("use_weight_decay", [True, False])
-    overrides["training.weight_decay"] = (
-        trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True) if use_weight_decay else 0.0
-    )
-
-    overrides["training.dropout_rot"] = trial.suggest_float("dropout_rot", 0.0, 0.5)
-    overrides["training.dropout_trans"] = trial.suggest_float("dropout_trans", 0.0, 0.5)
-    overrides["training.use_batchnorm"] = trial.suggest_categorical("use_batchnorm", [True, False])
-
-    schedule_choice = trial.suggest_categorical(
-        "schedule_choice", ["none", "warmup_cosine", "reduce_on_plateau", "per_head_plateau"]
-    )
-    if schedule_choice == "none":
-        overrides["training.lr_schedule.enabled"] = False
-        overrides["training.head_lr_decay.enabled"] = False
-    elif schedule_choice == "warmup_cosine":
-        overrides["training.lr_schedule.enabled"] = True
-        overrides["training.lr_schedule.type"] = "warmup_cosine"
-        overrides["training.lr_schedule.pct_start"] = trial.suggest_float("wc_pct_start", 0.05, 0.3)
-        overrides["training.lr_schedule.start_lr_mult"] = trial.suggest_float("wc_start_lr_mult", 0.05, 0.5)
-        overrides["training.lr_schedule.final_lr_mult"] = trial.suggest_float("wc_final_lr_mult", 0.001, 0.1, log=True)
-        overrides["training.head_lr_decay.enabled"] = False
-    elif schedule_choice == "reduce_on_plateau":
-        overrides["training.lr_schedule.enabled"] = True
-        overrides["training.lr_schedule.type"] = "reduce_on_plateau"
-        overrides["training.lr_schedule.patience"] = trial.suggest_int("gp_patience", 3, 10)
-        overrides["training.lr_schedule.factor"] = trial.suggest_float("gp_factor", 0.1, 0.5)
-        overrides["training.lr_schedule.min_lr"] = trial.suggest_float("gp_min_lr", 1e-6, 1e-4, log=True)
-        overrides["training.head_lr_decay.enabled"] = False
-    elif schedule_choice == "per_head_plateau":
-        overrides["training.lr_schedule.enabled"] = False
-        overrides["training.head_lr_decay.enabled"] = True
-        overrides["training.head_lr_decay.patience"] = trial.suggest_int("hd_patience", 3, 10)
-        overrides["training.head_lr_decay.factor"] = trial.suggest_float("hd_factor", 0.1, 0.5)
-        overrides["training.head_lr_decay.min_lr"] = trial.suggest_float("hd_min_lr", 1e-6, 1e-4, log=True)
-
-    overrides["model.mlp_quat_1"] = trial.suggest_categorical("mlp_quat_1", [256, 512, 1024, 2048])
-    overrides["model.mlp_quat_2"] = trial.suggest_categorical("mlp_quat_2", [256, 512, 1024, 2048])
-    overrides["model.mlp_quat_3"] = trial.suggest_categorical("mlp_quat_3", [128, 256, 512])
-    overrides["model.mlp_trans_1"] = trial.suggest_categorical("mlp_trans_1", [64, 128, 256, 512])
-    overrides["model.mlp_trans_2"] = trial.suggest_categorical("mlp_trans_2", [32, 64, 128, 256])
-    overrides["model.mlp_trans_3"] = trial.suggest_categorical("mlp_trans_3", [16, 32, 64, 128])
-
-    return overrides
+def get_dotted(cfg: Dict[str, Any], dotted_path: str, default=None):
+    node = cfg
+    for part in dotted_path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return default
+        node = node[part]
+    return node
 
 
 def tail_metrics_csv(
@@ -164,13 +104,14 @@ def score_final(metrics_path: Path, tail_epochs: int) -> float:
 def run_trial(
     trial: optuna.Trial,
     template: Dict[str, Any],
+    suggest_params: Callable[[optuna.Trial], Dict[str, Any]],
     trials_root: Path,
     tail_epochs: int,
     poll_interval: float,
 ) -> float:
     overrides = suggest_params(trial)
     cfg = build_trial_config(template, overrides)
-    cfg.setdefault("training", {})["seed"] = template.get("training", {}).get("seed", 43)
+    cfg.setdefault("training", {}).setdefault("seed", template.get("training", {}).get("seed", 43))
 
     trial_dir = trials_root / f"trial_{trial.number:04d}"
     trial_dir.mkdir(parents=True, exist_ok=True)
@@ -242,26 +183,28 @@ def run_trial(
     return score_final(metrics_path, tail_epochs)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Optuna search over regularization/LR-schedule/head-architecture")
-    parser.add_argument("--template-config", type=str, required=True, help="Base config providing fixed keys (fusion, epochs, batch_size, translation_head_mode, dual_fusion, data.root, seed, ...)")
+def build_arg_parser(description: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--template-config", type=str, required=True, help="Base config providing every key not searched by this phase")
     parser.add_argument("--n-trials", type=int, default=30)
-    parser.add_argument("--study-name", type=str, default="lr_schedule_arch_search")
+    parser.add_argument("--study-name", type=str, required=True)
     parser.add_argument("--storage", type=str, default=None, help="Optuna storage URL, e.g. sqlite:///runs/optuna_study.db. Required to resume a study across processes.")
-    parser.add_argument("--output-dir", type=str, default="runs/optuna_lr_schedule_arch")
+    parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--tail-epochs", type=int, default=5, help="Epochs averaged for the final objective, matching the existing leaderboard convention")
     parser.add_argument("--poll-interval", type=float, default=5.0, help="Seconds between metrics.csv polls")
     parser.add_argument("--pruner-warmup-epochs", type=int, default=15, help="Epochs before pruning is allowed to kick in for a trial (avoids killing runs during early noisy epochs)")
-    args = parser.parse_args()
+    return parser
 
-    template_path = Path(args.template_config)
-    if not template_path.is_absolute():
-        template_path = REPO_ROOT / template_path
+
+def run_study(
+    args: argparse.Namespace,
+    suggest_params: Callable[[optuna.Trial], Dict[str, Any]],
+    winner_out_path_name: str = "winner_config.yml",
+):
+    template_path = resolve_path(args.template_config)
     template = load_yaml(template_path)
 
-    output_dir = Path(args.output_dir)
-    if not output_dir.is_absolute():
-        output_dir = REPO_ROOT / output_dir
+    output_dir = resolve_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     storage = args.storage or f"sqlite:///{output_dir / 'study.db'}"
@@ -276,7 +219,7 @@ def main():
     )
 
     def objective(trial: optuna.Trial) -> float:
-        return run_trial(trial, template, output_dir, args.tail_epochs, args.poll_interval)
+        return run_trial(trial, template, suggest_params, output_dir, args.tail_epochs, args.poll_interval)
 
     study.optimize(objective, n_trials=args.n_trials)
 
@@ -292,6 +235,17 @@ def main():
     print(f"\nFull trial history written to {trials_csv}")
     print(f"Study storage: {storage}  (resume with the same --study-name/--storage)")
 
+    # Write the winning trial's full resolved config, so it can be fed directly as
+    # --template-config to the next phase (or used as a standalone confirmation run).
+    best_trial_dir = output_dir / f"trial_{study.best_trial.number:04d}"
+    best_config_path = best_trial_dir / "config.yml"
+    winner_path = output_dir / winner_out_path_name
+    if best_config_path.exists():
+        winner_cfg = load_yaml(best_config_path)
+        with open(winner_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(winner_cfg, f, sort_keys=False)
+        print(f"Winning config copied to {winner_path} (use as --template-config for the next phase)")
+    else:
+        print(f"Warning: best trial's config not found at {best_config_path}; winner_config.yml not written")
 
-if __name__ == "__main__":
-    main()
+    return study

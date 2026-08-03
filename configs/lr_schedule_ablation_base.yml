@@ -6,7 +6,7 @@ model:
   dual_fusion: false
   head_type: quaternion
   rotation_loss_type: geodesic
-  translation_head_mode: separate
+  translation_head_mode: joint
   activation: GELU
   mlp_quat_1: 1024
   mlp_quat_2: 1024
