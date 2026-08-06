@@ -101,6 +101,21 @@ def score_final(metrics_path: Path, tail_epochs: int) -> float:
     return float(val_rot_x + trans_l2_mm)
 
 
+def drain_stderr(proc: subprocess.Popen, buffer: list, stop_event: threading.Event):
+    """Continuously reads the subprocess's stderr into `buffer` so its pipe never fills
+    up and blocks the child on a write() syscall (a filled, undrained PIPE is a classic
+    subprocess hang: the child looks "stuck" mid-epoch with no further output, because
+    it's actually blocked writing to stderr, not because training itself stalled)."""
+    while True:
+        line = proc.stderr.readline()
+        if line:
+            buffer.append(line)
+        elif proc.poll() is not None:
+            break
+        if stop_event.is_set() and not line:
+            break
+
+
 def run_trial(
     trial: optuna.Trial,
     template: Dict[str, Any],
@@ -131,6 +146,11 @@ def run_trial(
         stderr=subprocess.PIPE,
         text=True,
     )
+
+    stderr_lines: list = []
+    stderr_stop_event = threading.Event()
+    stderr_thread = threading.Thread(target=drain_stderr, args=(proc, stderr_lines, stderr_stop_event), daemon=True)
+    stderr_thread.start()
 
     # metrics.csv path is only known once RunSetupManager creates the run folder;
     # poll for it to appear before tailing.
@@ -169,12 +189,14 @@ def run_trial(
             tail_thread.join(timeout=2 * poll_interval)
         if proc.poll() is None:
             proc.wait(timeout=30)
+        stderr_stop_event.set()
+        stderr_thread.join(timeout=10)
 
     if pruned:
         raise optuna.TrialPruned()
 
     if proc.returncode != 0:
-        stderr_tail = proc.stderr.read()[-2000:] if proc.stderr else ""
+        stderr_tail = "".join(stderr_lines[-200:])
         raise RuntimeError(f"Trial {trial.number} subprocess failed (exit {proc.returncode}):\n{stderr_tail}")
 
     if metrics_path is None or not metrics_path.exists():
