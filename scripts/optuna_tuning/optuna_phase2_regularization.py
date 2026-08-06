@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
 Phase 2: LR + regularization search (lr, weight_decay, dropout_rot, dropout_trans).
-Runs after Phase 1 (head architecture) so these are tuned against the network capacity
-that phase already settled on, not a capacity Phase 1 would later discard.
+Runs after Phase 1A and/or 1B (head architecture at grid=6 and/or grid=10) so these
+are tuned against the network capacity that phase already settled on, not a capacity
+Phase 1 would later discard.
+
+Once you've run Phase 1A (grid=6) and Phase 1B (grid=10) and chosen the better one,
+use its winner_config.yml as --template-config for this phase.
 
 use_batchnorm is intentionally NOT searched: fixed to False in every trial here
 (BatchNorm's running statistics interact poorly with AdamW's per-parameter adaptive
@@ -13,8 +17,7 @@ this script does not override either.
 Schedule/head-decay is held fixed at whatever --template-config specifies -- run this
 phase against a "pure_fixed" (no lr_schedule, no head_lr_decay) template so the
 regularization effect isn't confounded by a schedule already fighting overfitting on
-its own. --template-config should be Phase 1's winner_config.yml, so head architecture
-is fixed to Phase 1's result.
+its own. --template-config should be Phase 1's (1A or 1B) winner_config.yml.
 
 Search space:
     training.lr               loguniform(1e-5, 1e-3)
@@ -24,10 +27,10 @@ Search space:
 
 Usage:
     python scripts/optuna_tuning/optuna_phase2_regularization.py \\
-        --template-config runs/optuna_phase1_head_architecture/winner_config.yml \\
+        --template-config runs/optuna_phase1a_head_architecture_grid6/winner_config.yml \\
         --n-trials 25 \\
-        --study-name phase2_regularization \\
-        --output-dir runs/optuna_phase2_regularization
+        --study-name phase2_regularization_from_phase1a \\
+        --output-dir runs/optuna_phase2_regularization_from_phase1a
 
 Output: runs/optuna_phase2_regularization/winner_config.yml -- feed this as
 --template-config to optuna_phase3_schedule.py.

@@ -38,7 +38,8 @@ from fusion.adapters import TaskSpecificResidualGate, TaskSpecificChannelAttenti
 class PoseEstimationNet(nn.Module):
     def __init__(self, model_name='yolo26n.pt', streams=("mono_cam", "tactile"), fusion="concat", freeze_backbone=False, rotation_parametrisation="quaternion", activation=nn.GELU(),
                  rotation_layers = [256, 1024, 16], translation_layers = [1024, 1024, 0], dropout_rot = 0.0, dropout_trans = 0.0, use_batchnorm = True, task_adapter=None,
-                 task_feature_adapter=False, task_feature_adapter_type="channel_attention", dual_fusion=False, translation_head_mode="separate"):
+                 task_feature_adapter=False, task_feature_adapter_type="channel_attention", dual_fusion=False, translation_head_mode="separate",
+                 spatial_grid_size=(10, 10)):
         super().__init__()
 
         if dual_fusion and rotation_parametrisation == "se3_direct":
@@ -93,10 +94,20 @@ class PoseEstimationNet(nn.Module):
         self.conv_p4 = nn.Conv2d(c4, c4//2, 1)
         self.conv_p5 = nn.Conv2d(c5, c5//2, 1)
 
-        self.spatial_grid_size = (10, 10)
-        self.down_p3 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
-        self.down_p4 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
-        self.down_p5 = nn.AdaptiveAvgPool2d(self.spatial_grid_size)
+        # Learned stride-2 downsampling layers (from colleague's original design).
+        # Two stride-2 convs per scale to progressively reduce spatial dimensions:
+        # P3: 80×80 -> 40×40 -> 20×20
+        # P4: 40×40 -> 20×20 -> 10×10 (then will further reduce to 5×5)
+        # P5: 20×20 -> 10×10 -> 5×5
+        # These are learned, allowing the network to decide what structure to preserve during downsampling.
+        self.stride_p3_1 = nn.Conv2d(c3//2, c3//2, kernel_size=3, stride=2, padding=1)
+        self.stride_p3_2 = nn.Conv2d(c3//2, c3//2, kernel_size=3, stride=2, padding=1)
+
+        self.stride_p4_1 = nn.Conv2d(c4//2, c4//2, kernel_size=3, stride=2, padding=1)
+        self.stride_p4_2 = nn.Conv2d(c4//2, c4//2, kernel_size=3, stride=2, padding=1)
+
+        self.stride_p5_1 = nn.Conv2d(c5//2, c5//2, kernel_size=3, stride=2, padding=1)
+        self.stride_p5_2 = nn.Conv2d(c5//2, c5//2, kernel_size=3, stride=2, padding=1)
 
         # 2. Fusion module
         # Determine spatial dimensions
@@ -292,9 +303,10 @@ class PoseEstimationNet(nn.Module):
     def forward_single_stream(self, x, extractor):
         p3, p4, p5 = extract_features_raw(x, extractor, self.p345_indices)
 
-        p3 = self.down_p3(self.conv_p3(p3))
-        p4 = self.down_p4(self.conv_p4(p4))
-        p5 = self.down_p5(self.conv_p5(p5))
+        # 1×1 channel reduction, then two stride-2 convolutions per scale for learned downsampling
+        p3 = self.stride_p3_2(self.stride_p3_1(self.conv_p3(p3)))  # 80×80 -> 40×40 -> 20×20
+        p4 = self.stride_p4_2(self.stride_p4_1(self.conv_p4(p4)))  # 40×40 -> 20×20 -> 10×10
+        p5 = self.stride_p5_2(self.stride_p5_1(self.conv_p5(p5)))  # 20×20 -> 10×10 -> 5×5
 
         return torch.cat([p.flatten(1) for p in [p3, p4, p5]], dim=1)
 

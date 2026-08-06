@@ -525,6 +525,7 @@ class TrainingConfigBuilder:
             dropout_rot=self.cfg["training"]["dropout_rot"],
             dropout_trans=self.cfg["training"]["dropout_trans"],
             use_batchnorm=self.cfg["training"]["use_batchnorm"],
+            spatial_grid_size=self.cfg["model"].get("spatial_grid_size", (10, 10)),
             task_adapter=self.cfg["model"].get("task_adapter", None),
             task_feature_adapter=self._is_task_feature_adapter_enabled(),
             task_feature_adapter_type=self._get_task_feature_adapter_type(),

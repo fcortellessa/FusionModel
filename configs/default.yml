@@ -22,6 +22,13 @@ model:
   mlp_trans_1: 256
   mlp_trans_2: 128
   mlp_trans_3: 64
+  # Fixed grid each of P3/P4/P5 is adaptive-avg-pooled to before flattening into the
+  # fused feature vector (1D pipeline only; ignored by fusion: spatial_gated_2d, which
+  # operates on the unpooled spatial maps directly). fused_dim scales with the square
+  # of this value, so e.g. 10 -> 100x the per-channel pooled size feeding the heads;
+  # accepts a single int (square grid) or a [h, w] pair. Default 10 preserves the
+  # original hardcoded (10, 10) behavior.
+  spatial_grid_size: 10
 
 training:
   lr: 0.001
