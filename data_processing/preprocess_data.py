@@ -302,18 +302,21 @@ def preprocess_data(
     use_preaugmented_train_dir=False,
     split_seed=None,
     force_split=False,
+    group_aware_split=True,
 ):
     """Main preprocessing pipeline: split, augment (if needed), and preprocess all splits.
 
-    split_seed/force_split are forwarded to split_dataset(): the split is only
-    reshuffled when its manifest doesn't already match (seed/ratios/source data),
-    or when force_split is True. See GripFusionNet_split.py::split_dataset.
+    split_seed/force_split/group_aware_split are forwarded to split_dataset():
+    the split is only reshuffled when its manifest doesn't already match
+    (seed/ratios/source data/method), or when force_split is True. See
+    GripFusionNet_split.py::split_dataset -- group_aware_split=False reproduces
+    the legacy per-frame shuffle (comparison only; leaks grasp events).
     """
     output_path = os.path.join(root_dir, "Data_split/")
 
     # ---- Stage 1: Dataset splitting ----
     print("Splitting dataset into train/val/test")
-    split_dataset(root_dir, output_path, seed=split_seed, force=force_split)
+    split_dataset(root_dir, output_path, seed=split_seed, force=force_split, group_aware=group_aware_split)
 
     train_split_dir = os.path.join(output_path, "train")
 
@@ -377,13 +380,16 @@ def ensure_test_split_current(cfg, data_root, log=print):
     already be on disk at data_root.
     """
     from data_processing.GripFusionNet_split import split_manifest_matches
-    from utils.utils import resolve_split_seed
+    from utils.utils import resolve_split_seed, resolve_group_aware_split
 
     split_root = os.path.join(data_root, "Data_split")
     split_seed = resolve_split_seed(cfg)
+    group_aware_split = resolve_group_aware_split(cfg)
     test_cache_dir = os.path.join(split_root, "test", "test_preprocessing")
 
-    split_matches = split_manifest_matches(data_root, split_root, seed=split_seed)
+    split_matches = split_manifest_matches(
+        data_root, split_root, seed=split_seed, group_aware=group_aware_split
+    )
     cache_exists = os.path.exists(test_cache_dir)
 
     if split_matches and cache_exists:
@@ -395,5 +401,7 @@ def ensure_test_split_current(cfg, data_root, log=print):
     if not cache_exists:
         reason.append("test preprocessing cache missing")
     log(f"Preparing split at {data_root} (seed={split_seed}, reason={', '.join(reason)})")
-    preprocess_data(root_dir=data_root, split_seed=split_seed, force_split=False)
+    preprocess_data(
+        root_dir=data_root, split_seed=split_seed, force_split=False, group_aware_split=group_aware_split
+    )
     return split_seed

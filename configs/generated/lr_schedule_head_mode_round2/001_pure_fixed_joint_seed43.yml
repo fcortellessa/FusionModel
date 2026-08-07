@@ -21,7 +21,7 @@ training:
   seed: 43
   lr: 0.0005
   batch_size: 16
-  epochs: 100
+  epochs: 80
   num_workers: 4
   optimizer: AdamW
   uncertainty_weighting:
@@ -59,4 +59,5 @@ data:
     photo_count: 1
     overwrite: false
   normalize_translation: true
+  group_aware_split: true
   split_seed: 42

@@ -777,6 +777,7 @@ class DataPipelineManager:
         """Preprocess data if needed."""
         from data_processing.preprocess_data import preprocess_data
         from data_processing.GripFusionNet_split import split_manifest_matches
+        from utils.utils import resolve_split_seed, resolve_group_aware_split
 
         data_dir = self._get_data_dir()
 
@@ -786,17 +787,26 @@ class DataPipelineManager:
         # split_seed is independent of training.seed so a training.seed sweep can
         # reuse one fixed split; falls back to training.seed when unset so existing
         # configs keep their current (implicit) behavior.
-        split_seed = self.cfg.get("data", {}).get(
-            "split_seed", self.cfg.get("training", {}).get("seed")
-        )
+        split_seed = resolve_split_seed(self.cfg)
+
+        # group_aware_split=True (default) keeps every grasp-event's frames in one
+        # split. Set data.group_aware_split: false only to reproduce the legacy
+        # per-frame shuffle for side-by-side comparison -- see
+        # GripFusionNet_split.py::split_dataset for what that trades away. Resolved
+        # the same way here and in ensure_test_split_current (used at eval time) so
+        # a run's test split is never silently regenerated with the other method.
+        group_aware_split = resolve_group_aware_split(self.cfg)
 
         split_root = os.path.join(data_dir, "Data_split")
         preprocessed_dir = os.path.join(split_root, "train", "train_preprocessing")
         cache_exists = os.path.exists(preprocessed_dir)
 
-        # Cheap check (listdir + manifest read) so a split_seed change is picked
-        # up automatically even when the preprocessing cache already exists.
-        split_is_current = split_manifest_matches(data_dir, split_root, seed=split_seed)
+        # Cheap check (listdir + manifest read) so a split_seed/group_aware_split
+        # change is picked up automatically even when the preprocessing cache
+        # already exists.
+        split_is_current = split_manifest_matches(
+            data_dir, split_root, seed=split_seed, group_aware=group_aware_split
+        )
 
         should_preprocess = self.force_preprocess or not cache_exists or not split_is_current
 
@@ -804,7 +814,7 @@ class DataPipelineManager:
             if self.force_preprocess:
                 reason = "--force_preprocess"
             elif not split_is_current:
-                reason = "data.split_seed (or ratios/source data) changed"
+                reason = "data.split_seed/group_aware_split (or ratios/source data) changed"
             else:
                 reason = "preprocessing cache missing"
 
@@ -821,6 +831,7 @@ class DataPipelineManager:
                 use_preaugmented_train_dir=False,
                 split_seed=split_seed,
                 force_split=self.force_preprocess,
+                group_aware_split=group_aware_split,
             )
         elif use_photo_aug:
             if self.logger:

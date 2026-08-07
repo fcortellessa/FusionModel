@@ -34,6 +34,19 @@ def resolve_split_seed(cfg):
     return cfg.get("data", {}).get("split_seed", cfg.get("training", {}).get("seed"))
 
 
+def resolve_group_aware_split(cfg):
+    """Resolve whether the grasp-event-group-aware split method is used.
+
+    `data.group_aware_split`, defaulting to True (the leak-free method; see
+    data_processing/GripFusionNet_split.py). Set to False only to reproduce
+    the legacy per-frame shuffle for comparison. Must be resolved the same
+    way at train time and at eval time -- otherwise `ensure_test_split_current`
+    would silently regenerate a run's split with the *other* method before
+    evaluating it.
+    """
+    return bool(cfg.get("data", {}).get("group_aware_split", True))
+
+
 def sanitize_filename(value):
     value = str(value)
     value = re.sub(r'[<>:"/\\|?*]+', "_", value)
