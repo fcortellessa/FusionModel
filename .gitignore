@@ -10,7 +10,7 @@ data_capture/.py3_12_venv/
 yolo26n.pt
 Data/
 data_subset/
-
+data_downloaded/
 checkpoints/
 logs/
 results/

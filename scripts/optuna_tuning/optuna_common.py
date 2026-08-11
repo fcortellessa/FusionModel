@@ -222,7 +222,19 @@ def run_study(
     args: argparse.Namespace,
     suggest_params: Callable[[optuna.Trial], Dict[str, Any]],
     winner_out_path_name: str = "winner_config.yml",
+    sampler: "optuna.samplers.BaseSampler | None" = None,
+    enqueue_trials: "list[Dict[str, Any]] | None" = None,
 ):
+    """sampler: defaults to Optuna's stock TPESampler (None) for every existing phase
+    script, unchanged. Pass an explicit sampler (e.g. a tightly-configured, multivariate
+    TPESampler) for a phase meant to exploit a known-good region rather than explore
+    broadly -- see optuna_phase1b_extended_local.py.
+
+    enqueue_trials: params dicts (same shape suggest_params' trial.suggest_* calls
+    expect, i.e. {"mlp_quat_1": 4096, ...}) forced to run first, before any
+    sampler-chosen trial. Use this to seed a local/exploitative search around a known
+    incumbent so the sampler's internal model is anchored there from trial 0, instead
+    of spending early trials rediscovering it."""
     template_path = resolve_path(args.template_config)
     template = load_yaml(template_path)
 
@@ -237,8 +249,17 @@ def run_study(
         storage=storage,
         direction="minimize",
         pruner=pruner,
+        sampler=sampler,
         load_if_exists=True,
     )
+
+    if enqueue_trials:
+        already_seeded = len(study.get_trials(deepcopy=False)) > 0
+        if not already_seeded:
+            for params in enqueue_trials:
+                study.enqueue_trial(params)
+        else:
+            print(f"Study already has trials recorded; skipping enqueue of {len(enqueue_trials)} seed point(s) (would only apply on a fresh study).")
 
     def objective(trial: optuna.Trial) -> float:
         return run_trial(trial, template, suggest_params, output_dir, args.tail_epochs, args.poll_interval)
