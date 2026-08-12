@@ -155,17 +155,48 @@ def _reduce_dual_fusion_branches(value):
 
 
 def _init_fusion_gate_stats():
-    """Create accumulators for compact, per-stream gate diagnostics."""
-    return {"sum": None, "sum_sq": None, "count": None, "lt_0_1": None, "gt_0_9": None}
+    """Create accumulators for compact, per-stream gate diagnostics.
+
+    Also tracks raw weights for:
+    - GAP 1: Per-task fusion gates (dual_fusion)
+    - GAP 2: Full distributions for TensorBoard histograms
+    """
+    return {
+        "sum": None, "sum_sq": None, "count": None, "lt_0_1": None, "gt_0_9": None,
+        # GAP 1: Per-task accumulators (dual_fusion only)
+        "rotation_sum": None, "rotation_sum_sq": None, "rotation_count": None,
+        "rotation_lt_0_1": None, "rotation_gt_0_9": None,
+        "translation_sum": None, "translation_sum_sq": None, "translation_count": None,
+        "translation_lt_0_1": None, "translation_gt_0_9": None,
+        # GAP 2: Raw weights for distributions (TensorBoard histograms)
+        "raw_weights": [],  # List of tensors to concatenate later
+        "raw_rotation_weights": [],
+        "raw_translation_weights": [],
+    }
 
 
-def _accumulate_fusion_gate_stats(stats, gates):
-    """Accumulate all gate values while keeping channel-wise gates out of the CSV."""
+def _accumulate_fusion_gate_stats(stats, gates, task_name=None):
+    """
+    Accumulate gate statistics for per-stream analysis.
+
+    Args:
+        stats: Accumulator dict (from _init_fusion_gate_stats)
+        gates: Fusion gate weights, shape (B, streams) or (B, streams, channels) or (B, streams, H, W)
+               Can also be None (skipped) or a dict with 'rotation'/'translation' keys for dual_fusion
+        task_name: Optional task identifier ('rotation' or 'translation') for dual_fusion.
+                   If None, accumulates to the main stats (non-dual case or averaged case).
+    """
     if gates is None:
         return
 
-    # Gate shapes are (B, streams) or (B, streams, channels).  Each row below
-    # therefore represents every gate value belonging to one stream.
+    # GAP 2: Store raw weights for TensorBoard histogram
+    raw_key = f"raw_{task_name}_weights" if task_name else "raw_weights"
+    if raw_key in stats and gates is not None:
+        gates_cpu = gates.detach().float().cpu()
+        stats[raw_key].append(gates_cpu)
+
+    # Gate shapes are (B, streams) or (B, streams, channels) or (B, streams, H, W).
+    # Reshape to (num_streams, -1) so each row is all gate values for one stream.
     by_stream = gates.detach().float().cpu().movedim(1, 0).reshape(gates.shape[1], -1)
     gate_sum = by_stream.sum(dim=1)
     gate_sum_sq = by_stream.square().sum(dim=1)
@@ -173,31 +204,62 @@ def _accumulate_fusion_gate_stats(stats, gates):
     low_count = (by_stream < 0.1).sum(dim=1)
     high_count = (by_stream > 0.9).sum(dim=1)
 
-    if stats["sum"] is None:
+    # Determine which stats dict keys to update
+    if task_name:
+        # GAP 1: Per-task accumulation (dual_fusion)
+        sum_key = f"{task_name}_sum"
+        sum_sq_key = f"{task_name}_sum_sq"
+        count_key = f"{task_name}_count"
+        lt_key = f"{task_name}_lt_0_1"
+        gt_key = f"{task_name}_gt_0_9"
+    else:
+        # Standard accumulation (non-dual or averaged)
+        sum_key, sum_sq_key = "sum", "sum_sq"
+        count_key = "count"
+        lt_key, gt_key = "lt_0_1", "gt_0_9"
+
+    if stats[sum_key] is None:
         stats.update({
-            "sum": gate_sum,
-            "sum_sq": gate_sum_sq,
-            "count": gate_count,
-            "lt_0_1": low_count,
-            "gt_0_9": high_count,
+            sum_key: gate_sum,
+            sum_sq_key: gate_sum_sq,
+            count_key: gate_count,
+            lt_key: low_count,
+            gt_key: high_count,
         })
         return
 
     for key, value in {
-        "sum": gate_sum,
-        "sum_sq": gate_sum_sq,
-        "count": gate_count,
-        "lt_0_1": low_count,
-        "gt_0_9": high_count,
+        sum_key: gate_sum,
+        sum_sq_key: gate_sum_sq,
+        count_key: gate_count,
+        lt_key: low_count,
+        gt_key: high_count,
     }.items():
         stats[key] += value
 
 
 def _summarize_fusion_gate_stats(stats, prefix):
-    """Return CSV-ready, per-stream gate statistics as compact list strings."""
-    if stats["sum"] is None:
-        return {}, None
+    """
+    Return CSV-ready gate statistics and raw weights for TensorBoard.
 
+    Computes:
+    - Mean, std, and sparsity fractions (existing per-stream scalars)
+    - Percentiles p25, p50, p75, p90 (GAP 2: Option A for CSV)
+    - Raw weights (GAP 2: Option B for TensorBoard histograms)
+    - Per-task stats if dual_fusion (GAP 1)
+
+    Args:
+        stats: Accumulator dict from _init_fusion_gate_stats with sums, counts, raw weights
+        prefix: "train" or "val" for CSV column names
+
+    Returns:
+        (summary_dict, mean_weights, raw_weights, raw_rotation_weights, raw_translation_weights)
+        where each raw_* is either a concatenated tensor or None
+    """
+    if stats["sum"] is None:
+        return {}, None, None, None, None
+
+    # Main (averaged or non-dual) stats
     mean = stats["sum"] / stats["count"]
     variance = (stats["sum_sq"] / stats["count"] - mean.square()).clamp_min(0.0)
     summary = {
@@ -206,7 +268,42 @@ def _summarize_fusion_gate_stats(stats, prefix):
         f"{prefix}_fusion_gate_fraction_lt_0_1": format_fusion_weights(stats["lt_0_1"] / stats["count"]),
         f"{prefix}_fusion_gate_fraction_gt_0_9": format_fusion_weights(stats["gt_0_9"] / stats["count"]),
     }
-    return summary, mean
+
+    # GAP 2: Option A - Compute and add percentiles to CSV
+    from utils.logging_utils import compute_gate_statistics
+    raw_weights = torch.cat(stats["raw_weights"]) if stats["raw_weights"] else None
+    if raw_weights is not None:
+        gate_stats = compute_gate_statistics(raw_weights)
+        summary.update({
+            f"{prefix}_fusion_gate_p25": gate_stats["p25"],
+            f"{prefix}_fusion_gate_p50": gate_stats["p50"],
+            f"{prefix}_fusion_gate_p75": gate_stats["p75"],
+            f"{prefix}_fusion_gate_p90": gate_stats["p90"],
+        })
+
+    # GAP 1: Per-task stats (dual_fusion only)
+    raw_rotation_weights = torch.cat(stats["raw_rotation_weights"]) if stats["raw_rotation_weights"] else None
+    raw_translation_weights = torch.cat(stats["raw_translation_weights"]) if stats["raw_translation_weights"] else None
+
+    if raw_rotation_weights is not None:
+        rotation_stats = compute_gate_statistics(raw_rotation_weights)
+        summary.update({
+            f"{prefix}_rotation_fusion_gate_mean": rotation_stats["mean"],
+            f"{prefix}_rotation_fusion_gate_std": rotation_stats["std"],
+            f"{prefix}_rotation_fusion_gate_fraction_lt_0_1": rotation_stats["fraction_lt_0_1"],
+            f"{prefix}_rotation_fusion_gate_fraction_gt_0_9": rotation_stats["fraction_gt_0_9"],
+        })
+
+    if raw_translation_weights is not None:
+        translation_stats = compute_gate_statistics(raw_translation_weights)
+        summary.update({
+            f"{prefix}_translation_fusion_gate_mean": translation_stats["mean"],
+            f"{prefix}_translation_fusion_gate_std": translation_stats["std"],
+            f"{prefix}_translation_fusion_gate_fraction_lt_0_1": translation_stats["fraction_lt_0_1"],
+            f"{prefix}_translation_fusion_gate_fraction_gt_0_9": translation_stats["fraction_gt_0_9"],
+        })
+
+    return summary, mean, raw_weights, raw_rotation_weights, raw_translation_weights
 
 
 
@@ -269,7 +366,14 @@ def _train_single_epoch(
             pose_pred_unnorm, pose_unnorm
         )
 
-        _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights))
+        # GAP 1: Accumulate per-task fusion gates if dual_fusion, else averaged
+        if isinstance(model.last_fusion_weights, dict) and model.dual_fusion:
+            # Dual fusion: accumulate rotation and translation gates separately
+            _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("rotation"), task_name="rotation")
+            _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("translation"), task_name="translation")
+        else:
+            # Non-dual or averaged: use existing behavior
+            _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights))
 
         _apply_metric_accumulation(
             train_metrics,
@@ -351,7 +455,7 @@ def _train_single_epoch(
         global_batch_step += 1
 
     train_avg = EpochMetricsAggregator(train_metrics, len(train_loader)).to_dict()
-    fusion_gate_summary, fusion_weights_avg = _summarize_fusion_gate_stats(
+    fusion_gate_summary, fusion_weights_avg, train_raw_weights, train_raw_rot_weights, train_raw_trans_weights = _summarize_fusion_gate_stats(
         fusion_gate_stats, prefix="train"
     )
 
@@ -361,6 +465,10 @@ def _train_single_epoch(
         "fusion_weights_avg": fusion_weights_avg,
         "fusion_gate_summary": fusion_gate_summary,
         "global_batch_step": global_batch_step,
+        # GAP 2: Raw weights for TensorBoard histograms
+        "train_raw_weights": train_raw_weights,
+        "train_raw_rot_weights": train_raw_rot_weights,
+        "train_raw_trans_weights": train_raw_trans_weights,
     }
 
 
@@ -404,7 +512,15 @@ def validation_loop(
             aux_losses = batch.pop("aux_losses", None)
             pose = batch["pose"].to(device)
             pose_pred, _ = model(batch, aux_losses=aux_losses)
-            _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights))
+
+            # GAP 1: Accumulate per-task fusion gates if dual_fusion, else averaged
+            if isinstance(model.last_fusion_weights, dict) and model.dual_fusion:
+                # Dual fusion: accumulate rotation and translation gates separately
+                _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("rotation"), task_name="rotation")
+                _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("translation"), task_name="translation")
+            else:
+                # Non-dual or averaged: use existing behavior
+                _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights))
             
             # Compute loss and metrics using rotation handler
             loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(
@@ -447,14 +563,22 @@ def validation_loop(
                 },
             )
     
-    val_gate_summary, _ = _summarize_fusion_gate_stats(fusion_gate_stats, prefix="val")
+    val_gate_summary, _, val_raw_weights, val_raw_rot_weights, val_raw_trans_weights = _summarize_fusion_gate_stats(fusion_gate_stats, prefix="val")
     all_rotation_errors = torch.cat(rotation_errors)
     rotation_summary = {
         "val_rot_median_deg": torch.median(all_rotation_errors).item(),
         "val_rot_p90_deg": torch.quantile(all_rotation_errors, 0.9).item(),
         "val_rot_within_5deg": (all_rotation_errors <= 5.0).float().mean().item(),
     }
-    return EpochMetricsAggregator(val_metrics, num_val).to_dict(), val_gate_summary, rotation_summary
+    return (
+        EpochMetricsAggregator(val_metrics, num_val).to_dict(),
+        val_gate_summary,
+        rotation_summary,
+        # GAP 2: Raw weights for TensorBoard histograms
+        val_raw_weights,
+        val_raw_rot_weights,
+        val_raw_trans_weights,
+    )
 
 
 def train_loop(
@@ -561,7 +685,7 @@ def train_loop(
             fw_str = format_fusion_weights(fusion_weights_avg) if fusion_weights_avg is not None else format_fusion_weights(fusion_weights)
             fw_epoch_str = fw_str
 
-            val_avg, val_gate_summary, val_rotation_summary = validation_loop(
+            val_avg, val_gate_summary, val_rotation_summary, val_raw_weights, val_raw_rot_weights, val_raw_trans_weights = validation_loop(
                 model=model,
                 val_loader=val_loader,
                 rotation_handler=rotation_handler,
@@ -646,6 +770,14 @@ def train_loop(
                 uncertainty_stats=uncertainty_stats,
                 best_val_loss=best_val_loss,
                 epoch_time=epoch_time,
+                # GAP 2: Raw weights for TensorBoard histograms (Option B)
+                train_fusion_weights_raw=train_epoch.get("train_raw_weights"),
+                val_fusion_weights_raw=val_raw_weights,
+                # GAP 1: Per-task weights for dual_fusion analysis
+                train_rot_weights_raw=train_epoch.get("train_raw_rot_weights"),
+                val_rot_weights_raw=val_raw_rot_weights,
+                train_trans_weights_raw=train_epoch.get("train_raw_trans_weights"),
+                val_trans_weights_raw=val_raw_trans_weights,
             )
 
             if epoch == num_epochs - 1 or should_stop:

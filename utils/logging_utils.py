@@ -23,6 +23,64 @@ def _to_float_or_none(value):
         return None
 
 
+def compute_gate_statistics(weights_tensor):
+    """
+    Compute comprehensive gate statistics from a batch of fusion weights.
+
+    Handles multiple tensor shapes (scalar, channel-wise, spatial):
+    - [batch, num_streams]: scalar gating
+    - [batch, num_streams, channels]: channel-wise gating
+    - [batch, num_streams, height, width]: spatial gating (flattened)
+
+    Args:
+        weights_tensor: torch.Tensor or None — fusion gate weights
+
+    Returns:
+        dict with keys: mean, std, fraction_lt_0_1, fraction_gt_0_9, p25, p50, p75, p90
+        All values are Python floats or None if input is None.
+    """
+    if weights_tensor is None:
+        return {
+            "mean": None, "std": None,
+            "fraction_lt_0_1": None, "fraction_gt_0_9": None,
+            "p25": None, "p50": None, "p75": None, "p90": None,
+        }
+
+    try:
+        import numpy as np
+
+        # Flatten to 1D for statistics
+        w_flat = weights_tensor.flatten().detach().cpu().numpy()
+
+        mean_val = float(np.mean(w_flat))
+        std_val = float(np.std(w_flat))
+        frac_lt_01 = float(np.mean(w_flat < 0.1))
+        frac_gt_09 = float(np.mean(w_flat > 0.9))
+
+        p25_val = float(np.percentile(w_flat, 25))
+        p50_val = float(np.percentile(w_flat, 50))
+        p75_val = float(np.percentile(w_flat, 75))
+        p90_val = float(np.percentile(w_flat, 90))
+
+        return {
+            "mean": mean_val,
+            "std": std_val,
+            "fraction_lt_0_1": frac_lt_01,
+            "fraction_gt_0_9": frac_gt_09,
+            "p25": p25_val,
+            "p50": p50_val,
+            "p75": p75_val,
+            "p90": p90_val,
+        }
+    except Exception as e:
+        print(f"Warning: Failed to compute gate statistics: {e}")
+        return {
+            "mean": None, "std": None,
+            "fraction_lt_0_1": None, "fraction_gt_0_9": None,
+            "p25": None, "p50": None, "p75": None, "p90": None,
+        }
+
+
 METRICS_FIELDNAMES = [
     "timestamp", "epoch", "train_loss", "val_loss", "loss_q", "loss_y", "loss_z",
     "val_loss_q", "val_loss_y", "val_loss_z",
@@ -33,6 +91,18 @@ METRICS_FIELDNAMES = [
     "train_fusion_gate_fraction_lt_0_1", "train_fusion_gate_fraction_gt_0_9",
     "val_fusion_gate_mean", "val_fusion_gate_std",
     "val_fusion_gate_fraction_lt_0_1", "val_fusion_gate_fraction_gt_0_9",
+    # GAP 1: Per-task fusion gate statistics (for dual_fusion)
+    "train_rotation_fusion_gate_mean", "train_rotation_fusion_gate_std",
+    "train_rotation_fusion_gate_fraction_lt_0_1", "train_rotation_fusion_gate_fraction_gt_0_9",
+    "val_rotation_fusion_gate_mean", "val_rotation_fusion_gate_std",
+    "val_rotation_fusion_gate_fraction_lt_0_1", "val_rotation_fusion_gate_fraction_gt_0_9",
+    "train_translation_fusion_gate_mean", "train_translation_fusion_gate_std",
+    "train_translation_fusion_gate_fraction_lt_0_1", "train_translation_fusion_gate_fraction_gt_0_9",
+    "val_translation_fusion_gate_mean", "val_translation_fusion_gate_std",
+    "val_translation_fusion_gate_fraction_lt_0_1", "val_translation_fusion_gate_fraction_gt_0_9",
+    # GAP 2: Fusion gate percentiles (for distribution analysis)
+    "train_fusion_gate_p25", "train_fusion_gate_p50", "train_fusion_gate_p75", "train_fusion_gate_p90",
+    "val_fusion_gate_p25", "val_fusion_gate_p50", "val_fusion_gate_p75", "val_fusion_gate_p90",
     "best_loss", "epoch_time_sec", "checkpoint_path",
     "model_name", "streams", "fusion", "head_type", "freeze_backbone",
     "lr", "lr_base", "lr_head_rot", "lr_head_y", "lr_head_z", "lr_schedule_scale",
@@ -182,7 +252,21 @@ def log_epoch_to_tensorboard(
     tb_writer, global_step, train_avg, val_avg, lr_stats, lr_schedule_scale,
     param_groups_by_name, fusion_weights, fusion_weights_avg, uncertainty_module,
     uncertainty_stats, best_val_loss, epoch_time,
+    train_fusion_weights_raw=None, val_fusion_weights_raw=None,
+    train_rot_weights_raw=None, val_rot_weights_raw=None,
+    train_trans_weights_raw=None, val_trans_weights_raw=None,
 ):
+    """
+    Log epoch metrics to TensorBoard.
+
+    Additional arguments for raw fusion weights (for histogram logging):
+    - train_fusion_weights_raw: [batch, num_streams] or [batch, num_streams, ...] raw gate values
+    - val_fusion_weights_raw: same structure for validation
+    - train_rot_weights_raw: rotation-specific weights (dual_fusion only)
+    - val_rot_weights_raw: validation rotation weights
+    - train_trans_weights_raw: translation-specific weights (dual_fusion only)
+    - val_trans_weights_raw: validation translation weights
+    """
     if tb_writer is None:
         return
 
@@ -232,6 +316,24 @@ def log_epoch_to_tensorboard(
     if fusion_weights_avg is not None:
         for idx, weight in enumerate(fusion_weights_avg.tolist()):
             tb_writer.add_scalar(f"fusion/epoch_weight_stream/{idx}", float(weight), global_step)
+
+    # GAP 2: Log full distribution histograms for fusion gate analysis
+    # Option B: TensorBoard histograms show the complete distribution per epoch
+    if train_fusion_weights_raw is not None:
+        tb_writer.add_histogram("fusion/train_weights_distribution", train_fusion_weights_raw.flatten().detach().cpu(), global_step)
+    if val_fusion_weights_raw is not None:
+        tb_writer.add_histogram("fusion/val_weights_distribution", val_fusion_weights_raw.flatten().detach().cpu(), global_step)
+
+    # GAP 1: Per-task fusion gate distributions (dual_fusion only)
+    if train_rot_weights_raw is not None:
+        tb_writer.add_histogram("fusion/train_rotation_weights_distribution", train_rot_weights_raw.flatten().detach().cpu(), global_step)
+    if val_rot_weights_raw is not None:
+        tb_writer.add_histogram("fusion/val_rotation_weights_distribution", val_rot_weights_raw.flatten().detach().cpu(), global_step)
+
+    if train_trans_weights_raw is not None:
+        tb_writer.add_histogram("fusion/train_translation_weights_distribution", train_trans_weights_raw.flatten().detach().cpu(), global_step)
+    if val_trans_weights_raw is not None:
+        tb_writer.add_histogram("fusion/val_translation_weights_distribution", val_trans_weights_raw.flatten().detach().cpu(), global_step)
 
 
 def log_hparams_to_tensorboard(tb_writer, metadata, optimizer, train_loader, val_loss_avg, val_abs_trans_avg, val_abs_rot_x_avg):

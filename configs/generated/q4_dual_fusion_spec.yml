@@ -1,0 +1,89 @@
+# Q4 Spec: Dual Fusion (Shared vs. Per-Task Fusion)
+# Purpose: Compare shared fusion (rotation+translation share weights) vs. dual fusion (separate)
+# Base: Your winner config (gated_concat)
+# Vary: model.dual_fusion true/false and training.seed
+# Grid: 1 shared baseline + 3 dual fusion seeds
+
+template_config: configs/generated/q4_dual_fusion_seed.yml
+
+variants:
+  # Baseline: Shared fusion (current standard approach)
+  - name: "shared_fusion"
+    fixed_overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: false
+      model.head_type: quaternion
+      model.rotation_loss_type: geodesic
+      model.activation: GELU
+      model.mlp_quat_1: 1024
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 512
+      model.mlp_trans_1: 256
+      model.mlp_trans_2: 128
+      model.mlp_trans_3: 64
+
+      training.seed: 43
+      training.lr: 0.0005
+      training.batch_size: 16
+      training.epochs: 50
+      training.optimizer: AdamW
+      training.dropout_rot: 0.1
+      training.dropout_trans: 0.1
+      training.use_batchnorm: false
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: one_cycle
+      training.lr_schedule.pct_start: 0.15
+      training.lr_schedule.start_lr_mult: 0.2
+      training.lr_schedule.max_lr_mult: 1.0
+      training.lr_schedule.final_lr_mult: 0.001
+      training.head_lr_decay.enabled: false
+      training.task_weighting.enabled: true
+      training.task_weighting.type: uncertainty
+      training.deterministic: true
+      training.grad_clip.enabled: true
+      training.grad_clip.max_norm: 1.0
+
+      data.use_rgb: true
+      data.use_tactile: true
+      data.augmentation.enabled: false
+
+# Grid: Dual fusion with multiple seeds for robustness
+grid_template:
+  model.fusion: gated_concat
+  model.dual_fusion: true
+  model.head_type: quaternion
+  model.rotation_loss_type: geodesic
+  model.activation: GELU
+  model.mlp_quat_1: 1024
+  model.mlp_quat_2: 1024
+  model.mlp_quat_3: 512
+  model.mlp_trans_1: 256
+  model.mlp_trans_2: 128
+  model.mlp_trans_3: 64
+
+  training.lr: 0.0005
+  training.batch_size: 16
+  training.epochs: 50
+  training.optimizer: AdamW
+  training.dropout_rot: 0.1
+  training.dropout_trans: 0.1
+  training.use_batchnorm: false
+  training.lr_schedule.enabled: true
+  training.lr_schedule.type: one_cycle
+  training.lr_schedule.pct_start: 0.15
+  training.lr_schedule.start_lr_mult: 0.2
+  training.lr_schedule.max_lr_mult: 1.0
+  training.lr_schedule.final_lr_mult: 0.001
+  training.head_lr_decay.enabled: false
+  training.task_weighting.enabled: true
+  training.task_weighting.type: uncertainty
+  training.deterministic: true
+  training.grad_clip.enabled: true
+  training.grad_clip.max_norm: 1.0
+
+  data.use_rgb: true
+  data.use_tactile: true
+  data.augmentation.enabled: false
+
+grid:
+  training.seed: [41, 42, 43]
