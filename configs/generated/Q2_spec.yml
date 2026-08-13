@@ -1,0 +1,16 @@
+template_config: configs/optuna_winner.yml
+
+fixed_overrides:
+  model.translation_head_mode: "joint"
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+  model.fusion:
+    - "gated_concat"
+    - "residual_gated_concat"
+    - "channelwise_gated_concat"
+    - "channelwise_residual_gated_concat"
+
