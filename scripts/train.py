@@ -154,6 +154,30 @@ def _reduce_dual_fusion_branches(value):
     return torch.stack(branches, dim=0).mean(dim=0)
 
 
+def _compute_signed_errors(pose_pred, pose, rotation_handler):
+    """Compute signed (non-absolute) errors for translation and rotation.
+
+    Returns: (signed_y, signed_z, signed_rot_x) as mean errors per batch.
+    Positive means prediction is larger than ground truth.
+    """
+    trans_pred = pose_pred["trans"][:, 1:3]
+    trans_gt = pose[:, 1:3]
+
+    signed_y = (trans_pred[:, 0] - trans_gt[:, 0]).mean()
+    signed_z = (trans_pred[:, 1] - trans_gt[:, 1]).mean()
+
+    # Compute signed rotation error using the rotation handler
+    # which handles all parametrization types
+    if hasattr(rotation_handler, 'compute_rotation_errors_degrees_signed'):
+        signed_rot_errors = rotation_handler.compute_rotation_errors_degrees_signed(pose_pred, pose)
+        signed_rot_x = signed_rot_errors.mean()
+    else:
+        # Fallback: use absolute error if signed method not available
+        signed_rot_x = torch.tensor(0.0, device=pose.device)
+
+    return signed_y, signed_z, signed_rot_x
+
+
 def _init_fusion_gate_stats():
     """Create accumulators for compact, per-stream gate diagnostics.
 
@@ -366,6 +390,9 @@ def _train_single_epoch(
             pose_pred_unnorm, pose_unnorm
         )
 
+        # Compute signed errors for this batch
+        signed_y, signed_z, signed_rot_x = _compute_signed_errors(pose_pred_unnorm, pose_unnorm, rotation_handler)
+
         # GAP 1: Accumulate per-task fusion gates if dual_fusion, else averaged
         if isinstance(model.last_fusion_weights, dict) and model.dual_fusion:
             # Dual fusion: accumulate rotation and translation gates separately
@@ -386,6 +413,9 @@ def _train_single_epoch(
                 "abs_z": abs_trans_z.item(),
                 "abs_trans": abs_trans.item(),
                 "abs_rot_x": abs_rot_x.item(),
+                "signed_y": signed_y.item(),
+                "signed_z": signed_z.item(),
+                "signed_rot_x": signed_rot_x.item(),
             },
         )
 
@@ -548,7 +578,10 @@ def validation_loop(
             rotation_errors.append(
                 rotation_handler.compute_rotation_errors_degrees(pose_pred_unnorm, pose_unnorm).detach().cpu()
             )
-            
+
+            # Compute signed errors for this batch
+            signed_y, signed_z, signed_rot_x = _compute_signed_errors(pose_pred_unnorm, pose_unnorm, rotation_handler)
+
             _apply_metric_accumulation(
                 val_metrics,
                 {
@@ -560,15 +593,21 @@ def validation_loop(
                     "abs_z": abs_trans_z.item(),
                     "abs_trans": abs_trans.item(),
                     "abs_rot_x": abs_rot_x.item(),
+                    "signed_y": signed_y.item(),
+                    "signed_z": signed_z.item(),
+                    "signed_rot_x": signed_rot_x.item(),
                 },
             )
     
     val_gate_summary, _, val_raw_weights, val_raw_rot_weights, val_raw_trans_weights = _summarize_fusion_gate_stats(fusion_gate_stats, prefix="val")
     all_rotation_errors = torch.cat(rotation_errors)
     rotation_summary = {
+        "val_rot_best_10_percent_deg": torch.quantile(all_rotation_errors, 0.1).item(),
         "val_rot_median_deg": torch.median(all_rotation_errors).item(),
         "val_rot_p90_deg": torch.quantile(all_rotation_errors, 0.9).item(),
-        "val_rot_within_5deg": (all_rotation_errors <= 5.0).float().mean().item(),
+        "val_rot_x_best_10_percent_deg": torch.quantile(all_rotation_errors, 0.1).item(),  # Alias for X-rotation only (planar case)
+        "val_rot_x_median_deg": torch.median(all_rotation_errors).item(),
+        "val_rot_x_p90_deg": torch.quantile(all_rotation_errors, 0.9).item(),
     }
     return (
         EpochMetricsAggregator(val_metrics, num_val).to_dict(),

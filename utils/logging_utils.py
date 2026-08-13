@@ -85,8 +85,11 @@ METRICS_FIELDNAMES = [
     "timestamp", "epoch", "train_loss", "val_loss", "loss_q", "loss_y", "loss_z",
     "val_loss_q", "val_loss_y", "val_loss_z",
     "train_abs_y", "train_abs_z", "train_abs_trans", "train_abs_rot_x",
+    "train_signed_y", "train_signed_z", "train_signed_rot_x",
     "val_abs_y", "val_abs_z", "val_abs_trans", "val_abs_rot_x",
-    "val_rot_median_deg", "val_rot_p90_deg", "val_rot_within_5deg",
+    "val_signed_y", "val_signed_z", "val_signed_rot_x",
+    "val_rot_best_10_percent_deg", "val_rot_median_deg", "val_rot_p90_deg",
+    "val_rot_x_best_10_percent_deg", "val_rot_x_median_deg", "val_rot_x_p90_deg",
     "fusion_weights", "train_fusion_gate_mean", "train_fusion_gate_std",
     "train_fusion_gate_fraction_lt_0_1", "train_fusion_gate_fraction_gt_0_9",
     "val_fusion_gate_mean", "val_fusion_gate_std",
@@ -432,7 +435,7 @@ def configure_run_logging(artifacts, tensorboard_root, run_metadata, uncertainty
 
 
 def _init_epoch_metrics():
-    return {k: 0.0 for k in ["loss", "loss_q", "loss_y", "loss_z", "abs_y", "abs_z", "abs_trans", "abs_rot_x"]}
+    return {k: 0.0 for k in ["loss", "loss_q", "loss_y", "loss_z", "abs_y", "abs_z", "abs_trans", "abs_rot_x", "signed_y", "signed_z", "signed_rot_x"]}
 
 
 def log_epoch_summary(
