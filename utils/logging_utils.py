@@ -82,7 +82,9 @@ def compute_gate_statistics(weights_tensor):
 
 
 METRICS_FIELDNAMES = [
-    "timestamp", "epoch", "train_loss", "val_loss", "loss_q", "loss_y", "loss_z",
+    "timestamp", "epoch", 
+    # losses and metrics 
+    "train_loss", "val_loss", "loss_q", "loss_y", "loss_z",
     "val_loss_q", "val_loss_y", "val_loss_z",
     "train_abs_y", "train_abs_z", "train_abs_trans", "train_abs_rot_x",
     "train_signed_y", "train_signed_z", "train_signed_rot_x",
@@ -94,7 +96,7 @@ METRICS_FIELDNAMES = [
     "train_fusion_gate_fraction_lt_0_1", "train_fusion_gate_fraction_gt_0_9",
     "val_fusion_gate_mean", "val_fusion_gate_std",
     "val_fusion_gate_fraction_lt_0_1", "val_fusion_gate_fraction_gt_0_9",
-    # GAP 1: Per-task fusion gate statistics (for dual_fusion)
+    # per-task fusion gate parameters (for dual_fusion)
     "train_rotation_fusion_gate_mean", "train_rotation_fusion_gate_std",
     "train_rotation_fusion_gate_fraction_lt_0_1", "train_rotation_fusion_gate_fraction_gt_0_9",
     "val_rotation_fusion_gate_mean", "val_rotation_fusion_gate_std",
@@ -103,15 +105,15 @@ METRICS_FIELDNAMES = [
     "train_translation_fusion_gate_fraction_lt_0_1", "train_translation_fusion_gate_fraction_gt_0_9",
     "val_translation_fusion_gate_mean", "val_translation_fusion_gate_std",
     "val_translation_fusion_gate_fraction_lt_0_1", "val_translation_fusion_gate_fraction_gt_0_9",
-    # GAP 2: Fusion gate percentiles (for distribution analysis)
     "train_fusion_gate_p25", "train_fusion_gate_p50", "train_fusion_gate_p75", "train_fusion_gate_p90",
     "val_fusion_gate_p25", "val_fusion_gate_p50", "val_fusion_gate_p75", "val_fusion_gate_p90",
+    # general run metadata
     "best_loss", "epoch_time_sec", "checkpoint_path",
     "model_name", "streams", "fusion", "head_type", "freeze_backbone",
     "lr", "lr_base", "lr_head_rot", "lr_head_y", "lr_head_z", "lr_schedule_scale",
     "uncertainty_log_var_rot", "uncertainty_log_var_trans",
     "uncertainty_weight_rot", "uncertainty_weight_trans", "batch_size", "seed",
-    "num_parameters", "num_trainable_parameters",
+    "num_parameters", "num_trainable_parameters", "gflops_per_sample", "gflops_per_batch", "avg_inference_time_ms"
 ]
 
 

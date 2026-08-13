@@ -1,0 +1,12 @@
+template_config: configs/generated/winner_config_earlystopping.yml
+
+fixed_overrides:
+  model.translation_head_mode: "joint"
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48, 49, 50] # 2nd sweep: [41, 42, 43, 44, 45]
+  model.dual_fusion: [false, true]
+

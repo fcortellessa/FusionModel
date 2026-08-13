@@ -12,16 +12,20 @@ variants:
     fixed_overrides: 
       training.lr_schedule.enabled: true
       training.lr_schedule.type: "reduce_on_plateau"
+      training.lr_schedule.patience: 5
+      training.lr_schedule.factor: 0.2
+      training.lr_schedule.min_lr: 0.00001
+      training.lr_schedule.min_delta: 0.005
       training.head_lr_decay.enabled: false
-      training.head_lr_decay.patience: 5
-      training.head_lr_decay.factor: 0.2
-      training.head_lr_decay.min_lr: 0.00001
-      training.head_lr_decay.min_delta: 0.005
 
-  - name: "per_head_lr_decay"
+  - name: "per_head_decayLROnPlateau"
     fixed_overrides:
       training.lr_schedule.enabled: true
       training.lr_schedule.type: "reduce_on_plateau"
+      training.lr_schedule.patience: 5
+      training.lr_schedule.factor: 0.2
+      training.lr_schedule.min_lr: 0.00001
+      training.lr_schedule.min_delta: 0.005
       training.head_lr_decay.enabled: true
       training.head_lr_decay.patience: 5
       training.head_lr_decay.factor: 0.2
@@ -39,6 +43,10 @@ variants:
       training.lr_schedule.enabled: true
       training.lr_schedule.type: warmup_cosine
       training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr: 0.00001
+      training.head_lr_decay.min_delta: 0.005
 
 grid:
   training.seed: [46, 47, 48, 49, 50] # 2nd sweep: [41, 42, 43, 44, 45]

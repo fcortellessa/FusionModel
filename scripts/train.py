@@ -50,6 +50,7 @@ from utils.logging_utils import (
     close_run_writers,
 )
 from losses.rotation_loss_handlers import get_rotation_handler
+from utils.flops_utils import compute_inference_flops
 
 logger = logging.getLogger("GripFusionNet")
 log_file = None
@@ -961,7 +962,20 @@ def main(
                 "params": uncertainty_module.parameters(),
                 "lr": base_lr * uncertainty_lr_mult,
             })
-    
+
+    # Compute model FLOPs and parameters
+    flops_stats = compute_inference_flops(
+        model,
+        batch_size=resolved_batch_size,
+        device=device
+    )
+
+    logger.info(
+        f"Model: {flops_stats['params_millions']:.2f}M params, "
+        f"{flops_stats['gflops_per_sample']:.3f} GFLOPs/sample, "
+        f"{flops_stats['gflops_per_batch']:.3f} GFLOPs/batch"
+    )
+
     # Prepare training metadata
     head_lr_cfg = cfg.get("training", {}).get("head_lr_decay", {})
     lr_schedule_cfg = cfg.get("training", {}).get("lr_schedule", {})
@@ -996,6 +1010,8 @@ def main(
         "num_trainable_parameters": sum(
             parameter.numel() for parameter in model.parameters() if parameter.requires_grad
         ),
+        "gflops_per_sample": flops_stats["gflops_per_sample"],
+        "gflops_per_batch": flops_stats["gflops_per_batch"],
         "head_lr_decay": resolved_head_lr_cfg,
         "lr_schedule": lr_schedule_cfg if lr_schedule_cfg else {"enabled": False},
         "task_weighting": task_weighting_cfg if uncertainty_module is not None else {"enabled": False},
