@@ -1,0 +1,40 @@
+output_dir: "configs/generated/task_specific_fusion_ablation"
+
+# Recovered + updated from commit 3fe78f3 ("task specific fusion with attention"),
+# whose original spec file at configs/generated/task_specific_fusion_ablation_spec.yml
+# was since overwritten in place by an unrelated dual_fusion experiment (same filename,
+# different output_dir). The 8 configs that spec had generated (channel_attention /
+# residual_gate task-feature-adapters on top of fusion=concat, seeds 43-46) are still
+# sitting in configs/generated/task_specific_fusion_ablation/ and have never been
+# trained -- this spec regenerates them against the current best Optuna results
+# instead of the stale architecture template they were originally built from.
+#
+# What changed vs. the recovered original:
+#   - data.root: dropped the override entirely (old spec had the Windows path
+#     D:/MA/FusionModel/data, wrong for this machine) -- now inherited from
+#     --template-config, which should be an Optuna winner with the correct root.
+#   - training.lr_schedule.type: dropped the "multi_cycle" override -- now inherits
+#     whichever schedule the Optuna winner tuned (warmup_cosine, as of Phase 3),
+#     instead of silently applying "multi_cycle" with hyperparameters (pct_start,
+#     lr mults) that were never tuned for that schedule type in the first place.
+#   - grid.training.seed: extended from [43,44,45] to [43,44,45,46] to match what's
+#     already generated on disk (seed 46 configs exist; the committed spec history
+#     never shows how they got there, so this just codifies the wider set).
+#
+# What's intentionally kept fixed (the ablation's own design, not something to
+# inherit from Optuna): batch_size=32, epochs=50, model.fusion=concat -- Optuna's
+# winner uses channelwise_gated_concat and bs16/epochs80, but this ablation is
+# specifically about task_feature_adapter type on top of the plain concat fusion,
+# so those two dimensions stay put.
+
+fixed_overrides:
+  data.augmentation.enabled: false
+  training.batch_size: 32
+  training.epochs: 50
+  training.deterministic: true
+  task_feature_adapter.enabled: true
+
+grid:
+  training.seed: [43, 44, 45, 46]
+  model.fusion: ["concat"]
+  task_feature_adapter.type: ["channel_attention", "residual_gate"]

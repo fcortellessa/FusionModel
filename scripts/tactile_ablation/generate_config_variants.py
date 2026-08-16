@@ -24,6 +24,13 @@ variants:
       data.augmentation.enabled_contrast: false
       data.augmentation.enabled_blur: true
       data.augmentation.enabled_channel_scaling: false
+
+If both `grid` and `variants` are given, every variant is generated once per
+grid point (a full cross product), e.g. 3 variants x 10 grid combos = 30
+files, each named `<variant_name>__<grid_overrides>__<hash>.yml`. If only one
+of `grid`/`variants` is given, that set alone determines the output (grid
+combos get an auto-generated name from the varying grid keys; explicit
+variants use their own `name`).
 """
 
 from __future__ import annotations
@@ -116,15 +123,19 @@ def sanitize_filename(name: str, max_length: int = 180) -> str:
     return f"{prefix}_{digest}"
 
 
-def build_auto_variant_name(overrides: Mapping[str, Any]) -> str:
-    if not overrides:
-        return "variant"
-
+def build_override_name_parts(overrides: Mapping[str, Any]) -> List[str]:
     parts: List[str] = []
     for dotted_path, value in overrides.items():
         leaf_name = dotted_path.split(".")[-1]
         parts.append(f"{leaf_name}-{stringify_value(value)}")
+    return parts
 
+
+def build_auto_variant_name(overrides: Mapping[str, Any]) -> str:
+    if not overrides:
+        return "variant"
+
+    parts = build_override_name_parts(overrides)
     digest_input = repr(sorted(overrides.items())).encode("utf-8")
     digest = hashlib.sha1(digest_input).hexdigest()[:6]
     return sanitize_filename("__".join(parts) + f"__{digest}")
@@ -163,41 +174,62 @@ def load_variant_entries(spec: Mapping[str, Any]) -> List[Dict[str, Any]]:
 
     entries: List[Dict[str, Any]] = []
     varying_grid_keys = [key for key, values in grid.items() if len(normalize_scalar_list(values)) > 1]
-    if grid:
-        for combo in expand_grid(grid):
+    grid_combos = expand_grid(grid) if grid else [dict()]
+
+    if explicit_variants:
+        # Cross product: every explicit variant is generated once per grid
+        # point, so seed/grid sweeps apply to LR-schedule-style variants too
+        # instead of producing two disjoint, independently-named sets.
+        for variant in explicit_variants:
+            if not isinstance(variant, Mapping):
+                raise TypeError("Each entry in spec.variants must be a mapping")
+            variant_overrides = variant.get("overrides", {})
+            if not isinstance(variant_overrides, Mapping):
+                raise TypeError("Each spec.variants[*].overrides must be a mapping")
+            variant_name = variant.get("name")
+            if variant_name is not None and not isinstance(variant_name, str):
+                raise TypeError("Each spec.variants[*].name must be a string when provided")
+
+            for combo in grid_combos:
+                overrides = dict(fixed_overrides)
+                overrides.update(combo)
+                overrides.update(variant_overrides)
+                grid_name_overrides = {key: combo[key] for key in varying_grid_keys}
+                entries.append(
+                    {
+                        "prefix": prefix,
+                        "name": variant_name,
+                        "overrides": overrides,
+                        "name_overrides": variant_overrides,
+                        "grid_name_overrides": grid_name_overrides,
+                    }
+                )
+    elif grid:
+        for combo in grid_combos:
             overrides = dict(fixed_overrides)
             overrides.update(combo)
             name_overrides = {key: combo[key] for key in varying_grid_keys}
             entries.append({"prefix": prefix, "overrides": overrides, "name_overrides": name_overrides})
-    elif not explicit_variants:
+    else:
         entries.append({"prefix": prefix, "overrides": dict(fixed_overrides), "name_overrides": dict(fixed_overrides)})
-
-    for variant in explicit_variants:
-        if not isinstance(variant, Mapping):
-            raise TypeError("Each entry in spec.variants must be a mapping")
-        overrides = dict(fixed_overrides)
-        variant_overrides = variant.get("overrides", {})
-        if not isinstance(variant_overrides, Mapping):
-            raise TypeError("Each spec.variants[*].overrides must be a mapping")
-        overrides.update(variant_overrides)
-        variant_name = variant.get("name")
-        if variant_name is not None and not isinstance(variant_name, str):
-            raise TypeError("Each spec.variants[*].name must be a string when provided")
-        entries.append(
-            {
-                "prefix": prefix,
-                "name": variant_name,
-                "overrides": overrides,
-                "name_overrides": variant_overrides,
-            }
-        )
 
     return entries
 
 
 def build_variant_filename(variant: Mapping[str, Any]) -> str:
-    name_overrides = variant.get("name_overrides") or variant["overrides"]
-    variant_name = variant.get("name") or build_auto_variant_name(name_overrides)
+    name_overrides = dict(variant.get("name_overrides") or variant["overrides"])
+    grid_name_overrides = variant.get("grid_name_overrides") or {}
+    combined_name_overrides = {**grid_name_overrides, **name_overrides}
+
+    explicit_name = variant.get("name")
+    if explicit_name:
+        parts = [explicit_name] + build_override_name_parts(grid_name_overrides)
+        digest_input = repr(sorted(combined_name_overrides.items())).encode("utf-8")
+        digest = hashlib.sha1(digest_input).hexdigest()[:6]
+        variant_name = sanitize_filename("__".join(parts) + f"__{digest}")
+    else:
+        variant_name = build_auto_variant_name(combined_name_overrides)
+
     prefix = variant.get("prefix")
     if prefix:
         variant_name = f"{prefix}_{variant_name}"

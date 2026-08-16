@@ -1,0 +1,55 @@
+================================================================================
+TASK WEIGHTING STRATEGY COMPARISON REPORT
+================================================================================
+
+
+============================================================
+STRATEGY: DWA
+============================================================
+  Val Loss (Last 5 Epochs):        3.08028 ± 0.10082
+  Val Abs Rotation X (deg):       0.8061 ± 0.0258
+  Val Abs Y Translation (m):      0.00059 ± 0.00002
+  Val Abs Z Translation (m):      0.00035 ± 0.00000
+  Mean Gating Sparsity:            0.4791
+
+  Seeds Used: [46, 47, 48, 49, 50]
+
+============================================================
+STRATEGY: NONE
+============================================================
+  Val Loss (Last 5 Epochs):        3.08028 ± 0.10082
+  Val Abs Rotation X (deg):       0.8061 ± 0.0258
+  Val Abs Y Translation (m):      0.00059 ± 0.00002
+  Val Abs Z Translation (m):      0.00035 ± 0.00000
+  Mean Gating Sparsity:            0.4791
+
+  Seeds Used: [46, 47, 48, 49, 50]
+
+============================================================
+STRATEGY: UNCERTAINTY
+============================================================
+  Val Loss (Last 5 Epochs):        4.79793 ± 0.66352
+  Val Abs Rotation X (deg):       0.8015 ± 0.0082
+  Val Abs Y Translation (m):      0.00058 ± 0.00002
+  Val Abs Z Translation (m):      0.00034 ± 0.00001
+  Mean Gating Sparsity:            0.4738
+
+  Seeds Used: [46, 47, 48, 49, 50]
+
+================================================================================
+INTERPRETATION GUIDE
+================================================================================
+
+GATING WEIGHT DISTRIBUTION:
+  - Wide distribution (high std, values near 0 & 1) → Feature-level selectivity matters
+  - Narrow distribution (low std, values near 0.5) → Scalar gating suffices
+
+GATING SPARSITY OVER TRAINING:
+  - Increasing trend → Model learns to select important channels
+  - Flat trend → Gates remain uncertain about feature importance
+  - High values (>0.5) → Strong channel selectivity
+
+TASK WEIGHTING COMPARISON:
+  - "none" → No learned weighting between rotation & translation
+  - "uncertainty" → Learns per-task uncertainty (homoscedastic)
+  - "dwa" → Dynamic weighting adjustment based on gradient magnitudes

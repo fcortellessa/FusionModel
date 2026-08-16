@@ -507,7 +507,19 @@ class EpochMetricsAggregator:
     @property
     def avg_abs_rot_x(self):
         return self.metrics_dict["abs_rot_x"] / self.num_batches
-    
+
+    @property
+    def avg_signed_y(self):
+        return self.metrics_dict["signed_y"] / self.num_batches
+
+    @property
+    def avg_signed_z(self):
+        return self.metrics_dict["signed_z"] / self.num_batches
+
+    @property
+    def avg_signed_rot_x(self):
+        return self.metrics_dict["signed_rot_x"] / self.num_batches
+
     def to_dict(self):
         """Return all averaged metrics as a dict."""
         return {
@@ -519,6 +531,9 @@ class EpochMetricsAggregator:
             "abs_z": self.avg_abs_z,
             "abs_trans": self.avg_abs_trans,
             "abs_rot_x": self.avg_abs_rot_x,
+            "signed_y": self.avg_signed_y,
+            "signed_z": self.avg_signed_z,
+            "signed_rot_x": self.avg_signed_rot_x,
         }
 
 
