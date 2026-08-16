@@ -84,7 +84,8 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     print("Model loaded successfully!")
 
     model.eval()
-    
+
+    batch_times = []
     pred_translations = []
     pred_rotations = []
     pred_poses = []
@@ -95,10 +96,14 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
             inputs = {k: v for k, v in sample.items() if k != "pose"}
             target = sample["pose"]
 
+            # Time the forward pass
+            batch_start = time.perf_counter()
             model_out, fusion_weights = model(inputs)
+            batch_times.append(time.perf_counter() - batch_start)
+            
             trans = model_out["trans"]
             rotation = model_out["rotation"]
-            
+
             pred_translations.append(trans.cpu().numpy())
             pred_rotations.append(rotation.cpu().numpy())
             pred_poses.append(model_out["pose"].cpu().numpy())
@@ -112,6 +117,30 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     gt_translations = gt_poses[:, :3]
     gt_rotations = gt_poses[:, 3:7]
     pred_rotations = pred_poses[:, 3:7]
+
+    # compute inference timing statistics 
+    avg_inference_ms = np.mean(batch_times) * 1000.0
+    std_inference_ms = np.std(batch_times) * 1000.0
+    avg_inference_per_sample_ms = avg_inference_ms / config["training"]["batch_size"]
+
+    print(f"\n{'='*60}")
+    print(f"INFERENCE TIMING STATISTICS")
+    print(f"{'='*60}")
+    print(f"Avg inference time per batch: {avg_inference_ms:.3f}ms ± {std_inference_ms:.3f}ms")
+    print(f"Avg inference time per sample: {avg_inference_per_sample_ms:.3f}ms")
+    print(f"Batch size: {config['training']['batch_size']}")
+    print(f"Samples per second: {1000 / avg_inference_per_sample_ms:.2f}")
+    print(f"Total inference batches: {len(batch_times)}")
+    print(f"{'='*60}\n")
+
+    metrics_name = f"metrics_{timestamp}.txt"
+    with open(os.path.join(results_dir, metrics_name), "a") as f:  # "a" = append
+        f.write("\n" + "="*60 + "\n")
+        f.write("INFERENCE TIMING\n")
+        f.write("="*60 + "\n")
+        f.write(f"Avg batch time: {avg_inference_ms:.3f}ms\n")
+        f.write(f"Avg per sample: {avg_inference_per_sample_ms:.3f}ms\n")
+    f.write(f"Samples/sec: {1000 / avg_inference_per_sample_ms:.2f}\n")
 
     if config.get("data", {}).get("normalize_translation", True):
         stats = canonicalize_translation_norm_stats(
