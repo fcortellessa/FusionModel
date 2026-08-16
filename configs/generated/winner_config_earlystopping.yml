@@ -32,8 +32,8 @@ training:
   optimizer: AdamW
   uncertainty_weighting:
     enabled: false
-  dropout_rot: 0.2
-  dropout_trans: 0.0
+  dropout_rot: 0.1
+  dropout_trans: 0.1
   use_batchnorm: false
   lr_schedule:
     enabled: true
@@ -49,10 +49,10 @@ training:
     type: uncertainty
   early_stopping:
     enabled: true
-    patience: 29
-    min_delta: 0.009083608554279388
+    patience: 30  # 29
+    min_delta: 0.009 # 0.009083608554279388
   deterministic: true
-  weight_decay: 0.002498108746951221
+  weight_decay: 0.0025 # 0.002498108746951221
 data:
   root: /home/MA_Flavia/Documents/FusionModel/Data
   streams:

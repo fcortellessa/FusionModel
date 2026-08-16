@@ -330,6 +330,35 @@ def _summarize_fusion_gate_stats(stats, prefix):
     return summary, mean, raw_weights, raw_rotation_weights, raw_translation_weights
 
 
+def _save_raw_gate_weights(checkpoint_path, epoch, raw_weights, raw_rot_weights, raw_trans_weights):
+    """
+    Persist the raw (unaggregated, per-channel) validation gate-weight tensors
+    for the best-so-far epoch, alongside checkpoint_best.pth.
+
+    metrics.csv only ever stores per-stream aggregates (mean/std/fraction/
+    percentile), and TensorBoard's fusion/*_weights_distribution histograms
+    (see utils/logging_utils.py) can end up under a different root than
+    runs/<run>/tensorboard/ depending on how training was launched (e.g.
+    train_multiple_runs.py redirects --tensorboard_root to
+    logs/tensorboard/<session_tag>/). Saving the raw tensor directly next to
+    the checkpoint gives a source of truth for exact per-channel gate
+    analysis (e.g. true violin plots) that doesn't depend on locating or
+    parsing TensorBoard event files.
+    """
+    if raw_weights is None and raw_rot_weights is None and raw_trans_weights is None:
+        return
+
+    payload = {"epoch": epoch}
+    if raw_weights is not None:
+        payload["val_gate_weights"] = raw_weights
+    if raw_rot_weights is not None:
+        payload["val_rotation_gate_weights"] = raw_rot_weights
+    if raw_trans_weights is not None:
+        payload["val_translation_gate_weights"] = raw_trans_weights
+
+    save_path = os.path.join(os.path.dirname(checkpoint_path), "gate_weights_best_epoch.pt")
+    torch.save(payload, save_path)
+
 
 def _train_single_epoch(
     model,
@@ -769,6 +798,9 @@ def train_loop(
             if val_avg["loss"] < best_val_loss:
                 best_val_loss = val_avg["loss"]
                 save_checkpoint(model, optimizer, epoch, val_avg["loss"], checkpoint_path)
+                _save_raw_gate_weights(
+                    checkpoint_path, epoch, val_raw_weights, val_raw_rot_weights, val_raw_trans_weights
+                )
 
             should_stop = early_stopper.update(val_avg["loss"])
 

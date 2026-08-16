@@ -274,7 +274,10 @@ def log_epoch_to_tensorboard(
         return
 
     # Bulk log train/val pairings
-    metrics_to_log = ["loss", "loss_q", "loss_y", "loss_z", "abs_y", "abs_z", "abs_trans", "abs_rot_x"]
+    metrics_to_log = [
+        "loss", "loss_q", "loss_y", "loss_z", "abs_y", "abs_z", "abs_trans", "abs_rot_x",
+        "signed_y", "signed_z", "signed_rot_x",
+    ]
     for metric in metrics_to_log:
         folder = "loss" if "loss" in metric else "metrics"
         tb_writer.add_scalars(f"{folder}/{metric}", {"train": train_avg[metric], "val": val_avg[metric]}, global_step)

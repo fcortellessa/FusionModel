@@ -130,18 +130,30 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
 
     num_samples = gt_poses.shape[0]
 
-    val_abs_trans_vec = np.abs(pred_translations - gt_translations)
+    val_signed_trans_vec = pred_translations - gt_translations
+    val_abs_trans_vec = np.abs(val_signed_trans_vec)
     val_abs_trans = np.linalg.norm(val_abs_trans_vec, axis=1)
     val_abs_x = val_abs_trans_vec[:, 0]
     val_abs_y = val_abs_trans_vec[:, 1]
     val_abs_z = val_abs_trans_vec[:, 2]
-    
+    val_signed_x = val_signed_trans_vec[:, 0]
+    val_signed_y = val_signed_trans_vec[:, 1]
+    val_signed_z = val_signed_trans_vec[:, 2]
+
     pred_roll = _quaternion_roll(pred_rotations)
     gt_roll = _quaternion_roll(gt_rotations)
-    roll_diff = np.abs(pred_roll - gt_roll)
-    roll_diff = np.minimum(roll_diff, 2.0 * np.pi - roll_diff)
-    val_abs_rot_x = np.degrees(roll_diff)
+    roll_diff = pred_roll - gt_roll
+    # wrap to (-pi, pi] so the sign reflects the shorter angular direction
+    roll_diff = (roll_diff + np.pi) % (2.0 * np.pi) - np.pi
+    val_signed_rot_x = np.degrees(roll_diff)
+    val_abs_rot_x = np.abs(val_signed_rot_x)
     val_abs_rot_z = _quaternion_geodesic_error_deg(pred_rotations, gt_rotations)
+    # Note: val_abs_rot_z (quaternion geodesic distance) has no natural sign —
+    # it is a rotation magnitude, not a signed error around a fixed axis — so
+    # no signed counterpart is produced for it.
+
+    pred_roll_deg = np.degrees(pred_roll)
+    gt_roll_deg = np.degrees(gt_roll)
 
     csv_results = {
         "sample_id": np.arange(num_samples),
@@ -151,12 +163,18 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
         "gt_trans_x": gt_translations[:, 0],
         "gt_trans_y": gt_translations[:, 1],
         "gt_trans_z": gt_translations[:, 2],
+        "pred_roll_deg": pred_roll_deg,
+        "gt_roll_deg": gt_roll_deg,
         "val_abs_trans": val_abs_trans,
         "val_abs_x": val_abs_x,
         "val_abs_y": val_abs_y,
         "val_abs_z": val_abs_z,
         "val_abs_rot_x": val_abs_rot_x,
         "val_abs_rot_z": val_abs_rot_z,
+        "val_signed_x": val_signed_x,
+        "val_signed_y": val_signed_y,
+        "val_signed_z": val_signed_z,
+        "val_signed_rot_x": val_signed_rot_x,
     }
 
     df = pd.DataFrame(csv_results)
@@ -283,6 +301,93 @@ def plot_results_matplotlib(results_directory, csv_results, config_path, timesta
     plt.close()
 
 
+def plot_results_matplotlib_signed(results_directory, csv_results, config_path, timestamp, formats):
+    print(f"Generating signed-error Matplotlib visualization plots ({', '.join(formats)})...")
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f"Pose Estimation Test Results — Signed Error\nRun: {os.path.basename(config_path)}", fontsize=16)
+
+    # Plot 1: Histogram of signed Y-Translation Errors
+    ax = axs[0, 0]
+    ax.hist(csv_results['val_signed_y'], bins=30, color='#3498db', edgecolor='black', alpha=0.7)
+    ax.axvline(0.0, color='black', linestyle='-', linewidth=1)
+    ax.axvline(csv_results['val_signed_y'].mean(), color='red', linestyle='--', label=f'Mean: {csv_results["val_signed_y"].mean():.4f}')
+    ax.set_title("Y-Translation Signed Error Distribution")
+    ax.set_xlabel("Signed Error, pred - gt (meters)")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+
+    # Plot 2: Histogram of signed Z-Translation Errors
+    ax = axs[0, 1]
+    ax.hist(csv_results['val_signed_z'], bins=30, color='#de8f05', edgecolor='black', alpha=0.7)
+    ax.axvline(0.0, color='black', linestyle='-', linewidth=1)
+    ax.axvline(csv_results['val_signed_z'].mean(), color='red', linestyle='--', label=f'Mean: {csv_results["val_signed_z"].mean():.4f}')
+    ax.set_title("Z-Translation Signed Error Distribution")
+    ax.set_xlabel("Signed Error, pred - gt (meters)")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+
+    # Plot 3: Histogram of signed Rotation Errors (Axis X / roll)
+    ax = axs[1, 0]
+    ax.hist(csv_results['val_signed_rot_x'], bins=30, color='#029e73', edgecolor='black', alpha=0.7)
+    ax.axvline(0.0, color='black', linestyle='-', linewidth=1)
+    ax.axvline(csv_results['val_signed_rot_x'].mean(), color='red', linestyle='--', label=f'Mean: {csv_results["val_signed_rot_x"].mean():.4f}')
+    ax.set_title("Rotation Signed Error Distribution (Axis X / roll)")
+    ax.set_xlabel("Signed Error, pred - gt (degrees)")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+
+    # Plot 4: Boxplot
+    ax_trans = axs[1, 1]
+    ax_rot = ax_trans.twinx()
+    ax_rot.grid(False)
+
+    bp_trans = ax_trans.boxplot([csv_results['val_signed_y'], csv_results['val_signed_z']], positions=[1, 2], widths=0.5, patch_artist=True, notch=True)
+    bp_rot = ax_rot.boxplot([csv_results['val_signed_rot_x']], positions=[3], widths=0.5, patch_artist=True, notch=True)
+
+    colors = ['#3498db', '#de8f05', '#029e73']
+
+    for patch, color in zip(bp_trans['boxes'], colors[0:2]):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
+
+    for patch in bp_rot['boxes']:
+        patch.set_facecolor(colors[2])
+        patch.set_alpha(0.6)
+
+    for bp in [bp_trans, bp_rot]:
+        for whisker in bp['whiskers']:
+            whisker.set(color='#7f8c8d', linewidth=1.5, linestyle=":")
+        for cap in bp['caps']:
+            cap.set(color='#7f8c8d', linewidth=2)
+        for median in bp['medians']:
+            median.set(color='red', linewidth=2)
+        for flier in bp['fliers']:
+            flier.set(marker='o', color='#e74c3c', alpha=0.5)
+
+    ax_trans.axhline(0.0, color='black', linewidth=1)
+    ax_trans.set_xlim(0.5, 3.5)
+    ax_trans.set_xticks([1, 2, 3])
+    ax_trans.set_xticklabels(['Error Y', 'Error Z', 'Rot Error X'])
+
+    ax_trans.set_title("Component Signed Error Breakdown")
+    ax_trans.set_ylabel("Signed Translation Error (meters)", color='#3498db')
+    ax_rot.set_ylabel("Signed Rotation Error (degrees)", color='#029e73')
+
+    ax_trans.tick_params(axis='y', labelcolor='#3498db')
+    ax_rot.tick_params(axis='y', labelcolor='#029e73')
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+
+    for fmt in formats:
+        plot_name = f"summary_plots_signed_{timestamp}.{fmt}"
+        save_path = os.path.join(results_directory, plot_name)
+        plt.savefig(save_path, dpi=150)
+        print(f"Saved {fmt.upper()} plot to {save_path}")
+
+    plt.close()
+
+
 def plot_results_plotly(results_directory, csv_results, config_path, timestamp):
     try:
         import plotly.graph_objects as go
@@ -357,7 +462,8 @@ def dispatch_plots(results_directory, csv_results, config_path, formats):
     mpl_formats = [f for f in ["png", "svg"] if f in requested_formats]
     if mpl_formats:
         plot_results_matplotlib(results_directory, csv_results, config_path, timestamp, mpl_formats)
-        
+        plot_results_matplotlib_signed(results_directory, csv_results, config_path, timestamp, mpl_formats)
+
     # Interactive HTML via Plotly
     if "html" in requested_formats:
         plot_results_plotly(results_directory, csv_results, config_path, timestamp)

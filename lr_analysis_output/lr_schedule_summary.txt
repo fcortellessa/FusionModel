@@ -1,0 +1,88 @@
+==========================================================================================
+LEARNING RATE SCHEDULE COMPARISON REPORT
+==========================================================================================
+
+
+======================================================================
+SCHEDULE: REDUCE_ON_PLATEAU | SCOPE: GLOBAL
+======================================================================
+  Val Loss (Last 5 Epochs):           2.83954 ± 0.62143
+  Val Abs Rotation X (deg):          0.8735 ± 0.0027
+  Val Abs Y Translation (m):         0.00074 ± 0.00007
+  Val Abs Z Translation (m):         0.00043 ± 0.00005
+  Task Divergence (Mean/Final):      0.0033 / 0.0039
+  Convergence (Loss Improvement):    77.60%
+
+  Seeds Used: [46, 47, 48, 49, 50]
+  Num Runs: 10
+
+======================================================================
+SCHEDULE: REDUCE_ON_PLATEAU | SCOPE: PER_HEAD
+======================================================================
+  Val Loss (Last 5 Epochs):           3.23051 ± 0.00739
+  Val Abs Rotation X (deg):          0.8402 ± 0.0023
+  Val Abs Y Translation (m):         0.00089 ± 0.00000
+  Val Abs Z Translation (m):         0.00051 ± 0.00000
+  Task Divergence (Mean/Final):      0.0037 / 0.0050
+  Convergence (Loss Improvement):    74.61%
+
+  Seeds Used: [46, 47, 48, 49, 50]
+  Num Runs: 11
+
+======================================================================
+SCHEDULE: WARMUP_COSINE | SCOPE: GLOBAL
+======================================================================
+  Val Loss (Last 5 Epochs):           4.04197 ± 0.18443
+  Val Abs Rotation X (deg):          0.7656 ± 0.0086
+  Val Abs Y Translation (m):         0.00056 ± 0.00001
+  Val Abs Z Translation (m):         0.00033 ± 0.00001
+  Task Divergence (Mean/Final):      0.0019 / 0.0020
+  Convergence (Loss Improvement):    56.43%
+
+  Seeds Used: [43]
+  Num Runs: 4
+
+======================================================================
+SCHEDULE: WARMUP_COSINE | SCOPE: PER_HEAD
+======================================================================
+  Val Loss (Last 5 Epochs):           3.20159 ± 0.03840
+  Val Abs Rotation X (deg):          0.8404 ± 0.0101
+  Val Abs Y Translation (m):         0.00060 ± 0.00001
+  Val Abs Z Translation (m):         0.00039 ± 0.00001
+  Task Divergence (Mean/Final):      0.0011 / 0.0015
+  Convergence (Loss Improvement):    65.19%
+
+  Seeds Used: [46]
+  Num Runs: 1
+
+==========================================================================================
+INTERPRETATION GUIDE
+==========================================================================================
+
+LR SCHEDULE TYPES:
+  - "none" → No learning rate scheduling (constant LR throughout training)
+  - "reduce_on_plateau" → LR reduced when val loss plateaus (adaptive to stagnation)
+  - "warmup_cosine" → Cosine annealing with optional warmup (smooth LR decay)
+
+SCHEDULE SCOPE:
+  - "global" → Single LR schedule applied to all parameters equally
+  - "per_head" → Independent LR schedules for base backbone vs. rotation/translation heads
+
+  Hypothesis: per-head scheduling may help because rotation and translation have
+  different learning dynamics and different gradient magnitudes.
+
+CONVERGENCE COMPARISON:
+  - Higher loss improvement % → Faster/better convergence
+  - Lower final loss → Better end performance
+  - Lower std → More consistent performance across seeds
+
+TASK DIVERGENCE:
+  - Measures how much rotation and translation errors differ during training
+  - Lower divergence → Tasks learning in sync (good for stability)
+  - Per-head scheduling may reduce divergence if heads can adapt independently
+
+STABILITY ACROSS SEEDS:
+  - Coefficient of Variation (CV) = Std / Mean
+  - CV < 0.05 → Very stable (robust across seeds)
+  - CV < 0.10 → Stable
+  - CV > 0.15 → Unstable (high variance across seeds)
