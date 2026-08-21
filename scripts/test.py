@@ -133,15 +133,6 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     print(f"Total inference batches: {len(batch_times)}")
     print(f"{'='*60}\n")
 
-    metrics_name = f"metrics_{timestamp}.txt"
-    with open(os.path.join(results_dir, metrics_name), "a") as f:  # "a" = append
-        f.write("\n" + "="*60 + "\n")
-        f.write("INFERENCE TIMING\n")
-        f.write("="*60 + "\n")
-        f.write(f"Avg batch time: {avg_inference_ms:.3f}ms\n")
-        f.write(f"Avg per sample: {avg_inference_per_sample_ms:.3f}ms\n")
-    f.write(f"Samples/sec: {1000 / avg_inference_per_sample_ms:.2f}\n")
-
     if config.get("data", {}).get("normalize_translation", True):
         stats = canonicalize_translation_norm_stats(
             config.get("data", {}).get("translation_norm_stats", {})
@@ -245,6 +236,14 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
             f.write(f"Best Val Rotation Error (geodesic): {df['val_abs_rot_z'].min():.6f}\n")
             f.write(f"Worst Val Rotation Error (geodesic): {df['val_abs_rot_z'].max():.6f}\n")
     print(f"Saved metrics to {os.path.join(results_dir, metrics_name)}")
+
+    with open(os.path.join(results_dir, metrics_name), "a") as f:  # "a" = append
+        f.write("\n" + "="*60 + "\n")
+        f.write("INFERENCE TIMING\n")
+        f.write("="*60 + "\n")
+        f.write(f"Avg batch time: {avg_inference_ms:.3f}ms\n")
+        f.write(f"Avg per sample: {avg_inference_per_sample_ms:.3f}ms\n")
+        f.write(f"Samples/sec: {1000 / avg_inference_per_sample_ms:.2f}\n")
 
 
 def plot_results_matplotlib(results_directory, csv_results, config_path, timestamp, formats):

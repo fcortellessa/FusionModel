@@ -310,17 +310,26 @@ class HeadLRDecayManager:
                 factor=factor,
                 patience=patience,
                 threshold=min_delta,
-                threshold_mode="abs",
+                # "rel" (not "abs"): the driving signal is now val_abs_rot_x (degrees,
+                # O(0.1-1)) vs val_abs_y/val_abs_z/val_abs_trans (meters, O(1e-4-1e-3)) --
+                # a single absolute min_delta can't sanely apply to both scales at once
+                # (see head_lr_decay_early_stop_abs_metrics memory), so min_delta is a
+                # relative-improvement fraction (0.005 == 0.5%) instead.
+                threshold_mode="rel",
                 min_lr=min_lr_mult,
             )
 
     def update(self, train_metrics, val_metrics, current_lr_scale, logger=None):
         """
-        Step each head's ReduceLROnPlateau scheduler on that head's own val loss.
+        Step each head's ReduceLROnPlateau scheduler on that head's own validation
+        error metric -- val_abs_rot_x (degrees) for rotation, val_abs_y/val_abs_z/
+        val_abs_trans (meters) for translation. These are the same interpretable,
+        unweighted metrics reported in metrics.csv/results, so they can't be skewed
+        by a learned task-weighting scale the way the composite val_loss can.
 
         Args:
             train_metrics: Dict with 'loss_q', 'loss_y', 'loss_z' (unused; kept for call-site compatibility)
-            val_metrics: Dict with 'loss_q', 'loss_y', 'loss_z'
+            val_metrics: Dict with 'abs_rot_x', 'abs_y', 'abs_z', 'abs_trans'
             current_lr_scale: Current LR schedule scale factor (unused here; the plateau
                 multiplier is combined with it in apply_lr_scale)
             logger: Optional logger for decay notifications
@@ -329,10 +338,10 @@ class HeadLRDecayManager:
             return
 
         val_by_head = {
-            "q": val_metrics["loss_q"],
-            "y": val_metrics["loss_y"],
-            "z": val_metrics["loss_z"],
-            "trans": val_metrics["loss_y"] + val_metrics["loss_z"],
+            "q": val_metrics["abs_rot_x"],
+            "y": val_metrics["abs_y"],
+            "z": val_metrics["abs_z"],
+            "trans": val_metrics["abs_trans"],
         }
 
         for head_key, scheduler in self.plateau_schedulers.items():
@@ -421,7 +430,11 @@ class GlobalPlateauLRManager:
             )
 
     def update(self, val_loss, logger=None):
-        """Call once per epoch with val_avg['loss']."""
+        """Call once per epoch with the fixed-scale composite val loss (loss_q + loss_y +
+        loss_z, i.e. NOT val_avg['loss'] -- see the val_fixed_loss comment at the call
+        site in train.py for why: val_avg['loss'] runs through uncertainty_module when
+        task_weighting is enabled, whose learned weights can drift and inflate it
+        independent of actual prediction quality)."""
         if not self.enabled:
             return
         old_mult = float(self.multiplier_view.param_groups[0]["lr"])
@@ -462,6 +475,53 @@ class EarlyStoppingManager:
         else:
             self.bad_epochs += 1
         return self.bad_epochs >= self.patience
+
+
+class PerHeadEarlyStoppingManager:
+    """Stops training once BOTH the rotation and translation branches have stopped
+    improving on their own interpretable validation metric -- val_abs_rot_x (degrees)
+    and val_abs_trans (meters) -- instead of the single composite val_loss.
+
+    This matters when training.task_weighting (uncertainty weighting) is enabled: the
+    learned log_var terms can drift over training and inflate the composite val_loss
+    independent of actual prediction quality (confirmed on the
+    q3_global_vs_perHead_LR sweep -- val_loss ballooned ~3x while val_abs_y/val_abs_z/
+    val_abs_rot_x stayed flat), which makes val_loss-based early stopping fire on a
+    loss-scale artifact rather than genuine overfitting/plateauing.
+
+    Gated with AND, not OR: a head that is still improving keeps training going even
+    if the other head has plateaued, mirroring HeadLRDecayManager's per-head design
+    (each head only decays/stops off its own signal).
+
+    min_delta is interpreted as a *relative* improvement fraction (e.g. 0.009 == 0.9%),
+    not an absolute delta -- val_abs_rot_x (degrees, O(0.1-1)) and val_abs_trans
+    (meters, O(1e-4-1e-3)) live on very different absolute scales, so a single absolute
+    threshold can't sanely apply to both (same reasoning as HeadLRDecayManager's switch
+    to threshold_mode="rel").
+    """
+
+    def __init__(self, early_stopping_cfg):
+        early_stopping_cfg = early_stopping_cfg or {}
+        self.enabled = bool(early_stopping_cfg.get("enabled", False))
+        self.patience = int(early_stopping_cfg.get("patience", 10))
+        self.min_delta = float(early_stopping_cfg.get("min_delta", 0.0))
+        self.best = {"rot": float("inf"), "trans": float("inf")}
+        self.bad_epochs = {"rot": 0, "trans": 0}
+
+    def update(self, val_abs_rot_x, val_abs_trans):
+        """Call once per epoch with val_avg['abs_rot_x'] and val_avg['abs_trans'].
+        Returns True if training should stop now (both heads plateaued)."""
+        if not self.enabled:
+            return False
+        current = {"rot": val_abs_rot_x, "trans": val_abs_trans}
+        for head in ("rot", "trans"):
+            dynamic_threshold = self.best[head] * (1.0 - self.min_delta)
+            if current[head] < dynamic_threshold:
+                self.best[head] = current[head]
+                self.bad_epochs[head] = 0
+            else:
+                self.bad_epochs[head] += 1
+        return all(self.bad_epochs[head] >= self.patience for head in ("rot", "trans"))
 
 
 class EpochMetricsAggregator:

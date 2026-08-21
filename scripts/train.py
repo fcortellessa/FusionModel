@@ -25,7 +25,7 @@ from utils.train_utils import (
     RunSetupManager,
     HeadLRDecayManager,
     GlobalPlateauLRManager,
-    EarlyStoppingManager,
+    PerHeadEarlyStoppingManager,
     EpochMetricsAggregator,
     build_epoch_metrics_row,
     _apply_metric_accumulation
@@ -701,8 +701,10 @@ def train_loop(
         param_groups_by_name=param_groups_by_name,
     )
 
-    # Initialize early stopping manager (no-op when training.early_stopping.enabled is false)
-    early_stopper = EarlyStoppingManager(early_stopping_cfg)
+    # Initialize early stopping manager (no-op when training.early_stopping.enabled is false).
+    # Per-head (val_abs_rot_x / val_abs_trans, AND-gated) instead of the composite val_loss --
+    # see PerHeadEarlyStoppingManager docstring for why.
+    early_stopper = PerHeadEarlyStoppingManager(early_stopping_cfg)
 
     csv_file, csv_writer = init_metrics_csv(metrics_csv_path)
     tb_writer = init_tensorboard_writer(tensorboard_log_dir, metadata, logger)
@@ -777,15 +779,26 @@ def train_loop(
                     "loss_z": train_avg["loss_z"],
                 },
                 val_metrics={
-                    "loss_q": val_avg["loss_q"],
-                    "loss_y": val_avg["loss_y"],
-                    "loss_z": val_avg["loss_z"],
+                    "abs_rot_x": val_avg["abs_rot_x"],
+                    "abs_y": val_avg["abs_y"],
+                    "abs_z": val_avg["abs_z"],
+                    "abs_trans": val_avg["abs_trans"],
                 },
                 current_lr_scale=current_lr_scale,
                 logger=logger,
             )
 
-            global_plateau_manager.update(val_avg["loss"], logger=logger)
+            # Fixed-scale, non-learned composite (loss_q already carries the fixed
+            # rot_scaling_factor -- see "Unit balancing" in CLAUDE.md) used for
+            # checkpoint selection and the global plateau schedule instead of
+            # val_avg["loss"]. val_avg["loss"] runs through uncertainty_module when
+            # task_weighting is enabled, whose learned log_var terms can drift and
+            # inflate it independent of actual prediction quality (confirmed on the
+            # q3_global_vs_perHead_LR sweep), which would otherwise pick the wrong
+            # "best" checkpoint and mistime the global LR decay.
+            val_fixed_loss = val_avg["loss_q"] + val_avg["loss_y"] + val_avg["loss_z"]
+
+            global_plateau_manager.update(val_fixed_loss, logger=logger)
 
             if uncertainty_module is not None and hasattr(uncertainty_module, "update_epoch"):
                 try:
@@ -796,14 +809,14 @@ def train_loop(
                 except Exception as exc:
                     logger.debug(f"Task-weighting epoch update skipped: {exc}")
 
-            if val_avg["loss"] < best_val_loss:
-                best_val_loss = val_avg["loss"]
-                save_checkpoint(model, optimizer, epoch, val_avg["loss"], checkpoint_path)
+            if val_fixed_loss < best_val_loss:
+                best_val_loss = val_fixed_loss
+                save_checkpoint(model, optimizer, epoch, val_fixed_loss, checkpoint_path)
                 _save_raw_gate_weights(
                     checkpoint_path, epoch, val_raw_weights, val_raw_rot_weights, val_raw_trans_weights
                 )
 
-            should_stop = early_stopper.update(val_avg["loss"])
+            should_stop = early_stopper.update(val_avg["abs_rot_x"], val_avg["abs_trans"])
 
             log_epoch_summary(
                 logger=logger,
@@ -888,8 +901,10 @@ def train_loop(
 
             if should_stop:
                 logger.info(
-                    f"Early stopping at epoch {epoch + 1}: val_loss did not improve by >{early_stopper.min_delta} "
-                    f"for {early_stopper.patience} consecutive epochs (best={early_stopper.best_value:.6f})."
+                    f"Early stopping at epoch {epoch + 1}: neither val_abs_rot_x nor val_abs_trans "
+                    f"improved by >{early_stopper.min_delta * 100:.2f}% for {early_stopper.patience} "
+                    f"consecutive epochs (best_rot={early_stopper.best['rot']:.6f} deg, "
+                    f"best_trans={early_stopper.best['trans']:.6f} m)."
                 )
                 break
     finally:
