@@ -1,0 +1,636 @@
+#!/usr/bin/env python3
+"""
+Input Stream Fusion Analysis Pipeline
+Compares fusion architectures: concatenation | gating | gated_concatenation
+Analyzes: compression vs raw data preservation trade-offs
+Visualizes: task performance, convergence rates, error distributions
+"""
+
+import os
+import glob
+import argparse
+import re
+import yaml
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+
+
+def save_figure(fig, output_dir: Path, filename_base: str, fmt: str = "png"):
+    """
+    Save matplotlib figure in both PNG and SVG formats for publication.
+
+    Args:
+        fig: matplotlib figure object
+        output_dir: directory to save to
+        filename_base: filename without extension (e.g., 'rotation_vs_translation_scatter')
+        fmt: primary format (png or svg)
+    """
+    plt.tight_layout()
+
+    # Always save both PNG and SVG for maximum compatibility
+    png_path = output_dir / f"{filename_base}.png"
+    svg_path = output_dir / f"{filename_base}.svg"
+
+    fig.savefig(str(png_path), dpi=150, bbox_inches='tight', format='png')
+    fig.savefig(str(svg_path), dpi=150, bbox_inches='tight', format='svg')
+
+    return png_path, svg_path
+
+
+def flatten_dict(d: dict, parent_key: str = '', sep: str = '.') -> dict:
+    """Flattens nested configuration blocks."""
+    items = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        elif isinstance(v, list):
+            tuple_val = tuple(flatten_dict(x) if isinstance(x, dict) else x for x in v)
+            items.append((new_key, tuple_val))
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+
+def extract_fusion_type(run_name: str, cfg: dict) -> Tuple[str, int]:
+    """
+    Extract fusion type and seed from config.
+
+    Returns:
+        (fusion_type, seed)
+        e.g., ("gating", 40)
+    """
+    fusion_type = cfg.get("model.fusion", "unknown")
+    seed = cfg.get("training.seed", "?")
+    return (fusion_type, seed)
+
+
+def load_and_prepare_data(runs_dir: Path) -> Tuple[pd.DataFrame, Dict[str, dict], Dict[str, pd.DataFrame]]:
+    """
+    Load all metrics.csv and test results files.
+
+    Returns:
+        (master_df, run_configs, test_results)
+    """
+    metrics_files = glob.glob(os.path.join(str(runs_dir), "*/metrics.csv"))
+    if not metrics_files:
+        raise FileNotFoundError(f"No metrics.csv files found in {runs_dir}")
+
+    all_dfs = []
+    run_configs = {}
+    test_results = {}
+
+    for path in metrics_files:
+        run_name = os.path.basename(os.path.dirname(path))
+        config_path = Path(os.path.dirname(path)) / "config.yml"
+        run_dir = Path(os.path.dirname(path))
+
+        cfg = {}
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    cfg = flatten_dict(yaml.safe_load(f) or {})
+            except Exception as e:
+                print(f"Warning: Failed to load config for {run_name}: {e}")
+
+        run_configs[run_name] = cfg
+
+        # Load metrics.csv
+        try:
+            df = pd.read_csv(path)
+            if not df.empty:
+                df["run_name"] = run_name
+                all_dfs.append(df)
+        except Exception as e:
+            print(f"Error reading metrics for {run_name}: {e}")
+
+        # Load test results if available
+        test_files = glob.glob(os.path.join(str(run_dir), "results/results_*.csv")) + \
+                     glob.glob(os.path.join(str(run_dir), "results_*.csv"))
+        if test_files:
+            try:
+                latest_test_file = max(test_files, key=os.path.getctime)
+                test_df = pd.read_csv(latest_test_file)
+                if not test_df.empty:
+                    test_df["run_name"] = run_name
+                    test_results[run_name] = test_df
+            except Exception as e:
+                print(f"Warning: Failed to load test results for {run_name}: {e}")
+
+    if not all_dfs:
+        raise ValueError("No valid metrics files loaded")
+
+    master_df = pd.concat(all_dfs, ignore_index=True)
+
+    # Add fusion type classification
+    master_df["fusion_type"] = master_df["run_name"].apply(
+        lambda rn: extract_fusion_type(rn, run_configs.get(rn, {}))[0]
+    )
+    master_df["seed"] = master_df["run_name"].apply(
+        lambda rn: extract_fusion_type(rn, run_configs.get(rn, {}))[1]
+    )
+
+    return master_df, run_configs, test_results
+
+
+def plot_rotation_vs_translation_scatter(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
+    """
+    Scatter plot: val_abs_rot_x vs val_abs_trans by fusion type.
+    Shows if compression (gating) hurts one task more than the other.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    colors = {'concat': '#1f77b4', 'gating': '#ff7f0e', 'gated_concat': '#2ca02c',
+              'gated_concatenation': '#2ca02c', 'simple_gated': '#d62728', 'ARGate_Fusion': '#9467bd'}
+
+    # ===== MATPLOTLIB SCATTER PLOT =====
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    for fusion_type in fusion_types:
+        fuse_df = master_df[master_df["fusion_type"] == fusion_type]
+
+        # Take last 5 epochs for final performance estimate
+        final_epochs = fuse_df[fuse_df["epoch"] >= fuse_df.groupby("run_name")["epoch"].transform("max") - 4]
+
+        if "val_abs_rot_x" in final_epochs.columns and "val_abs_trans" in final_epochs.columns:
+            rot_vals = final_epochs["val_abs_rot_x"].values
+            trans_vals = final_epochs["val_abs_trans"].values
+
+            color = colors.get(fusion_type, '#000000')
+            ax.scatter(trans_vals, rot_vals, label=fusion_type.upper(), s=100, alpha=0.6, color=color)
+
+    ax.set_xlabel("Validation Translation Error [m]", fontsize=12, fontweight='bold')
+    ax.set_ylabel("Validation Rotation Error X [deg]", fontsize=12, fontweight='bold')
+    ax.set_title("Rotation vs Translation Task Performance by Fusion Architecture\n(Final 5 Epochs Average)",
+                 fontsize=13, fontweight='bold')
+    ax.legend(fontsize=11, loc='best')
+    ax.grid(True, alpha=0.3)
+
+    save_figure(fig, output_dir, "rotation_vs_translation_scatter", fmt)
+    plt.close()
+
+    # ===== PLOTLY INTERACTIVE SCATTER =====
+    if PLOTLY_AVAILABLE:
+        fig = go.Figure()
+
+        for fusion_type in fusion_types:
+            fuse_df = master_df[master_df["fusion_type"] == fusion_type]
+            final_epochs = fuse_df[fuse_df["epoch"] >= fuse_df.groupby("run_name")["epoch"].transform("max") - 4]
+
+            if "val_abs_rot_x" in final_epochs.columns and "val_abs_trans" in final_epochs.columns:
+                rot_vals = final_epochs["val_abs_rot_x"].values
+                trans_vals = final_epochs["val_abs_trans"].values
+                seeds = final_epochs["seed"].values
+
+                color = colors.get(fusion_type, '#000000')
+                fig.add_trace(go.Scatter(
+                    x=trans_vals,
+                    y=rot_vals,
+                    mode='markers',
+                    name=fusion_type.upper(),
+                    marker=dict(size=10, opacity=0.6, color=color),
+                    text=[f"Seed: {s}" for s in seeds],
+                    hovertemplate='<b>%{fullData.name}</b><br>Trans: %{x:.5f} m<br>Rot: %{y:.4f} deg<br>%{text}<extra></extra>'
+                ))
+
+        fig.update_layout(
+            title="Rotation vs Translation Task Performance by Fusion Architecture<br><sub>Final 5 Epochs Average</sub>",
+            xaxis_title="Validation Translation Error [m]",
+            yaxis_title="Validation Rotation Error X [deg]",
+            template="plotly_white",
+            height=700,
+            width=1000,
+            hovermode='closest'
+        )
+
+        fig.write_html(str(output_dir / "rotation_vs_translation_scatter_interactive.html"), include_plotlyjs='cdn')
+        print(f"✓ Interactive Plotly scatter plot saved: {output_dir / 'rotation_vs_translation_scatter_interactive.html'}")
+
+    print(f"✓ Rotation vs Translation scatter plots saved to {output_dir}")
+
+
+def plot_convergence_comparison(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
+    """
+    Line plots comparing convergence rates: high-dim (concat/gated_concat) vs low-dim (gating).
+    Shows train_* and val_* over epochs.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # loss_q / loss_y+loss_z are the raw, fixed-scale per-task losses computed
+    # by rotation_handler.compute_loss() *before* any uncertainty/gradnorm/dwa
+    # task weighting is applied to form train_loss/val_loss. Plotting these
+    # instead of train_loss/val_loss avoids conflating architecture behavior
+    # with the learned uncertainty weights inflating/deflating the composite
+    # loss (see training.task_weighting / training.uncertainty_weighting).
+    if "train_loss_trans" not in master_df.columns:
+        master_df = master_df.copy()
+        master_df["train_loss_trans"] = master_df["loss_y"] + master_df["loss_z"]
+        master_df["val_loss_trans"] = master_df["val_loss_y"] + master_df["val_loss_z"]
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    metrics = [
+        ("loss_q", "val_loss_q", "Rotation Loss (fixed-scale, unweighted)", "Loss Value"),
+        ("train_loss_trans", "val_loss_trans", "Translation Loss (unweighted)", "Loss Value"),
+        ("train_abs_rot_x", "val_abs_rot_x", "Rotation Error", "Error [deg]"),
+        ("train_abs_trans", "val_abs_trans", "Translation Error", "Error [m]"),
+    ]
+
+    colors = {'concat': '#1f77b4', 'gating': '#ff7f0e', 'gated_concat': '#2ca02c',
+              'gated_concatenation': '#2ca02c', 'simple_gated': '#d62728', 'ARGate_Fusion': '#9467bd'}
+
+    # ===== MATPLOTLIB PLOTS =====
+    for train_col, val_col, title, ylabel in metrics:
+        if train_col not in master_df.columns or val_col not in master_df.columns:
+            print(f"Warning: Columns {train_col}/{val_col} not found, skipping")
+            continue
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        # Train plot
+        ax_train = axes[0]
+        for fusion_type in fusion_types:
+            fuse_df = master_df[master_df["fusion_type"] == fusion_type].sort_values("epoch")
+            by_epoch = fuse_df.groupby("epoch")[train_col].agg(['mean', 'std']).reset_index()
+
+            color = colors.get(fusion_type, '#000000')
+            ax_train.plot(by_epoch["epoch"], by_epoch["mean"], label=fusion_type.upper(),
+                         linewidth=2, color=color)
+            if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
+                ax_train.fill_between(by_epoch["epoch"],
+                                     by_epoch["mean"] - by_epoch["std"],
+                                     by_epoch["mean"] + by_epoch["std"],
+                                     alpha=0.15, color=color)
+
+        ax_train.set_title(f"Training {title}", fontsize=11, fontweight='bold')
+        ax_train.set_xlabel("Epoch")
+        ax_train.set_ylabel(ylabel)
+        ax_train.legend(fontsize=9)
+        ax_train.grid(True, alpha=0.3)
+
+        # Val plot
+        ax_val = axes[1]
+        for fusion_type in fusion_types:
+            fuse_df = master_df[master_df["fusion_type"] == fusion_type].sort_values("epoch")
+            by_epoch = fuse_df.groupby("epoch")[val_col].agg(['mean', 'std']).reset_index()
+
+            color = colors.get(fusion_type, '#000000')
+            ax_val.plot(by_epoch["epoch"], by_epoch["mean"], label=fusion_type.upper(),
+                       linewidth=2, color=color)
+            if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
+                ax_val.fill_between(by_epoch["epoch"],
+                                   by_epoch["mean"] - by_epoch["std"],
+                                   by_epoch["mean"] + by_epoch["std"],
+                                   alpha=0.15, color=color)
+
+        ax_val.set_title(f"Validation {title}", fontsize=11, fontweight='bold')
+        ax_val.set_xlabel("Epoch")
+        ax_val.set_ylabel(ylabel)
+        ax_val.legend(fontsize=9)
+        ax_val.grid(True, alpha=0.3)
+
+        save_figure(fig, output_dir, f"convergence_{train_col.replace('train_', '')}", fmt)
+        plt.close()
+
+    print(f"✓ Convergence comparison plots saved to {output_dir}")
+
+
+def plot_signed_errors_over_epochs(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
+    """
+    Line plots of signed errors (not absolute) over training.
+    Shows bias direction and magnitude changes.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Look for signed error columns
+    signed_cols = [c for c in master_df.columns if 'signed' in c.lower()]
+
+    if not signed_cols:
+        print("Warning: No signed error columns found in metrics (check train.py logging)")
+        return
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    colors = {'concat': '#1f77b4', 'gating': '#ff7f0e', 'gated_concat': '#2ca02c',
+              'gated_concatenation': '#2ca02c', 'simple_gated': '#d62728', 'ARGate_Fusion': '#9467bd'}
+
+    for signed_col in signed_cols:
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        for fusion_type in fusion_types:
+            fuse_df = master_df[master_df["fusion_type"] == fusion_type].sort_values("epoch")
+            by_epoch = fuse_df.groupby("epoch")[signed_col].agg(['mean', 'std']).reset_index()
+
+            color = colors.get(fusion_type, '#000000')
+            ax.plot(by_epoch["epoch"], by_epoch["mean"], label=fusion_type.upper(),
+                   linewidth=2, marker='o', markersize=3, color=color)
+
+            if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
+                ax.fill_between(by_epoch["epoch"],
+                               by_epoch["mean"] - by_epoch["std"],
+                               by_epoch["mean"] + by_epoch["std"],
+                               alpha=0.15, color=color)
+
+        ax.axhline(y=0, color='black', linestyle='--', alpha=0.5, linewidth=1)
+        ax.set_title(f"Signed Error Over Training: {signed_col}\n(Positive → Overprediction | Negative → Underprediction)",
+                    fontsize=11, fontweight='bold')
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Signed Error")
+        ax.legend(fontsize=9, loc='best')
+        ax.grid(True, alpha=0.3)
+
+        save_figure(fig, output_dir, f"signed_errors_{signed_col}", fmt)
+        plt.close()
+
+    print(f"✓ Signed error plots saved to {output_dir}")
+
+
+def plot_signed_test_error_distribution(test_results: Dict[str, pd.DataFrame], output_dir: Path, fmt: str = "png"):
+    """
+    Violin plots of signed test errors by fusion type.
+    Determines if errors follow uniform distribution or have directional bias.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not test_results:
+        print("Warning: No test results found (run test.py to generate test results)")
+        return
+
+    # Collect signed error columns
+    signed_error_cols = {}
+    for run_name, test_df in test_results.items():
+        signed_cols = [c for c in test_df.columns if 'signed' in c.lower() or
+                       (('error' in c.lower() or 'diff' in c.lower()) and 'abs' not in c.lower())]
+        for col in signed_cols:
+            if col not in signed_error_cols:
+                signed_error_cols[col] = []
+
+    if not signed_error_cols:
+        print("Warning: No signed error columns found in test results")
+        return
+
+    # Extract fusion types from run names
+    fusion_map = {}
+    for run_name in test_results.keys():
+        # Parse fusion type from run name or config
+        if 'concat' in run_name.lower():
+            fusion_map[run_name] = 'concat'
+        elif 'gated_concat' in run_name.lower():
+            fusion_map[run_name] = 'gated_concat'
+        elif 'gating' in run_name.lower():
+            fusion_map[run_name] = 'gating'
+        else:
+            fusion_map[run_name] = 'unknown'
+
+    colors = {'concat': '#1f77b4', 'gating': '#ff7f0e', 'gated_concat': '#2ca02c',
+              'gated_concatenation': '#2ca02c', 'simple_gated': '#d62728', 'ARGate_Fusion': '#9467bd',
+              'unknown': '#888888'}
+
+    # Create violin plots for each error type
+    for error_col in signed_error_cols.keys():
+        plot_data = []
+        for run_name, test_df in test_results.items():
+            if error_col in test_df.columns:
+                fusion_type = fusion_map.get(run_name, 'unknown')
+                errors = test_df[error_col].dropna().values
+
+                for err in errors:
+                    plot_data.append({
+                        'Fusion Type': fusion_type.upper(),
+                        'Signed Error': err,
+                        'Run': run_name
+                    })
+
+        if not plot_data:
+            continue
+
+        plot_df = pd.DataFrame(plot_data)
+
+        # ===== MATPLOTLIB VIOLIN PLOT =====
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        fusion_types = sorted(plot_df["Fusion Type"].unique())
+        positions = np.arange(len(fusion_types))
+        violin_data = [plot_df[plot_df["Fusion Type"] == ft]["Signed Error"].values for ft in fusion_types]
+
+        parts = ax.violinplot(violin_data, positions=positions, showmeans=True, showmedians=True)
+
+        # Customize colors
+        violin_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+        for i, pc in enumerate(parts['bodies']):
+            pc.set_facecolor(violin_colors[i % len(violin_colors)])
+            pc.set_alpha(0.7)
+
+        ax.set_xticks(positions)
+        ax.set_xticklabels(fusion_types)
+        ax.axhline(y=0, color='black', linestyle='--', alpha=0.5, linewidth=1.5)
+        ax.set_title(f"Signed Test Error Distribution: {error_col}\n(Skewed left → Underprediction | Right → Overprediction)",
+                    fontsize=12, fontweight='bold')
+        ax.set_ylabel("Signed Error")
+        ax.set_xlabel("Fusion Architecture")
+        ax.grid(True, alpha=0.3, axis='y')
+
+        save_figure(fig, output_dir, f"signed_test_error_distribution_{error_col}", fmt)
+        plt.close()
+
+        # ===== PLOTLY INTERACTIVE VIOLIN =====
+        if PLOTLY_AVAILABLE:
+            fig = go.Figure()
+
+            for fusion_type in sorted(plot_df["Fusion Type"].unique()):
+                errors = plot_df[plot_df["Fusion Type"] == fusion_type]["Signed Error"].values
+                color = colors.get(fusion_type.lower(), '#888888')
+                fig.add_trace(go.Violin(
+                    x=[fusion_type] * len(errors),
+                    y=errors,
+                    name=fusion_type,
+                    box_visible=True,
+                    meanline_visible=True,
+                    points=False,
+                    marker_color=color
+                ))
+
+            fig.update_layout(
+                title=f"Signed Test Error Distribution: {error_col}<br><sub>Skewed left → Underprediction | Right → Overprediction</sub>",
+                xaxis_title="Fusion Architecture",
+                yaxis_title="Signed Error",
+                template="plotly_white",
+                height=600,
+                width=1000,
+                showlegend=False,
+                violinmode='group'
+            )
+            fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
+
+            fig.write_html(str(output_dir / f"signed_test_error_distribution_{error_col}_interactive.html"),
+                          include_plotlyjs='cdn')
+
+    print(f"✓ Signed test error distribution plots saved to {output_dir}")
+
+
+def generate_summary_report(master_df: pd.DataFrame, test_results: Dict[str, pd.DataFrame], output_dir: Path):
+    """
+    Generate a text summary report comparing fusion architectures.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+
+    with open(output_dir / "fusion_architecture_summary.txt", "w") as f:
+        f.write("=" * 90 + "\n")
+        f.write("INPUT STREAM FUSION ARCHITECTURE COMPARISON REPORT\n")
+        f.write("=" * 90 + "\n\n")
+
+        for fusion_type in fusion_types:
+            fuse_df = master_df[master_df["fusion_type"] == fusion_type]
+            final_epochs = fuse_df[fuse_df["epoch"] >= fuse_df.groupby("run_name")["epoch"].transform("max") - 4]
+
+            f.write(f"\n{'='*80}\n")
+            f.write(f"FUSION ARCHITECTURE: {fusion_type.upper()}\n")
+            f.write(f"{'='*80}\n")
+
+            # Validation metrics
+            if "val_loss" in final_epochs.columns:
+                val_loss_mean = final_epochs["val_loss"].mean()
+                val_loss_std = final_epochs["val_loss"].std()
+                f.write(f"  Val Loss (Last 5 Epochs):        {val_loss_mean:.5f} ± {val_loss_std:.5f}\n")
+
+            if "val_abs_rot_x" in final_epochs.columns:
+                rot_mean = final_epochs["val_abs_rot_x"].mean()
+                rot_std = final_epochs["val_abs_rot_x"].std()
+                f.write(f"  Val Abs Rotation X (deg):       {rot_mean:.4f} ± {rot_std:.4f}\n")
+
+            if "val_abs_trans" in final_epochs.columns:
+                trans_mean = final_epochs["val_abs_trans"].mean()
+                trans_std = final_epochs["val_abs_trans"].std()
+                f.write(f"  Val Abs Translation (m):        {trans_mean:.5f} ± {trans_std:.5f}\n")
+
+            if "val_abs_y" in final_epochs.columns and "val_abs_z" in final_epochs.columns:
+                y_mean = final_epochs["val_abs_y"].mean()
+                z_mean = final_epochs["val_abs_z"].mean()
+                f.write(f"  Val Abs Y (m):                  {y_mean:.5f}\n")
+                f.write(f"  Val Abs Z (m):                  {z_mean:.5f}\n")
+
+            # Convergence rate (early vs late epochs)
+            if len(fuse_df) > 0:
+                early_epochs = fuse_df[fuse_df["epoch"] <= 5]
+                late_epochs = fuse_df[fuse_df["epoch"] >= fuse_df.groupby("run_name")["epoch"].transform("max") - 4]
+
+                if "val_loss" in early_epochs.columns and "val_loss" in late_epochs.columns:
+                    early_loss = early_epochs["val_loss"].mean()
+                    late_loss = late_epochs["val_loss"].mean()
+                    improvement = (early_loss - late_loss) / early_loss * 100 if early_loss > 0 else 0
+                    f.write(f"  Loss Improvement (Early→Late):  {improvement:.1f}%\n")
+
+            f.write(f"\n  Seeds Used: {sorted(fuse_df['seed'].unique())}\n")
+            f.write(f"  Total Runs: {fuse_df['run_name'].nunique()}\n")
+
+        f.write("\n" + "=" * 90 + "\n")
+        f.write("FUSION ARCHITECTURE CHARACTERISTICS\n")
+        f.write("=" * 90 + "\n")
+        f.write("""
+CONCATENATION (High-Dimensional):
+  - Preserves all raw features from both streams
+  - High-dimensional input to fusion module
+  - More parameters in fusion layers
+  - May preserve redundant information
+  → Expected: Slower convergence but potential for better final performance
+
+GATING (Low-Dimensional):
+  - Learns per-stream weight (scalar)
+  - Collapses features to single vector per stream
+  - Compression through gating mechanism
+  - Forces feature selection before fusion
+  → Expected: Faster convergence but may lose task-specific details
+
+GATED CONCATENATION (Hybrid):
+  - Concatenates features but with learned per-stream gates
+  - Balances information preservation with selective emphasis
+  - Medium-dimensional fusion input
+  → Expected: Compromise between convergence and performance
+
+KEY OBSERVATIONS:
+1. Rotation vs Translation Trade-off:
+   - Does compression hurt rotation or translation more?
+   - High-dim preserves modality-specific information better
+
+2. Convergence Rates:
+   - High-dim may learn slower but reach better optima
+   - Low-dim may converge faster but plateau earlier
+
+3. Error Distributions:
+   - Systematic biases (skewed errors) indicate architecture mismatch
+   - Symmetric distributions suggest balanced task learning
+""")
+
+    print(f"✓ Summary report saved to {output_dir / 'fusion_architecture_summary.txt'}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Input Stream Fusion Architecture Analysis Pipeline"
+    )
+    parser.add_argument(
+        "--path",
+        type=str,
+        required=True,
+        help="Path to runs directory containing multiple run folders with metrics.csv"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="analysis_fusion",
+        help="Output directory for plots and reports"
+    )
+    parser.add_argument(
+        "--format",
+        type=str,
+        nargs='+',
+        choices=["png", "svg", "plotly_html"],
+        default=["png"],
+        help="Output format(s) for plots (can specify multiple: --format png svg plotly_html)"
+    )
+
+    args = parser.parse_args()
+
+    runs_dir = Path(args.path)
+    output_dir = Path(args.output_dir)
+
+    if not runs_dir.exists():
+        raise FileNotFoundError(f"Runs directory not found: {runs_dir}")
+
+    print(f"Loading data from {runs_dir}...")
+    master_df, run_configs, test_results = load_and_prepare_data(runs_dir)
+
+    print(f"Loaded {len(master_df)} total metric rows from {len(run_configs)} runs")
+    print(f"Fusion architectures found: {sorted(master_df['fusion_type'].unique())}")
+    print(f"Test results found for {len(test_results)} runs")
+
+    print("\nGenerating analysis plots...")
+
+    # All plots
+    plot_rotation_vs_translation_scatter(master_df, output_dir / "performance", fmt=args.format)
+    plot_convergence_comparison(master_df, output_dir / "convergence", fmt=args.format)
+    plot_signed_errors_over_epochs(master_df, output_dir / "signed_errors", fmt=args.format)
+    plot_signed_test_error_distribution(test_results, output_dir / "test_errors", fmt=args.format)
+
+    # Report
+    generate_summary_report(master_df, test_results, output_dir)
+
+    print(f"\n✓ All analysis complete. Output saved to {output_dir}")
+    print("\nNote: If plots are missing, check if corresponding metrics are logged in train.py:")
+    print("  - Signed errors (e.g., signed_rot_x, signed_y, signed_z)")
+    print("  - Test results with per-sample errors")
+
+
+if __name__ == "__main__":
+    main()
