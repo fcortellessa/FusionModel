@@ -6,12 +6,14 @@ Uses the 'thop' library for PyTorch model analysis.
 import torch
 
 
-def compute_inference_flops(model, batch_size=1, input_height=640, input_width=640, device='cpu'):
+def compute_inference_flops(model, streams=("mono_cam", "tactile"), batch_size=1, input_height=640, input_width=640, device='cpu'):
     """
     Compute FLOPs for the PoseEstimationNet.
 
     Args:
         model: PoseEstimationNet instance
+        streams: Names of the input streams the model expects (must match
+            `model.streams` / `cfg["model"]["streams"]`), e.g. ("rgb_image", "digit_image")
         batch_size: Batch size for FLOPs computation
         input_height: Input image height (default 640 for YOLO)
         input_width: Input image width (default 640 for YOLO)
@@ -36,10 +38,10 @@ def compute_inference_flops(model, batch_size=1, input_height=640, input_width=6
     model.to(device)
     model.eval()
 
-    # Create dummy inputs matching the two streams (RGB + tactile)
+    # Create dummy inputs matching the model's configured streams
     dummy_inputs = {
-        'mono_cam': torch.randn(batch_size, 3, input_height, input_width, device=device),
-        'tactile': torch.randn(batch_size, 3, input_height, input_width, device=device),
+        stream: torch.randn(batch_size, 3, input_height, input_width, device=device)
+        for stream in streams
     }
 
     # Compute FLOPs using thop
