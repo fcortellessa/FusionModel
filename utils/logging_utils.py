@@ -167,13 +167,21 @@ def compute_model_norms(model) -> tuple[float, float]:
     return param_sq_sum ** 0.5, grad_sq_sum ** 0.5
 
 
-def init_metrics_csv(metrics_csv_path):
+def init_metrics_csv(metrics_csv_path, append=False):
+    """append=True (used when resuming training, see --resume_from in train.py)
+    continues writing into the existing file instead of truncating it, so the
+    pre-pause epoch history in metrics.csv survives the resume. No-op fallback
+    to write mode if the file doesn't exist yet (e.g. a resume path that
+    somehow lost its metrics.csv)."""
     if metrics_csv_path is None:
         return None, None
 
-    csv_file = open(metrics_csv_path, "w", newline="", encoding="utf-8")
+    file_exists = append and Path(metrics_csv_path).exists() and Path(metrics_csv_path).stat().st_size > 0
+    mode = "a" if file_exists else "w"
+    csv_file = open(metrics_csv_path, mode, newline="", encoding="utf-8")
     csv_writer = csv.DictWriter(csv_file, fieldnames=METRICS_FIELDNAMES)
-    csv_writer.writeheader()
+    if not file_exists:
+        csv_writer.writeheader()
     return csv_file, csv_writer
 
 

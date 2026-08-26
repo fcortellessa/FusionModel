@@ -319,6 +319,33 @@ class HeadLRDecayManager:
                 min_lr=min_lr_mult,
             )
 
+    def state_dict(self):
+        """For checkpoint resume. ReduceLROnPlateau.state_dict() doesn't include the
+        LR value it has driven the (shadow) optimizer to -- that lives in the
+        optimizer's param_groups, which the scheduler only ever mutates, never
+        stores -- so each head's current multiplier is saved alongside its
+        scheduler state and restored explicitly in load_state_dict."""
+        if not self.enabled:
+            return {}
+        return {
+            head_key: {
+                "scheduler": sched.state_dict(),
+                "multiplier_lr": float(self.multiplier_views[head_key].param_groups[0]["lr"]),
+            }
+            for head_key, sched in self.plateau_schedulers.items()
+        }
+
+    def load_state_dict(self, state):
+        if not self.enabled or not state:
+            return
+        for head_key, head_state in state.items():
+            sched = self.plateau_schedulers.get(head_key)
+            view = self.multiplier_views.get(head_key)
+            if sched is None or view is None:
+                continue
+            sched.load_state_dict(head_state["scheduler"])
+            view.param_groups[0]["lr"] = head_state["multiplier_lr"]
+
     def update(self, train_metrics, val_metrics, current_lr_scale, logger=None):
         """
         Step each head's ReduceLROnPlateau scheduler on that head's own validation
@@ -429,6 +456,22 @@ class GlobalPlateauLRManager:
                 min_lr=float(lr_schedule_cfg.get("min_lr", 0.0)),
             )
 
+    def state_dict(self):
+        """For checkpoint resume -- see HeadLRDecayManager.state_dict for why the
+        multiplier LR has to be saved alongside the scheduler's own state_dict."""
+        if not self.enabled:
+            return {}
+        return {
+            "scheduler": self.scheduler.state_dict(),
+            "multiplier_lr": float(self.multiplier_view.param_groups[0]["lr"]),
+        }
+
+    def load_state_dict(self, state):
+        if not self.enabled or not state:
+            return
+        self.scheduler.load_state_dict(state["scheduler"])
+        self.multiplier_view.param_groups[0]["lr"] = state["multiplier_lr"]
+
     def update(self, val_loss, logger=None):
         """Call once per epoch with the fixed-scale composite val loss (loss_q + loss_y +
         loss_z, i.e. NOT val_avg['loss'] -- see the val_fixed_loss comment at the call
@@ -507,6 +550,18 @@ class PerHeadEarlyStoppingManager:
         self.min_delta = float(early_stopping_cfg.get("min_delta", 0.0))
         self.best = {"rot": float("inf"), "trans": float("inf")}
         self.bad_epochs = {"rot": 0, "trans": 0}
+
+    def state_dict(self):
+        """For checkpoint resume -- so a paused/resumed run doesn't lose its
+        per-head patience count and silently get more (or less) patience
+        than the original run would have had."""
+        return {"best": dict(self.best), "bad_epochs": dict(self.bad_epochs)}
+
+    def load_state_dict(self, state):
+        if not state:
+            return
+        self.best.update(state.get("best", {}))
+        self.bad_epochs.update(state.get("bad_epochs", {}))
 
     def update(self, val_abs_rot_x, val_abs_trans):
         """Call once per epoch with val_avg['abs_rot_x'] and val_avg['abs_trans'].
@@ -1004,20 +1059,24 @@ class RunSetupManager:
         self.artifacts = None
         self.run_directory = run_directory or "runs"
 
-    def setup_artifacts(self):
+    def setup_artifacts(self, existing_run_dir=None):
         """Build the run artifacts directory structure.
 
         Does NOT write config.yml yet -- call save_config_snapshot() once cfg is
         fully resolved (e.g. after data preprocessing has filled in
         data.translation_norm_stats), so the snapshot reflects what the run
         actually trained with.
+
+        existing_run_dir: pass through to build_run_artifacts() when resuming
+        training, to reuse the original run's directory instead of a new one.
         """
 
         self.artifacts = build_run_artifacts(
             self.config_path,
             self.cfg,
             self.batch_size,
-            output_root=self.run_directory
+            output_root=self.run_directory,
+            existing_run_dir=existing_run_dir,
         )
 
         if self.logger:

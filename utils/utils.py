@@ -1,10 +1,12 @@
 import json
 import os
+import random
 import re
 import sys
 from datetime import datetime
 import logging
 
+import numpy as np
 import torch
 import yaml
 
@@ -55,13 +57,25 @@ def sanitize_filename(value):
     return value or "run"
 
 
-def build_run_artifacts(config_path, cfg, batch_size, output_root="runs"):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fusion_name = sanitize_filename(cfg["model"]["fusion"])
-    run_name = f"{timestamp}_bs{batch_size}_{fusion_name}"
+def build_run_artifacts(config_path, cfg, batch_size, output_root="runs", existing_run_dir=None):
+    """Build (or, when resuming, reuse) a run's artifact paths.
 
-    run_root_dir = output_root
-    run_dir = os.path.join(run_root_dir, run_name)
+    existing_run_dir: when resuming training (see --resume_from in train.py),
+    pass the original run's directory here instead of generating a fresh
+    timestamped one -- so the resumed segment continues writing
+    checkpoint_best.pth/metrics.csv/config.yml into the same run folder
+    rather than starting a second, disconnected run.
+    """
+    if existing_run_dir is not None:
+        run_dir = existing_run_dir
+        run_root_dir = os.path.dirname(os.path.normpath(run_dir)) or output_root
+        run_name = os.path.basename(os.path.normpath(run_dir))
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fusion_name = sanitize_filename(cfg["model"]["fusion"])
+        run_name = f"{timestamp}_bs{batch_size}_{fusion_name}"
+        run_root_dir = output_root
+        run_dir = os.path.join(run_root_dir, run_name)
     results_dir = os.path.join(run_dir, "results")
     tensorboard_root_dir = os.path.join(run_root_dir, "tensorboard")
     tensorboard_run_dir = os.path.join(tensorboard_root_dir, run_name)
@@ -124,15 +138,53 @@ def setup_logger(log_dir="logs"):
     return logger, log_file
 
 
-def save_checkpoint(model, optimizer, epoch, loss, checkpoint_path="checkpoints", interval=1):
+def save_checkpoint(model, optimizer, epoch, loss, checkpoint_path="checkpoints", interval=1,
+                     uncertainty_module=None, early_stopper=None, head_lr_manager=None,
+                     global_plateau_manager=None, best_val_loss=None, save_rng_state=True):
+    """Save checkpoint_best.pth.
+
+    Beyond the model weights, this also captures everything needed to resume
+    training from this exact point rather than restarting at epoch 0 --
+    optimizer state (Adam/AdamW momentum), the learned uncertainty-weighting
+    log-variances (if task_weighting is enabled), each stateful LR/early-stop
+    manager's own state_dict, and the RNG states. All of the extra fields are
+    optional and additive: a checkpoint saved without them (or by older code)
+    still loads fine for pure inference via load_checkpoint(..., load_optimizer=False).
+
+    RNG-state restoration is best-effort, not a bit-exact-reproducibility
+    guarantee -- torch DataLoader workers (num_workers>0) derive their own
+    per-worker seeds at DataLoader construction time, which this doesn't
+    replay, so a resumed run's exact batch order/augmentation draws can still
+    diverge from an uninterrupted run even with RNG state restored. It does
+    still meaningfully help (model forward-pass randomness, e.g. dropout,
+    and single-process shuffling).
+    """
     if epoch % interval == 0:
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-        torch.save({
+        payload = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': loss,
-    }, checkpoint_path)
+        }
+        if best_val_loss is not None:
+            payload['best_val_loss'] = best_val_loss
+        if uncertainty_module is not None:
+            payload['uncertainty_state_dict'] = uncertainty_module.state_dict()
+        if early_stopper is not None and hasattr(early_stopper, "state_dict"):
+            payload['early_stopper_state'] = early_stopper.state_dict()
+        if head_lr_manager is not None and hasattr(head_lr_manager, "state_dict"):
+            payload['head_lr_manager_state'] = head_lr_manager.state_dict()
+        if global_plateau_manager is not None and hasattr(global_plateau_manager, "state_dict"):
+            payload['global_plateau_manager_state'] = global_plateau_manager.state_dict()
+        if save_rng_state:
+            payload['rng_state'] = {
+                'torch': torch.get_rng_state(),
+                'cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                'numpy': np.random.get_state(),
+                'python': random.getstate(),
+            }
+        torch.save(payload, checkpoint_path)
     return checkpoint_path
 
 def load_checkpoint(model, optimizer, checkpoint_path, device, strict=False, load_optimizer=True):
@@ -168,6 +220,75 @@ def load_checkpoint(model, optimizer, checkpoint_path, device, strict=False, loa
     
     return checkpoint
 
+
+def load_checkpoint_for_resume(checkpoint_path, model, optimizer, device, uncertainty_module=None, restore_rng=True):
+    """Load a checkpoint saved by save_checkpoint() to resume *training* (not just
+    inference) from the exact epoch it was saved at.
+
+    Unlike load_checkpoint() (used by test.py/eval scripts with
+    load_optimizer=False for pure inference), this requires the checkpoint to
+    actually contain 'optimizer_state_dict' -- checkpoints saved before
+    checkpoint-resume support was added only have 'model_state_dict', and
+    should go through load_checkpoint() instead.
+
+    Restores model + optimizer + uncertainty_module (if given) weights and,
+    if present, the RNG states captured at save time (best-effort -- see the
+    save_rng_state note on save_checkpoint(); DataLoader worker shuffling
+    doesn't replay exactly). Returns the raw checkpoint dict so the caller can
+    additionally restore its LR/early-stopping manager states (those are
+    constructed later, inside train_loop) and read 'epoch'/'best_val_loss' to
+    resume the epoch loop at the right point.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'], strict=True)
+
+    if 'optimizer_state_dict' not in checkpoint:
+        raise ValueError(
+            f"Checkpoint at {checkpoint_path} has no 'optimizer_state_dict' -- it was "
+            "saved before checkpoint-resume support was added and can only be used for "
+            "inference (see load_checkpoint), not training resume."
+        )
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+    if uncertainty_module is not None and 'uncertainty_state_dict' in checkpoint:
+        uncertainty_module.load_state_dict(checkpoint['uncertainty_state_dict'])
+
+    if restore_rng and checkpoint.get('rng_state'):
+        rng = checkpoint['rng_state']
+        if rng.get('torch') is not None:
+            # torch.load(..., map_location=device) above moves every tensor in the
+            # checkpoint onto `device`, including this one -- but set_rng_state()
+            # requires a plain CPU ByteTensor (CUDA RNG state is restored separately
+            # below via set_rng_state_all), so move it back explicitly.
+            torch.set_rng_state(rng['torch'].to("cpu", torch.uint8))
+        if rng.get('cuda') is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all([state.to("cpu", torch.uint8) for state in rng['cuda']])
+        if rng.get('numpy') is not None:
+            np.random.set_state(rng['numpy'])
+        if rng.get('python') is not None:
+            random.setstate(rng['python'])
+
+    return checkpoint
+
+
+def strip_optimizer_state(checkpoint_path):
+    """Remove 'optimizer_state_dict' from a saved checkpoint in place.
+
+    Call this once training has genuinely concluded (early stopping fired, or the
+    configured epoch count was reached) and there is nothing left to resume --
+    never on a crash/kill, since that checkpoint may still need --resume_from later.
+    The optimizer state is by far the largest piece of checkpoint-resume state
+    (AdamW keeps two extra tensors per parameter, roughly doubling the checkpoint's
+    size on top of the model weights) and serves no purpose once only inference is
+    left to do with the checkpoint.
+    """
+    if not os.path.exists(checkpoint_path):
+        return
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if "optimizer_state_dict" not in checkpoint:
+        return
+    del checkpoint["optimizer_state_dict"]
+    torch.save(checkpoint, checkpoint_path)
 
 
 def get_optimizer(model_or_params, optimizer_name="Adam", lr=0.001, weight_decay=0.0):

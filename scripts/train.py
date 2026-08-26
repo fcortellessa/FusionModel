@@ -33,6 +33,8 @@ from utils.train_utils import (
 from utils.utils import (
     load_config,
     save_checkpoint,
+    load_checkpoint_for_resume,
+    strip_optimizer_state,
     get_optimizer,
 )
 from utils.normalization import canonicalize_translation_norm_stats
@@ -671,8 +673,15 @@ def train_loop(
     normalize_translation=True,
     trans_norm_stats=None,
     grad_clip_max_norm=None,
+    resume_state=None,
 ):
-    best_val_loss = float("inf")
+    # resume_state is the raw checkpoint dict from load_checkpoint_for_resume()
+    # (model/optimizer/uncertainty weights are already restored by that point --
+    # this only carries the pieces that don't exist until the managers below are
+    # constructed). None means a normal from-scratch run.
+    best_val_loss = float(resume_state["best_val_loss"]) if resume_state and "best_val_loss" in resume_state else float("inf")
+    if resume_state is not None:
+        last_epoch = int(resume_state["epoch"]) + 1
     csv_file = None
     csv_writer = None
     tb_writer = None
@@ -706,7 +715,16 @@ def train_loop(
     # see PerHeadEarlyStoppingManager docstring for why.
     early_stopper = PerHeadEarlyStoppingManager(early_stopping_cfg)
 
-    csv_file, csv_writer = init_metrics_csv(metrics_csv_path)
+    if resume_state is not None:
+        head_lr_manager.load_state_dict(resume_state.get("head_lr_manager_state"))
+        global_plateau_manager.load_state_dict(resume_state.get("global_plateau_manager_state"))
+        early_stopper.load_state_dict(resume_state.get("early_stopper_state"))
+        logger.info(
+            f"Resumed from checkpoint at epoch={resume_state['epoch']} "
+            f"(continuing from epoch={last_epoch}), best_val_loss={best_val_loss:.6f}"
+        )
+
+    csv_file, csv_writer = init_metrics_csv(metrics_csv_path, append=(resume_state is not None))
     tb_writer = init_tensorboard_writer(tensorboard_log_dir, metadata, logger)
     
     # Create rotation loss handler for both training and validation
@@ -811,7 +829,14 @@ def train_loop(
 
             if val_fixed_loss < best_val_loss:
                 best_val_loss = val_fixed_loss
-                save_checkpoint(model, optimizer, epoch, val_fixed_loss, checkpoint_path)
+                save_checkpoint(
+                    model, optimizer, epoch, val_fixed_loss, checkpoint_path,
+                    uncertainty_module=uncertainty_module,
+                    early_stopper=early_stopper,
+                    head_lr_manager=head_lr_manager,
+                    global_plateau_manager=global_plateau_manager,
+                    best_val_loss=best_val_loss,
+                )
                 _save_raw_gate_weights(
                     checkpoint_path, epoch, val_raw_weights, val_raw_rot_weights, val_raw_trans_weights
                 )
@@ -907,6 +932,17 @@ def train_loop(
                     f"best_trans={early_stopper.best['trans']:.6f} m)."
                 )
                 break
+
+        # Training genuinely concluded (early stopping above, or the for loop ran out
+        # of epochs) -- there's nothing left to resume, so drop the optimizer state
+        # (by far the largest part of a resumable checkpoint) to shrink
+        # checkpoint_best.pth back down to just what inference needs. Deliberately
+        # inside `try`, not `finally`: an exception here means training was
+        # interrupted (crash/kill), not concluded, and that checkpoint should stay
+        # fully resumable via --resume_from.
+        if checkpoint_path is not None:
+            strip_optimizer_state(checkpoint_path)
+            logger.info("Training complete -- stripped optimizer state from checkpoint_best.pth")
     finally:
         close_run_writers(csv_file, tb_writer)
 
@@ -919,10 +955,33 @@ def main(
     tensorboard_port=6006,
     force_preprocess=False,
     run_directory=None,
+    resume_from=None,
 ):
-    """Main training entry point."""
+    """Main training entry point.
+
+    resume_from: path to an existing run's output directory (the folder
+    containing its checkpoint_best.pth/config.yml/metrics.csv, e.g.
+    runs/<run_dir>/<run_name>) to continue training from its last saved
+    checkpoint instead of starting fresh at epoch 0. Config is loaded from
+    that run's own config.yml snapshot (not config_path) so a resume can't
+    silently drift from what the original run actually trained with;
+    config_path is ignored when resume_from is given.
+    """
     global logger, log_file
-    
+
+    resume_checkpoint_path = None
+    if resume_from is not None:
+        resume_checkpoint_path = os.path.join(resume_from, "checkpoint_best.pth")
+        if not os.path.exists(resume_checkpoint_path):
+            raise FileNotFoundError(
+                f"--resume_from {resume_from} has no checkpoint_best.pth to resume from"
+            )
+        config_path = os.path.join(resume_from, "config.yml")
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(
+                f"--resume_from {resume_from} has no config.yml snapshot to resume with"
+            )
+
     # Load config
     cfg = load_config(config_path)
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -948,7 +1007,7 @@ def main(
     
     # Setup run artifacts, logging, and tensorboard
     run_setup = RunSetupManager(config_path, cfg, resolved_batch_size, run_directory=run_directory)
-    artifacts = run_setup.setup_artifacts()
+    artifacts = run_setup.setup_artifacts(existing_run_dir=resume_from)
 
     # Overwrite the default tensorboard target directory with nested layout
     tb_root = Path(tensorboard_root_dir or artifacts.get("tensorboard_root_dir", "runs"))
@@ -1010,9 +1069,15 @@ def main(
                 "lr": base_lr * uncertainty_lr_mult,
             })
 
-    # Compute model FLOPs and parameters
+    # Compute model FLOPs and parameters. Must run before the resume-checkpoint load
+    # below: its profiling hook registers extra total_ops/total_params buffers on
+    # every submodule as a side effect, which are then part of model.state_dict() --
+    # the checkpoint being resumed was saved (during a *previous* run) after this same
+    # call had already run on its model instance, so a freshly-built model needs those
+    # buffer slots registered too before a strict state_dict load will match cleanly.
     flops_stats = compute_inference_flops(
         model,
+        streams=cfg["model"]["streams"],
         batch_size=resolved_batch_size,
         device=device
     )
@@ -1022,6 +1087,16 @@ def main(
         f"{flops_stats['gflops_per_sample']:.3f} GFLOPs/sample, "
         f"{flops_stats['gflops_per_batch']:.3f} GFLOPs/batch"
     )
+
+    # Load the resume checkpoint (if any) now, after any --optimizer override and the
+    # FLOPs profiling above, so both optimizer_state_dict and model_state_dict line up
+    # with whichever optimizer/model instance is final.
+    resume_checkpoint = None
+    if resume_checkpoint_path is not None:
+        resume_checkpoint = load_checkpoint_for_resume(
+            resume_checkpoint_path, model, optimizer, device,
+            uncertainty_module=uncertainty_module,
+        )
 
     # Prepare training metadata
     head_lr_cfg = cfg.get("training", {}).get("head_lr_decay", {})
@@ -1093,6 +1168,7 @@ def main(
         normalize_translation=cfg.get("data", {}).get("normalize_translation", True),
         trans_norm_stats=trans_norm_stats,
         grad_clip_max_norm=grad_clip_max_norm,
+        resume_state=resume_checkpoint,
     )
 
 
@@ -1140,6 +1216,18 @@ if __name__ == "__main__":
         default=None,
         help="Root directory for run outputs (default: runs)",
     )
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=None,
+        help=(
+            "Path to an existing run's output directory (containing "
+            "checkpoint_best.pth/config.yml/metrics.csv) to resume training from its "
+            "last saved checkpoint, instead of starting a fresh run at epoch 0. "
+            "Config is loaded from that run's own config.yml snapshot -- --config is "
+            "ignored when this is set."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1151,4 +1239,5 @@ if __name__ == "__main__":
         tensorboard_port=args.tensorboard_port,
         force_preprocess=args.force_preprocess or args.force_renormalize,
         run_directory=args.run_directory,
+        resume_from=args.resume_from,
     )
