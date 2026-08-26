@@ -7,8 +7,10 @@ from .gated import ARGatePlusFusion, SimpleGatedFusion, GatedSoftmaxFusion, Gate
 from .attention import AttentionFusion
 from .spatial_gated import SpatialGatedFusion2D
 from .gated_concat import (
+    ChannelWiseGatedConcatFloorFusion,
     ChannelWiseGatedConcatFusion,
     ChannelWiseResidualGatedConcatFusion,
+    GatedConcatFloorFusion,
     GatedConcatFusion,
     ResidualGatedConcatFusion,
 )
@@ -26,6 +28,8 @@ FUSION_REGISTRY = {
     "channelwise_gated_concat": ChannelWiseGatedConcatFusion,
     "residual_gated_concat": ResidualGatedConcatFusion,
     "channelwise_residual_gated_concat": ChannelWiseResidualGatedConcatFusion,
+    "gated_concat_floor": GatedConcatFloorFusion,
+    "channelwise_gated_concat_floor": ChannelWiseGatedConcatFloorFusion,
 }
 
 def build_fusion(name, dim, num_streams):

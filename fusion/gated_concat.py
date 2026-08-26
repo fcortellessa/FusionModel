@@ -34,6 +34,27 @@ class _BaseGatedConcatFusion(BaseFusion):
         return torch.cat(features_list, dim=1)
 
 
+class _BaseFloorGatedConcatFusion(_BaseGatedConcatFusion):
+    """Shared plain-gated fusion with the gate bounded away from zero.
+
+    Plain (non-residual) gated-concat variants can drive a stream's sigmoid gate
+    to ~0, which zeroes both that stream's contribution to the fused feature and
+    the gradient flowing back into its backbone -- observed in practice as a
+    training collapse on some seeds (val_abs_rot_x/val_abs_trans freezing within
+    the first few epochs, e.g. q2_ScalarVsChannelwise seeds 48/50 for
+    gated_concat and seed 49 for channelwise_gated_concat). Flooring the gate at
+    MIN_GATE keeps a minimum pass-through/gradient path for every stream --
+    unlike the residual_gated_concat variants, which additionally guarantee a
+    pass-through of at least 1x -- while still allowing the gate to strongly
+    (not fully) suppress a stream.
+    """
+
+    MIN_GATE = 0.1
+
+    def _floored_sigmoid(self, logits):
+        return self.MIN_GATE + (1.0 - self.MIN_GATE) * torch.sigmoid(logits)
+
+
 @register_fusion("gated_concat")
 class GatedConcatFusion(_BaseGatedConcatFusion):
     """Apply one independent sigmoid gate to each stream, then concatenate."""
@@ -87,6 +108,45 @@ class ChannelWiseGatedConcatFusion(_BaseGatedConcatFusion):
         combined = self._gate_inputs(features_list)
         weights = self.gate(combined).reshape(-1, self.num_streams, self.dim)
         weights = torch.sigmoid(weights)  # (B, num_streams, dim)
+
+        weighted_features = [
+            weights[:, stream_idx, :] * feature
+            for stream_idx, feature in enumerate(features_list)
+        ]
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
+@register_fusion("gated_concat_floor")
+class GatedConcatFloorFusion(_BaseFloorGatedConcatFusion):
+    """gated_concat with the per-stream sigmoid gate floored at MIN_GATE."""
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, gate_outputs=num_streams)
+
+    def forward(self, features_list):
+        combined = self._gate_inputs(features_list)
+        weights = self._floored_sigmoid(self.gate(combined))  # (B, num_streams)
+
+        weighted_features = [
+            weights[:, stream_idx].unsqueeze(-1) * feature
+            for stream_idx, feature in enumerate(features_list)
+        ]
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
+@register_fusion("channelwise_gated_concat_floor")
+class ChannelWiseGatedConcatFloorFusion(_BaseFloorGatedConcatFusion):
+    """channelwise_gated_concat with the per-channel sigmoid gate floored at MIN_GATE."""
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, gate_outputs=num_streams * dim)
+
+    def forward(self, features_list):
+        combined = self._gate_inputs(features_list)
+        weights = self.gate(combined).reshape(-1, self.num_streams, self.dim)
+        weights = self._floored_sigmoid(weights)  # (B, num_streams, dim)
 
         weighted_features = [
             weights[:, stream_idx, :] * feature
