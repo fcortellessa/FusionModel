@@ -5,9 +5,12 @@ fixed_overrides:
   data.root: /home/MA_Flavia/Documents/FusionModel/Data
   data.split_seed: 40
   group_aware_split: true
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
 
 grid:
-  training.seed: [41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+  training.seed: [46, 47, 48, 49, 50] # 2nd sweep: [41, 42, 43, 44, 45]
   model.fusion:
     - "concat"
     - "gated"

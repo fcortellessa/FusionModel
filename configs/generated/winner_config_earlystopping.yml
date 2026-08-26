@@ -44,6 +44,9 @@ training:
     final_lr_mult: 0.05
   head_lr_decay:
     enabled: false
+  grad_clip:
+    enabled: true
+    max_norm: 1.0
   task_weighting:
     enabled: true
     type: uncertainty
