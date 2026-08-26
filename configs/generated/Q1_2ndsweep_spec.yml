@@ -1,0 +1,23 @@
+# Q1 2nd seed sweep: gated vs gated_concat stability check across seeds 41-45,
+# following up on gated_concat/seed50 landing in a visibly shallower minimum in
+# the first sweep (seeds 46-50) -- see Q1_spec.yml for that grid. Reuses the
+# 41-45 seed range already anticipated in Q1_spec.yml's own comment. concat is
+# deliberately excluded: it's the clearly weakest performer and isn't central
+# to the "how stable is the best architecture across seeds" question this
+# follow-up is asking.
+template_config: configs/generated/winner_config_earlystopping.yml
+
+fixed_overrides:
+  model.translation_head_mode: "joint"
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
+  data.split_seed: 40
+  group_aware_split: true
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+
+grid:
+  training.seed: [41, 42, 43, 44, 45]
+  model.fusion:
+    - "gated"
+    - "gated_concat"

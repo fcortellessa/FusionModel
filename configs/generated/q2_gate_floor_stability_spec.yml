@@ -1,0 +1,39 @@
+# Q2 follow-up: does flooring the plain gated-concat sigmoid gate at 0.1 (instead
+# of letting it saturate to 0) fix the training collapse seen in
+# q2_ScalarVsChannelwise on gated_concat (seeds 48, 50) and channelwise_gated_concat
+# (seed 49)? Built on top of the grad_clip baseline (q2_ScalarVsChannelwise_gradclip),
+# not instead of it -- grad_clip already reduces the odds of the bad gradient step
+# that saturates the gate in the first place; the floor is meant to make a saturated
+# gate survivable rather than lethal, so both stay enabled together.
+#
+# Seeds are the exact ones that collapsed in the original (pre-grad_clip) grid for
+# each architecture (gated_concat: 48, 50; channelwise_gated_concat: 49), plus seed
+# 50 again for channelwise_gated_concat as a secondary check -- it didn't collapse
+# there, but it's the hardest-converging seed for both architectures even with
+# grad_clip enabled (shortest training in q2_ScalarVsChannelwise_gradclip: 34/45
+# epochs respectively).
+#
+# Template: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+# (carries the exact grad_clip/warmup_cosine/early_stopping/mlp-size settings the
+# gradclip grid used; only model.fusion and training.seed are overridden per variant).
+
+variants:
+  - name: gated_concat_floor_seed48
+    overrides:
+      model.fusion: gated_concat_floor
+      training.seed: 48
+
+  - name: gated_concat_floor_seed50
+    overrides:
+      model.fusion: gated_concat_floor
+      training.seed: 50
+
+  - name: channelwise_gated_concat_floor_seed49
+    overrides:
+      model.fusion: channelwise_gated_concat_floor
+      training.seed: 49
+
+  - name: channelwise_gated_concat_floor_seed50
+    overrides:
+      model.fusion: channelwise_gated_concat_floor
+      training.seed: 50

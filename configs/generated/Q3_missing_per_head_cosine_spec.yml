@@ -1,0 +1,29 @@
+# Fills the 6 missing runs from Q3_spec.yml's "per_head_cosine_lr_schedule"
+# variant -- that variant only completed seeds 46/47 (x task_weighting
+# enabled/disabled); seeds 48/49/50 were never generated/run. See
+# Q3_spec.yml for the full 3-variant x 5-seed x 2-weighting grid this
+# completes (global_decayLROnPlateau and per_head_decayLROnPlateau are
+# already complete at 10/10 runs each).
+template_config: configs/generated/winner_config_earlystopping.yml
+
+fixed_overrides:
+  model.translation_head_mode: "joint"
+  training.task_weighting.type: "uncertainty"
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
+  data.split_seed: 40
+  group_aware_split: true
+
+variants:
+  - name: "per_head_cosine_lr_schedule"
+    overrides:
+      training.lr_schedule.enabled: true
+      training.lr_schedule.type: "warmup_cosine"
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2
+      training.head_lr_decay.min_lr: 0.00001
+      training.head_lr_decay.min_delta: 0.005
+
+grid:
+  training.seed: [48, 49, 50]
+  training.task_weighting.enabled: [false, true]
