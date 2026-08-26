@@ -1,0 +1,86 @@
+==========================================================================================
+LEARNING RATE SCHEDULE COMPARISON REPORT
+==========================================================================================
+
+
+================================================================================
+SCHEDULE: GLOBAL_DECAYLRONPLATEAU
+================================================================================
+  Combined Val Loss (Last 5 Epochs):  2.60710 ± 0.59858
+  Val Loss - Rotation (loss_q):        2.96913 ± 0.10388
+  Val Abs Rotation Error (deg):       0.8500 ± 0.0297
+  Val Abs Y Translation (m):          0.00069
+  Val Abs Z Translation (m):          0.00039
+
+  Seeds Used: [46, 47, 48, 49, 50]
+  Runs: 10
+  Best Epoch (mean ± std):            31.1 ± 7.3
+
+================================================================================
+SCHEDULE: GLOBAL_WARMUP_COSINE
+================================================================================
+  Combined Val Loss (Last 5 Epochs):  4.04197 ± 0.18443
+  Val Loss - Rotation (loss_q):        2.67869 ± 0.02721
+  Val Abs Rotation Error (deg):       0.7656 ± 0.0086
+  Val Abs Y Translation (m):          0.00056
+  Val Abs Z Translation (m):          0.00033
+
+  Seeds Used: [43]
+  Runs: 4
+  Best Epoch (mean ± std):            22.0 ± 0.0
+
+================================================================================
+SCHEDULE: PERHEAD_COSINE_LR_SCHEDULE
+================================================================================
+  Combined Val Loss (Last 5 Epochs):  4.48399 ± 1.60163
+  Val Loss - Rotation (loss_q):        2.93614 ± 0.07688
+  Val Abs Rotation Error (deg):       0.8405 ± 0.0220
+  Val Abs Y Translation (m):          0.00061
+  Val Abs Z Translation (m):          0.00037
+
+  Seeds Used: [46, 47, 48]
+  Runs: 5
+  Best Epoch (mean ± std):            33.4 ± 13.6
+
+================================================================================
+SCHEDULE: PERHEAD_DECAYLRONPLATEAU
+================================================================================
+  Combined Val Loss (Last 5 Epochs):  2.77133 ± 0.58432
+  Val Loss - Rotation (loss_q):        3.35418 ± 0.90712
+  Val Abs Rotation Error (deg):       0.9601 ± 0.2594
+  Val Abs Y Translation (m):          0.00077
+  Val Abs Z Translation (m):          0.00045
+
+  Seeds Used: [46, 47, 48, 49, 50]
+  Runs: 11
+  Best Epoch (mean ± std):            28.9 ± 9.0
+
+==========================================================================================
+INTERPRETATION GUIDE
+==========================================================================================
+
+GLOBAL vs PER-HEAD LEARNING RATE SCHEDULES:
+
+Global Schedule (Single LR for all parameters):
+  - Simpler, fewer hyperparameters
+  - Forces rotation and translation to learn at same pace
+  - May under-optimize one task if they converge at different rates
+  - Baseline approach
+
+Per-Head Schedule (Task-specific LR for rotation/translation heads):
+  - More complex, additional hyperparameters
+  - Allows each task to find optimal learning pace independently
+  - May achieve better balance between rotation and translation
+  - Research hypothesis: per-head better captures task-specific dynamics
+
+KEY METRICS TO COMPARE:
+1. Final accuracy (loss_q + loss_trans) → Does per-head win on both?
+2. Convergence speed (best epoch) → Does per-head converge faster?
+3. Task balance (loss_q vs loss_trans) → Does per-head balance tasks better?
+4. Robustness (error bars) → Is per-head stable across seeds?
+5. Signed errors → Does per-head reduce systematic biases?
+
+EXPECTED RESULTS:
+✓ Per-head better: Clear wins on rotation or translation; better overall balance
+⚠️ Trade-off: Per-head better on one task, worse on another
+❌ Similar performance: LR schedule not the bottleneck; focus on architecture/weighting
