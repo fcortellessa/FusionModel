@@ -1,0 +1,66 @@
+==========================================================================================
+Q4: TASK-SPECIFIC FUSION COMPARISON REPORT (SHARED vs ADAPTER vs DUAL FUSION)
+==========================================================================================
+
+
+================================================================================
+VARIANT: TASK-SPECIFIC ADAPTER (LATE)
+================================================================================
+  Val Loss (Last 5 Epochs):        5.69022 ± 2.14398
+  Val Abs Rotation X (deg):        0.7805 ± 0.0364
+  Val Abs Translation (m):         0.00074 ± 0.00005
+  Val Abs Y (m):                   0.00058
+  Val Abs Z (m):                   0.00035
+  Total Parameters:                251,315,656
+  Trainable Parameters:             246,790,408
+  Epochs Trained:                  66
+
+  Seeds Used: [46, 47, 48, 49, 50]
+  Total Runs: 5
+
+================================================================================
+VARIANT: DUAL FUSION (EARLY)
+================================================================================
+  Val Loss (Last 5 Epochs):        5.62734 ± 1.00534
+  Val Abs Rotation X (deg):        0.7592 ± 0.0358
+  Val Abs Translation (m):         0.00072 ± 0.00002
+  Val Abs Y (m):                   0.00056
+  Val Abs Z (m):                   0.00034
+  Total Parameters:                246,925,290
+  Trainable Parameters:             242,400,042
+  Epochs Trained:                  70
+
+  Seeds Used: [46, 47, 48, 49, 50]
+  Total Runs: 5
+
+==========================================================================================
+INTERPRETATION GUIDE
+==========================================================================================
+
+SHARED (baseline):
+  - One gated_concat fusion instance feeds both rotation and translation heads
+  - No task-specific mechanism; simplest, fewest parameters
+
+TASK-SPECIFIC ADAPTER (late specialization):
+  - Same shared fused vector, then a post-fusion residual-gate adapter
+    re-weights it per-channel, separately for rotation vs translation
+  - ~5.42% new parameters (near-identity-initialized -- needs more epochs to
+    learn a useful deviation from identity, hence the longer training run)
+
+DUAL FUSION (early specialization):
+  - Independent fusion module instances per branch (own parameters each),
+    so RGB+tactile are combined separately for rotation vs translation
+    from the start, rather than sharing one fused vector
+  - Only ~1.33% new parameters, no cold-start identity behavior (the gate
+    is copied from a trained init), so trained for the same epoch budget
+    as the baseline
+
+KEY QUESTIONS:
+1. Does either task-specific mechanism beat the shared baseline, and on
+   which task (rotation vs translation vs both)?
+2. Early vs late specialization: does dual_fusion's from-scratch per-branch
+   fusion outperform the adapter's re-weighting of an already-shared
+   representation?
+3. Is any win worth the extra parameters/training time (see
+   parameter_overhead_by_variant plot)?
+4. Are results stable across seeds, or is one variant more seed-sensitive?
