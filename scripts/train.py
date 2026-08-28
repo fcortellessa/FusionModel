@@ -402,7 +402,11 @@ def _train_single_epoch(
         loss, loss_q, loss_y, loss_z, _ = rotation_handler.compute_loss(
             pose_pred, pose, uncertainty_module
         )
-        pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items()}
+        # Only clone tensor values -- pose_pred may carry non-tensor extras
+        # (e.g. "task_feature_adapter_attention" is a dict of attention
+        # tensors, not a tensor itself, when model.task_feature_adapter is
+        # enabled; see PoseEstimationNet.forward).
+        pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items() if torch.is_tensor(v)}
         if normalize_translation:
             pose_pred_unnorm["trans"][:, 1] = pose_pred_unnorm["trans"][:, 1] * stats["std_y"] + stats["mean_y"]
             pose_pred_unnorm["trans"][:, 2] = pose_pred_unnorm["trans"][:, 2] * stats["std_z"] + stats["mean_z"]
@@ -588,8 +592,9 @@ def validation_loop(
             loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(
                 pose_pred, pose, uncertainty_for_loss
             )
-            
-            pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items()}
+
+            # Only clone tensor values -- see matching comment in the train loop above.
+            pose_pred_unnorm = {k: v.clone() for k, v in pose_pred.items() if torch.is_tensor(v)}
             if normalize_translation:
                 pose_pred_unnorm["trans"][:, 1] = pose_pred_unnorm["trans"][:, 1] * stats["std_y"] + stats["mean_y"]
                 pose_pred_unnorm["trans"][:, 2] = pose_pred_unnorm["trans"][:, 2] * stats["std_z"] + stats["mean_z"]
@@ -788,6 +793,7 @@ def train_loop(
             lr_head_rot = _get_lr_by_group(optimizer, "head_rot")
             lr_head_y = _get_lr_by_group(optimizer, "head_y")
             lr_head_z = _get_lr_by_group(optimizer, "head_z")
+            lr_fusion = _get_lr_by_group(optimizer, "fusion") if "fusion" in param_groups_by_name else None
             uncertainty_stats = _compute_uncertainty_stats(uncertainty_module)
 
             head_lr_manager.update(
@@ -853,6 +859,7 @@ def train_loop(
                 lr_head_rot=lr_head_rot,
                 lr_head_y=lr_head_y,
                 lr_head_z=lr_head_z,
+                lr_fusion=lr_fusion,
                 fusion_weights_str=fw_str,
                 fusion_weights_epoch_str=fw_epoch_str,
                 epoch_time=epoch_time,
@@ -871,6 +878,7 @@ def train_loop(
                     "head_rot": lr_head_rot,
                     "head_y": lr_head_y,
                     "head_z": lr_head_z,
+                    **({"fusion": lr_fusion} if lr_fusion is not None else {}),
                 },
                 lr_schedule_scale=current_lr_scale,
                 param_groups_by_name=param_groups_by_name,
@@ -917,6 +925,7 @@ def train_loop(
                 lr_head_rot=lr_head_rot,
                 lr_head_y=lr_head_y,
                 lr_head_z=lr_head_z,
+                lr_fusion=lr_fusion,
                 current_lr_scale=current_lr_scale,
                 uncertainty_stats=uncertainty_stats,
                 validation_rotation_summary=val_rotation_summary,

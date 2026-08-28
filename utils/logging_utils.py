@@ -110,7 +110,7 @@ METRICS_FIELDNAMES = [
     # general run metadata
     "best_loss", "epoch_time_sec", "checkpoint_path",
     "model_name", "streams", "fusion", "head_type", "freeze_backbone",
-    "lr", "lr_base", "lr_head_rot", "lr_head_y", "lr_head_z", "lr_schedule_scale",
+    "lr", "lr_base", "lr_head_rot", "lr_head_y", "lr_head_z", "lr_fusion", "lr_schedule_scale",
     "uncertainty_log_var_rot", "uncertainty_log_var_trans",
     "uncertainty_weight_rot", "uncertainty_weight_trans", "batch_size", "seed",
     "num_parameters", "num_trainable_parameters", "gflops_per_sample", "gflops_per_batch", "avg_inference_time_ms"
@@ -454,7 +454,7 @@ def _init_epoch_metrics():
 def log_epoch_summary(
     logger, epoch, num_epochs, train_avg, val_avg, lr_base, lr_head_rot,
     lr_head_y, lr_head_z, fusion_weights_str, fusion_weights_epoch_str,
-    epoch_time, uncertainty_stats, best_val_loss,
+    epoch_time, uncertainty_stats, best_val_loss, lr_fusion=None,
 ):
     logger.info(
         f"epoch={epoch+1} train_loss={train_avg['loss']:.4f} loss_q={train_avg['loss_q']:.4f} "
@@ -470,7 +470,9 @@ def log_epoch_summary(
         f"val_abs_y={val_avg['abs_y']:.4f} val_abs_z={val_avg['abs_z']:.4f} "
         f"val_abs_trans={val_avg['abs_trans']:.4f} val_abs_rot_x={val_avg['abs_rot_x']:.4f} "
         f"lr_base={lr_base:.8f} lr_head_rot={lr_head_rot:.8f} lr_head_y={lr_head_y:.8f} "
-        f"lr_head_z={lr_head_z:.8f} fusion_weights={fusion_weights_str}"
+        f"lr_head_z={lr_head_z:.8f} "
+        + (f"lr_fusion={lr_fusion:.8f} " if lr_fusion is not None else "")
+        + f"fusion_weights={fusion_weights_str}"
     )
 
     if uncertainty_stats:

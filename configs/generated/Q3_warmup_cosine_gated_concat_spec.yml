@@ -1,0 +1,41 @@
+# Q3, scoped to gated_concat (not channelwise_gated_concat, which the
+# existing q3_global_vs_perHead_LR sweep used): does per-head LR decay help
+# specifically under a warmup_cosine base schedule? All existing Q3 runs used
+# channelwise_gated_concat, and gated_concat currently outperforms it on
+# accuracy (see q2_ScalarVsChannelwise_gradclip summary), so this needs fresh
+# runs, not reuse.
+#
+# Single factor: training.head_lr_decay.enabled. Both variants share the
+# identical warmup_cosine base schedule (lr_schedule.type: warmup_cosine,
+# pct_start 0.05, start_lr_mult 0.5, final_lr_mult 0.05) -- confirmed by
+# diffing the existing global_warmup_cosine vs perHead_cosine_lr_schedule
+# configs, which differ by exactly this one key.
+# - global_warmup_cosine: head_lr_decay.enabled: false (plain global schedule,
+#   base/fusion/all heads track the same warmup+cosine curve).
+# - perHead_warmup_cosine: head_lr_decay.enabled: true, patience: 5,
+#   factor: 0.2 (matching the existing Q3 perHead runs' settings) -- rotation
+#   and translation heads each get their own ReduceLROnPlateau multiplier on
+#   top of the shared warmup_cosine curve, driven by their own val metric.
+#
+# Template: the established gated_concat/seed46 baseline (grad_clip,
+# translation_head_mode: joint, weight_decay, etc. all match every other
+# gated_concat comparison this session).
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48, 49, 50]
+
+variants:
+  - name: global_warmup_cosine
+    overrides:
+      training.head_lr_decay.enabled: false
+
+  - name: perHead_warmup_cosine
+    overrides:
+      training.head_lr_decay.enabled: true
+      training.head_lr_decay.patience: 5
+      training.head_lr_decay.factor: 0.2

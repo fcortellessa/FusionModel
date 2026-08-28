@@ -1,0 +1,38 @@
+# Q2 follow-up to q2_gate_floor_stability_spec.yml: that grid only tested the
+# gate floor (fusion/gated_concat.py's MIN_GATE=0.1, keeps a minimum
+# pass-through/gradient path per stream/channel instead of letting the gate
+# saturate to 0) on the 4 (fusion, seed) pairs that had collapsed WITHOUT
+# grad_clip -- gated_concat: 48, 50; channelwise_gated_concat: 49, plus 50 as
+# a secondary check. It improved 3 of those 4 vs. grad_clip alone (see
+# runs/q2_gate_floor_stability), and unexpectedly made channelwise seeds 49/50
+# -- which never specialized at all under plain grad_clip (gate stuck at
+# ~0.47 for the whole run) -- specialize heavily instead (~80% of channels at
+# the floor).
+#
+# channelwise_gated_concat only (scoped down from the original 2-fusion-type
+# proposal -- gated_concat is being tested with the lr_fusion approach instead,
+# see q2_gate_lr_sweep_spec.yml, to keep the two interventions on separate
+# architectures rather than compounding both on the same one).
+#
+# This grid fills the gap: seeds 46-48 were never run with the floor at all,
+# including the two seeds (46, 48) that already saturate hard under plain
+# grad_clip (see gate_specialization analysis in
+# runs/q2_ScalarVsChannelwise_gradclip). Seeds 49/50 are deliberately excluded
+# here -- they duplicate the original floor grid (runs/q2_gate_floor_stability)
+# exactly, so those 2 results are reused as-is rather than re-run. Combine
+# this sweep's 3 runs with that existing pair to get the full 5-seed picture,
+# directly comparable to the existing grad_clip-only summary
+# (gating_granularity_summary.txt).
+#
+# Template: same as the original floor grid, carries the exact
+# grad_clip/warmup_cosine/early_stopping settings the rest of the q2
+# gradclip grid used.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/003_seed-46_fusion-channelwise_gated_concat_87d1c4.yml
+
+fixed_overrides:
+  model.fusion: "channelwise_gated_concat_floor"
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48]

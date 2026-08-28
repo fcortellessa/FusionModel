@@ -15,9 +15,24 @@ def _get_lr_by_group(optimizer, group_name):
             return float(group["lr"])
     return float(optimizer.param_groups[0]["lr"])
 
-def _build_named_param_groups(model, base_lr):
+def _build_named_param_groups(model, base_lr, fusion_lr=None):
+    """
+    Args:
+        fusion_lr: Optional starting LR for the fusion module's own parameters
+            (self.fusion / self.fusion_rotation / self.fusion_translation /
+            self.fusion_post_conv*, i.e. any parameter name starting with
+            "fusion"). Defaults to base_lr when None, matching the previous
+            behavior where the fusion module shared the backbone's LR as
+            part of the "base" group. HeadLRDecayManager/GlobalPlateauLRManager
+            pick this group's LR up automatically via optimizer.param_groups
+            (see their `base_group_lrs` construction) -- no changes needed
+            there for the fusion group's distinct starting LR to be respected
+            by the global schedule. It does NOT get HeadLRDecayManager's
+            per-head plateau decay (only head_rot/head_y/head_z/head_trans do).
+    """
     grouped_params = {
         "base": [],
+        "fusion": [],
         "head_rot": [],
         "head_y": [],
         "head_z": [],
@@ -35,11 +50,15 @@ def _build_named_param_groups(model, base_lr):
             grouped_params["head_z"].append(param)
         elif name.startswith("trans_head."):
             grouped_params["head_trans"].append(param)
+        elif name.startswith("fusion"):
+            grouped_params["fusion"].append(param)
         else:
             grouped_params["base"].append(param)
 
+    group_lrs = {"fusion": float(fusion_lr) if fusion_lr is not None else float(base_lr)}
+
     param_groups = []
-    for group_name in ["base", "head_rot", "head_y", "head_z", "head_trans"]:
+    for group_name in ["base", "fusion", "head_rot", "head_y", "head_z", "head_trans"]:
         params = grouped_params[group_name]
         if not params:
             continue
@@ -47,7 +66,7 @@ def _build_named_param_groups(model, base_lr):
             {
                 "name": group_name,
                 "params": params,
-                "lr": float(base_lr),
+                "lr": group_lrs.get(group_name, float(base_lr)),
             }
         )
 
@@ -126,6 +145,7 @@ def build_epoch_metrics_row(
     uncertainty_stats,
     validation_rotation_summary=None,
     checkpoint_path="",
+    lr_fusion=None,
 ):
     metadata = metadata or {}
     uncertainty_stats = uncertainty_stats or {}
@@ -210,6 +230,7 @@ def build_epoch_metrics_row(
         "lr_head_rot": lr_head_rot,
         "lr_head_y": lr_head_y,
         "lr_head_z": lr_head_z,
+        "lr_fusion": lr_fusion if lr_fusion is not None else "",
         "lr_schedule_scale": current_lr_scale,
         "uncertainty_log_var_rot": uncertainty_stats.get("uncertainty_log_var_rot", ""),
         "uncertainty_log_var_trans": uncertainty_stats.get("uncertainty_log_var_trans", ""),
@@ -730,10 +751,13 @@ class TrainingConfigBuilder:
     
     def build_optimizer(self, model, param_groups=None):
         """Build optimizer from config."""
-        
+
         if param_groups is None:
-            param_groups = _build_named_param_groups(model, base_lr=float(self.cfg["training"]["lr"]))
-        
+            fusion_lr = self.cfg["training"].get("lr_fusion")
+            param_groups = _build_named_param_groups(
+                model, base_lr=float(self.cfg["training"]["lr"]), fusion_lr=fusion_lr
+            )
+
         optimizer_name = self.cfg["training"]["optimizer"]
         base_lr = float(self.cfg["training"]["lr"])
         weight_decay = float(self.cfg["training"].get("weight_decay", 0.0))
@@ -889,7 +913,9 @@ class TrainingConfigBuilder:
             Tuple of (model, optimizer, uncertainty_module, loss_function, param_groups)
         """
         model = self.build_model()
-        param_groups = _build_named_param_groups(model, base_lr=float(self.cfg["training"]["lr"]))
+        param_groups = _build_named_param_groups(
+            model, base_lr=float(self.cfg["training"]["lr"]), fusion_lr=self.cfg["training"].get("lr_fusion")
+        )
         optimizer = self.build_optimizer(model, param_groups=param_groups)
         base_lr = float(self.cfg["training"]["lr"])
         shared_parameter = next((param for param in model.parameters() if param.requires_grad), None)

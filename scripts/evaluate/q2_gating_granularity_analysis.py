@@ -13,6 +13,7 @@ import yaml
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -209,234 +210,273 @@ def compute_gate_specialization(row: pd.Series, rgb_key: str, tactile_key: str) 
     return rgb_spec, tactile_spec
 
 
+def _extract_stream_series(subset_df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """
+    Parse a "[rgb_val, tactile_val]" string column into per-row RGB/Tactile
+    floats, keeping epoch and run_name alongside for later grouping.
+    """
+    records = []
+    for _, row in subset_df.iterrows():
+        parsed = parse_fusion_weights_string(row.get(col, ""))
+        rgb_val = parsed[0] if len(parsed) >= 1 else np.nan
+        tactile_val = parsed[1] if len(parsed) >= 2 else np.nan
+        records.append({"epoch": row["epoch"], "rgb": rgb_val, "tactile": tactile_val})
+    return pd.DataFrame(records)
+
+
 def plot_gate_specialization_over_training(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
     """
-    Q2.2: Gate Specialization Over Training
-    Plot: fraction_lt_0_1 + fraction_gt_0_9 over epochs for scalar vs channel-wise
+    Q2.2: Per-stream (RGB vs Tactile) gate weight over training, one plot per
+    fusion type. gating_type is a deterministic function of fusion_type (each
+    fusion type is either scalar or channel-wise, never both), so there is no
+    scalar/channel-wise split to show per fusion type -- doing so previously
+    left one of every pair of subplots structurally empty ("No data").
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Group by fusion and gating type
     fusion_types = sorted(master_df["fusion_type"].unique())
-    gating_types = sorted(master_df["gating_type"].unique())
+    stream_colors = {'rgb': '#2ca02c', 'tactile': '#d62728'}
+    weights_col = "train_fusion_gate_mean"  # same as "fusion_weights"; "[rgb,tactile]" per epoch
 
-    colors = {
-        'scalar': '#1f77b4',
-        'channelwise': '#ff7f0e',
-        'unknown': '#888888'
-    }
-    stream_colors = {
-        'rgb': '#2ca02c',
-        'tactile': '#d62728'
-    }
-
-    # ===== MATPLOTLIB PLOTS =====
     for fusion_type in fusion_types:
-        fig, axes = plt.subplots(1, len(gating_types), figsize=(6 * len(gating_types), 5))
-        if len(gating_types) == 1:
-            axes = [axes]
+        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
 
-        for idx, gating_type in enumerate(gating_types):
-            ax = axes[idx]
-            subset_df = master_df[
-                (master_df["fusion_type"] == fusion_type) &
-                (master_df["gating_type"] == gating_type)
-            ]
+        if fusion_df.empty or weights_col not in fusion_df.columns:
+            print(f"Warning: no {weights_col} data for {fusion_type}, skipping")
+            continue
 
-            if subset_df.empty:
-                ax.text(0.5, 0.5, "No data", ha='center', va='center')
-                ax.set_title(f"{fusion_type} - {gating_type}")
-                continue
+        stream_df = _extract_stream_series(fusion_df, weights_col)
+        epoch_agg = stream_df.groupby("epoch").agg(
+            rgb_mean=("rgb", "mean"), rgb_std=("rgb", "std"),
+            tactile_mean=("tactile", "mean"), tactile_std=("tactile", "std"),
+        ).reset_index()
 
-            # Compute specialization for each stream
-            # Specialization = fraction_lt_0_1 + fraction_gt_0_9 (measure of bimodality)
-            rgb_spec_col = f"train_fusion_gate_fraction_lt_0_1"  # Will parse as list
-            tactile_spec_col = f"train_fusion_gate_fraction_gt_0_9"
+        # ===== MATPLOTLIB =====
+        fig, ax = plt.subplots(figsize=(8, 5.5))
 
-            # For now, use std as proxy for specialization (higher std = more spread = more selective)
-            rgb_std_col = "train_fusion_gate_std"
+        epochs_plot = epoch_agg["epoch"].values
+        ax.plot(epochs_plot, epoch_agg["rgb_mean"], label='RGB', linewidth=2.5,
+                marker='o', markersize=3, color=stream_colors['rgb'])
+        ax.fill_between(epochs_plot, epoch_agg["rgb_mean"] - epoch_agg["rgb_std"].fillna(0),
+                         epoch_agg["rgb_mean"] + epoch_agg["rgb_std"].fillna(0),
+                         alpha=0.2, color=stream_colors['rgb'])
 
-            # Check if columns exist
-            if rgb_std_col not in subset_df.columns:
-                ax.text(0.5, 0.5, f"Missing {rgb_std_col}", ha='center', va='center')
-                ax.set_title(f"{fusion_type} - {gating_type}")
-                continue
+        ax.plot(epochs_plot, epoch_agg["tactile_mean"], label='Tactile', linewidth=2.5,
+                marker='s', markersize=3, color=stream_colors['tactile'])
+        ax.fill_between(epochs_plot, epoch_agg["tactile_mean"] - epoch_agg["tactile_std"].fillna(0),
+                         epoch_agg["tactile_mean"] + epoch_agg["tactile_std"].fillna(0),
+                         alpha=0.2, color=stream_colors['tactile'])
 
-            # Parse the string values to extract RGB and Tactile
-            # Format: "[rgb_val, tactile_val]"
-            def extract_stream_vals(row_vals):
-                """Extract RGB and Tactile from string representation."""
-                rgb_list = []
-                tactile_list = []
-
-                for val in row_vals:
-                    parsed = parse_fusion_weights_string(val)
-                    if len(parsed) >= 1:
-                        rgb_list.append(parsed[0])
-                    if len(parsed) >= 2:
-                        tactile_list.append(parsed[1])
-
-                rgb_mean = np.mean(rgb_list) if rgb_list else np.nan
-                tactile_mean = np.mean(tactile_list) if tactile_list else np.nan
-
-                return rgb_mean, tactile_mean
-
-            # Plot specialization over epochs
-            rgb_specs = []
-            tactile_specs = []
-            epochs = []
-
-            for _, row in subset_df.sort_values("epoch").iterrows():
-                rgb_spec, tactile_spec = extract_stream_vals([row.get(rgb_std_col, "")])
-                epochs.append(row["epoch"])
-                rgb_specs.append(rgb_spec)
-                tactile_specs.append(tactile_spec)
-
-            # Aggregate by epoch
-            epoch_df = pd.DataFrame({
-                'epoch': epochs,
-                'rgb_spec': rgb_specs,
-                'tactile_spec': tactile_specs
-            })
-            epoch_agg = epoch_df.groupby('epoch').agg({
-                'rgb_spec': ['mean', 'std'],
-                'tactile_spec': ['mean', 'std']
-            }).reset_index()
-
-            if not epoch_agg.empty:
-                # Plot RGB
-                rgb_mean = epoch_agg[('rgb_spec', 'mean')].values
-                rgb_std = epoch_agg[('rgb_spec', 'std')].values
-                epochs_plot = epoch_agg['epoch'].values
-
-                ax.plot(epochs_plot, rgb_mean, label='RGB', linewidth=2.5, marker='o',
-                       markersize=3, color=stream_colors['rgb'])
-                ax.fill_between(epochs_plot, rgb_mean - rgb_std, rgb_mean + rgb_std,
-                               alpha=0.2, color=stream_colors['rgb'])
-
-                # Plot Tactile
-                tactile_mean = epoch_agg[('tactile_spec', 'mean')].values
-                tactile_std = epoch_agg[('tactile_spec', 'std')].values
-
-                ax.plot(epochs_plot, tactile_mean, label='Tactile', linewidth=2.5, marker='s',
-                       markersize=3, color=stream_colors['tactile'])
-                ax.fill_between(epochs_plot, tactile_mean - tactile_std, tactile_mean + tactile_std,
-                               alpha=0.2, color=stream_colors['tactile'])
-
-            ax.set_title(f"{fusion_type.upper()} - {gating_type.upper()}",
-                        fontsize=11, fontweight='bold')
-            ax.set_xlabel("Epoch")
-            ax.set_ylabel("Gate Specialization (Std Dev)")
-            ax.legend(fontsize=9)
-            ax.grid(True, alpha=0.3)
+        ax.set_title(f"Gate Weight Over Training: {fusion_type.upper()}", fontsize=12, fontweight='bold')
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Gate Weight (mean ± std across seeds)")
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
 
         save_figure(fig, output_dir, f"gate_specialization_{fusion_type}", fmt)
         plt.close()
 
-        # ===== PLOTLY INTERACTIVE VERSION =====
+        # ===== PLOTLY INTERACTIVE =====
         if PLOTLY_AVAILABLE and fmt and 'plotly_html' in fmt:
-            fig_plotly = make_subplots(
-                rows=1, cols=len(gating_types),
-                subplot_titles=[f"{gt.upper()}" for gt in gating_types],
-                specs=[[{"secondary_y": False} for _ in gating_types]]
-            )
-
-            for idx, gating_type in enumerate(gating_types):
-                subset_df = master_df[
-                    (master_df["fusion_type"] == fusion_type) &
-                    (master_df["gating_type"] == gating_type)
-                ]
-
-                if not subset_df.empty:
-                    rgb_std_col = "train_fusion_gate_std"
-                    if rgb_std_col in subset_df.columns:
-                        epoch_data = subset_df.groupby("epoch")[rgb_std_col].mean().reset_index()
-
-                        fig_plotly.add_trace(
-                            go.Scatter(x=epoch_data["epoch"], y=epoch_data[rgb_std_col],
-                                      mode='lines+markers', name=f"{fusion_type} - {gating_type}"),
-                            row=1, col=idx+1
-                        )
-
+            fig_plotly = go.Figure()
+            fig_plotly.add_trace(go.Scatter(x=epochs_plot, y=epoch_agg["rgb_mean"],
+                                             mode='lines+markers', name='RGB',
+                                             line=dict(color=stream_colors['rgb'])))
+            fig_plotly.add_trace(go.Scatter(x=epochs_plot, y=epoch_agg["tactile_mean"],
+                                             mode='lines+markers', name='Tactile',
+                                             line=dict(color=stream_colors['tactile'])))
             fig_plotly.update_layout(
-                title=f"Gate Specialization Over Training: {fusion_type.upper()}",
-                height=500,
-                template="plotly_white",
-                hovermode='x unified'
+                title=f"Gate Weight Over Training: {fusion_type.upper()}",
+                xaxis_title="Epoch", yaxis_title="Gate Weight",
+                height=500, width=800, template="plotly_white", hovermode='x unified'
             )
-            fig_plotly.update_yaxes(title_text="Specialization Score", row=1, col=1)
-
             save_plotly_figure(fig_plotly, output_dir, f"gate_specialization_{fusion_type}")
 
-    print(f"✓ Gate specialization plots saved to {output_dir}")
+    print(f"✓ Gate weight-over-training plots saved to {output_dir}")
 
 
-def plot_gating_weights_distribution(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
+def plot_gate_specialization_score_over_training(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
     """
-    Q2.1: Gating Weights Distribution
-    Boxplot for scalar gating, Violin plot for channel-wise gating
+    Q2.2b: Gate specialization score over training, one plot per fusion type.
+    specialization = fraction_lt_0_1 + fraction_gt_0_9 (per stream, per epoch),
+    i.e. the fraction of gate weights sitting near the extremes 0 or 1 --
+    a bimodality/decisiveness indicator distinct from the raw mean gate
+    weight plotted by plot_gate_specialization_over_training().
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fusion_types = sorted(master_df["fusion_type"].unique())
-    gating_types = sorted(master_df["gating_type"].unique())
+    stream_colors = {'rgb': '#2ca02c', 'tactile': '#d62728'}
+    lt_col = "train_fusion_gate_fraction_lt_0_1"
+    gt_col = "train_fusion_gate_fraction_gt_0_9"
 
     for fusion_type in fusion_types:
-        # Separate by gating type
-        fig, axes = plt.subplots(1, len(gating_types), figsize=(6 * len(gating_types), 6))
-        if len(gating_types) == 1:
-            axes = [axes]
+        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
 
-        for idx, gating_type in enumerate(gating_types):
-            ax = axes[idx]
-            subset_df = master_df[
-                (master_df["fusion_type"] == fusion_type) &
-                (master_df["gating_type"] == gating_type)
-            ]
+        if fusion_df.empty or lt_col not in fusion_df.columns or gt_col not in fusion_df.columns:
+            print(f"Warning: no {lt_col}/{gt_col} data for {fusion_type}, skipping")
+            continue
 
-            if subset_df.empty:
-                ax.text(0.5, 0.5, "No data", ha='center', va='center')
-                ax.set_title(f"{fusion_type} - {gating_type}")
+        lt_df = _extract_stream_series(fusion_df, lt_col)
+        gt_df = _extract_stream_series(fusion_df, gt_col)
+        spec_df = lt_df.copy()
+        spec_df["rgb"] = lt_df["rgb"] + gt_df["rgb"]
+        spec_df["tactile"] = lt_df["tactile"] + gt_df["tactile"]
+
+        epoch_agg = spec_df.groupby("epoch").agg(
+            rgb_mean=("rgb", "mean"), rgb_std=("rgb", "std"),
+            tactile_mean=("tactile", "mean"), tactile_std=("tactile", "std"),
+        ).reset_index()
+
+        # ===== MATPLOTLIB =====
+        fig, ax = plt.subplots(figsize=(8, 5.5))
+
+        epochs_plot = epoch_agg["epoch"].values
+        ax.plot(epochs_plot, epoch_agg["rgb_mean"], label='RGB', linewidth=2.5,
+                marker='o', markersize=3, color=stream_colors['rgb'])
+        ax.fill_between(epochs_plot, epoch_agg["rgb_mean"] - epoch_agg["rgb_std"].fillna(0),
+                         epoch_agg["rgb_mean"] + epoch_agg["rgb_std"].fillna(0),
+                         alpha=0.2, color=stream_colors['rgb'])
+
+        ax.plot(epochs_plot, epoch_agg["tactile_mean"], label='Tactile', linewidth=2.5,
+                marker='s', markersize=3, color=stream_colors['tactile'])
+        ax.fill_between(epochs_plot, epoch_agg["tactile_mean"] - epoch_agg["tactile_std"].fillna(0),
+                         epoch_agg["tactile_mean"] + epoch_agg["tactile_std"].fillna(0),
+                         alpha=0.2, color=stream_colors['tactile'])
+
+        ax.set_title(f"Gate Specialization Score Over Training: {fusion_type.upper()}",
+                     fontsize=12, fontweight='bold')
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Specialization Score (frac. < 0.1 + frac. > 0.9, mean ± std across seeds)")
+        ax.set_ylim([0, 1])
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+        save_figure(fig, output_dir, f"gate_specialization_score_{fusion_type}", fmt)
+        plt.close()
+
+        # ===== PLOTLY INTERACTIVE =====
+        if PLOTLY_AVAILABLE and fmt and 'plotly_html' in fmt:
+            fig_plotly = go.Figure()
+            fig_plotly.add_trace(go.Scatter(x=epochs_plot, y=epoch_agg["rgb_mean"],
+                                             mode='lines+markers', name='RGB',
+                                             line=dict(color=stream_colors['rgb'])))
+            fig_plotly.add_trace(go.Scatter(x=epochs_plot, y=epoch_agg["tactile_mean"],
+                                             mode='lines+markers', name='Tactile',
+                                             line=dict(color=stream_colors['tactile'])))
+            fig_plotly.update_layout(
+                title=f"Gate Specialization Score Over Training: {fusion_type.upper()}",
+                xaxis_title="Epoch", yaxis_title="Specialization Score",
+                height=500, width=800, template="plotly_white", hovermode='x unified'
+            )
+            save_plotly_figure(fig_plotly, output_dir, f"gate_specialization_score_{fusion_type}")
+
+    print(f"✓ Gate specialization-score-over-training plots saved to {output_dir}")
+
+
+def load_best_epoch_gate_weights(run_dir: Path) -> Optional[torch.Tensor]:
+    """
+    Load the raw (unaggregated) validation gate-weight tensor saved next to
+    checkpoint_best.pth by train.py's _save_raw_gate_weights(). Shape is
+    [n_val_samples, 2] for scalar gating or [n_val_samples, 2, n_channels]
+    for channel-wise gating; dim 1 is stream order [rgb, tactile] (matches
+    model.streams: [rgb_image, digit_image] in config.yml).
+    Returns None if the file or key is missing.
+    """
+    path = run_dir / "gate_weights_best_epoch.pt"
+    if not path.exists():
+        return None
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception as e:
+        print(f"Warning: failed to load {path}: {e}")
+        return None
+    return payload.get("val_gate_weights")
+
+
+def plot_gating_weights_distribution(master_df: pd.DataFrame, runs_dir: Path, output_dir: Path, fmt: str = "png"):
+    """
+    Q2.1: Gating Weights Distribution, from the raw per-sample / per-channel
+    best-epoch tensors in runs/<run>/gate_weights_best_epoch.pt (not the
+    per-epoch reduced metrics.csv columns, which only ever store an
+    already-averaged mean/std and can't show the true within-forward-pass
+    spread).
+
+    - Scalar gating: histogram of per-sample gate weight (one value per
+      validation sample per stream), pooled across all seeds.
+    - Channel-wise gating: violin plot of per-channel mean gate weight
+      (mean over validation samples for each of the n_channels, per stream),
+      pooled across all seeds -- this is the distribution the "granularity"
+      question actually asks about: do channels diverge in which stream
+      they trust, or does channel-wise gating collapse to near-uniform?
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    stream_colors = {'RGB': '#2ca02c', 'Tactile': '#d62728'}
+
+    for fusion_type in fusion_types:
+        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+        if fusion_df.empty:
+            continue
+
+        gating_type = fusion_df["gating_type"].iloc[0]
+        run_names = sorted(fusion_df["run_name"].unique())
+
+        rgb_chunks, tactile_chunks = [], []
+        for run_name in run_names:
+            tensor = load_best_epoch_gate_weights(runs_dir / run_name)
+            if tensor is None:
+                print(f"Warning: no gate_weights_best_epoch.pt for {run_name}, skipping that seed")
                 continue
+            tensor = tensor.float()
 
-            # Take final epoch only for distribution snapshot
-            final_epochs = subset_df[subset_df["epoch"] >= subset_df["epoch"].max() - 2]
+            if tensor.dim() == 2:  # scalar gating: [n_samples, 2]
+                rgb_chunks.append(tensor[:, 0])
+                tactile_chunks.append(tensor[:, 1])
+            elif tensor.dim() == 3:  # channel-wise gating: [n_samples, 2, n_channels]
+                per_channel_mean = tensor.mean(dim=0)  # [2, n_channels]
+                rgb_chunks.append(per_channel_mean[0])
+                tactile_chunks.append(per_channel_mean[1])
+            else:
+                print(f"Warning: unexpected val_gate_weights shape {tuple(tensor.shape)} for {run_name}, skipping")
 
-            # Extract RGB and Tactile gate means
-            gate_means = final_epochs["train_fusion_gate_mean"].values
-            plot_data = []
+        if not rgb_chunks:
+            print(f"Warning: no gate weight tensors loaded for {fusion_type}, skipping")
+            continue
 
-            for val in gate_means:
-                parsed = parse_fusion_weights_string(val)
-                if len(parsed) >= 1:
-                    plot_data.append({'Stream': 'RGB', 'Gate Weight': parsed[0]})
-                if len(parsed) >= 2:
-                    plot_data.append({'Stream': 'Tactile', 'Gate Weight': parsed[1]})
+        rgb_vals = torch.cat(rgb_chunks).numpy()
+        tactile_vals = torch.cat(tactile_chunks).numpy()
 
-            if plot_data:
-                plot_df = pd.DataFrame(plot_data)
+        fig, ax = plt.subplots(figsize=(7, 6))
 
-                # Boxplot
-                streams = sorted(plot_df['Stream'].unique())
-                positions = range(len(streams))
-                data_by_stream = [plot_df[plot_df['Stream'] == s]['Gate Weight'].values for s in streams]
+        if gating_type == "channelwise":
+            parts = ax.violinplot([rgb_vals, tactile_vals], positions=[0, 1], showmeans=True, showextrema=True)
+            for body, stream in zip(parts['bodies'], ['RGB', 'Tactile']):
+                body.set_facecolor(stream_colors[stream])
+                body.set_alpha(0.7)
+            for key in ('cbars', 'cmins', 'cmaxes', 'cmeans'):
+                parts[key].set_color('black')
+            ax.set_xticks([0, 1])
+            ax.set_xticklabels(['RGB', 'Tactile'])
+            ax.set_title(f"Gate Weight Distribution: {fusion_type.upper()}\n"
+                         f"(Per-Channel Mean, Best Epoch, {len(rgb_chunks)} Seeds, n={len(rgb_vals):,} channels)",
+                        fontsize=11, fontweight='bold')
+        else:
+            bins = np.linspace(0, 1, 41)
+            ax.hist(rgb_vals, bins=bins, alpha=0.6, color=stream_colors['RGB'], label='RGB')
+            ax.hist(tactile_vals, bins=bins, alpha=0.6, color=stream_colors['Tactile'], label='Tactile')
+            ax.set_xlabel("Gate Weight Value [0-1]")
+            ax.legend(fontsize=10)
+            ax.set_title(f"Gate Weight Distribution: {fusion_type.upper()}\n"
+                         f"(Per-Sample, Best Epoch, {len(rgb_chunks)} Seeds, n={len(rgb_vals):,} samples)",
+                        fontsize=11, fontweight='bold')
 
-                bp = ax.boxplot(data_by_stream, positions=positions, labels=streams,
-                               patch_artist=True, widths=0.6)
+        ax.set_ylabel("Gate Weight Value [0-1]" if gating_type == "channelwise" else "Count")
+        if gating_type == "channelwise":
+            ax.set_ylim([0, 1])
+        ax.grid(True, alpha=0.3, axis='y')
 
-                # Color boxes
-                colors_list = ['#2ca02c', '#d62728']
-                for patch, color in zip(bp['boxes'], colors_list[:len(streams)]):
-                    patch.set_facecolor(color)
-                    patch.set_alpha(0.7)
-
-                ax.set_title(f"{fusion_type.upper()} - {gating_type.upper()}",
-                            fontsize=11, fontweight='bold')
-                ax.set_ylabel("Gate Weight Value [0-1]")
-                ax.set_ylim([0, 1])
-                ax.grid(True, alpha=0.3, axis='y')
-
-        plt.tight_layout()
         save_figure(fig, output_dir, f"gating_weights_distribution_{fusion_type}", fmt)
         plt.close()
 
@@ -445,51 +485,92 @@ def plot_gating_weights_distribution(master_df: pd.DataFrame, output_dir: Path, 
 
 def plot_rotation_vs_translation_comparison(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
     """
-    Q2.3: Rotation vs Translation Task Performance
-    Scatter plot comparing scalar vs channel-wise gating
+    Q2.3: Rotation vs Translation Task Performance.
+    Single scatter plot with all 4 fusion methods as legend entries (one
+    point per run/seed, final-5-epochs average), plus a second version with
+    the seed number annotated next to each point. Repeated for the combined
+    translation error and for the Y-only / Z-only translation error
+    separately, since y/z can have different units/scales/behavior and a
+    combined metric can mask a per-axis effect.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fusion_types = sorted(master_df["fusion_type"].unique())
+    colors = {'gated_concat': '#1f77b4', 'residual_gated_concat': '#ff7f0e',
+              'channelwise_gated_concat': '#2ca02c', 'channelwise_residual_gated_concat': '#d62728'}
+    markers = {'gated_concat': 'o', 'residual_gated_concat': 's',
+               'channelwise_gated_concat': '^', 'channelwise_residual_gated_concat': 'D'}
 
-    for fusion_type in fusion_types:
-        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+    # (translation column, axis label, filename suffix)
+    trans_metrics = [
+        ("val_abs_trans", "Translation", "trans"),
+        ("val_abs_y", "Y Translation", "y"),
+        ("val_abs_z", "Z Translation", "z"),
+    ]
 
-        if fusion_df.empty:
+    for trans_col, trans_label, suffix in trans_metrics:
+        # Take final epochs for evaluation, then average per run_name so each
+        # seed contributes exactly one point instead of one point per epoch
+        # (5x overplotting per seed otherwise).
+        per_fusion_points = {}
+        for fusion_type in fusion_types:
+            fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+            final_epochs = fusion_df[fusion_df["epoch"] >= fusion_df.groupby("run_name")["epoch"].transform("max") - 4]
+            if "val_abs_rot_x" not in final_epochs.columns or trans_col not in final_epochs.columns:
+                continue
+            per_run = final_epochs.groupby("run_name").agg(
+                val_abs_rot_x=("val_abs_rot_x", "mean"),
+                trans_val=(trans_col, "mean"),
+                seed=("seed", "first"),
+            )
+            if not per_run.empty:
+                per_fusion_points[fusion_type] = per_run
+
+        if not per_fusion_points:
+            print(f"Warning: no data for {trans_col}, skipping task performance scatter")
             continue
 
+        filename_suffix = "" if suffix == "trans" else f"_{suffix}"
+
+        # ===== Plot 1: all 4 fusion methods on one scatter =====
         fig, ax = plt.subplots(figsize=(10, 8))
+        for fusion_type, per_run in per_fusion_points.items():
+            color = colors.get(fusion_type, '#000000')
+            marker = markers.get(fusion_type, 'o')
+            ax.scatter(per_run["trans_val"], per_run["val_abs_rot_x"], label=fusion_type.upper(),
+                       s=100, alpha=0.7, color=color, marker=marker)
 
-        gating_types = sorted(fusion_df["gating_type"].unique())
-        colors = {'scalar': '#1f77b4', 'channelwise': '#ff7f0e', 'unknown': '#888888'}
-        markers = {'scalar': 'o', 'channelwise': 's'}
-
-        # Take final epochs for evaluation
-        for gating_type in gating_types:
-            subset_df = fusion_df[fusion_df["gating_type"] == gating_type]
-            final_epochs = subset_df[subset_df["epoch"] >= subset_df.groupby("run_name")["epoch"].transform("max") - 4]
-
-            if "val_abs_rot_x" in final_epochs.columns and "val_abs_trans" in final_epochs.columns:
-                rot_vals = final_epochs["val_abs_rot_x"].values
-                trans_vals = final_epochs["val_abs_trans"].values
-
-                color = colors.get(gating_type, '#000000')
-                marker = markers.get(gating_type, 'o')
-                ax.scatter(trans_vals, rot_vals, label=gating_type.upper(), s=100, alpha=0.6,
-                          color=color, marker=marker)
-
-        ax.set_xlabel("Validation Translation Error [m]", fontsize=12, fontweight='bold')
+        ax.set_xlabel(f"Validation {trans_label} Error [m]", fontsize=12, fontweight='bold')
         ax.set_ylabel("Validation Rotation Error X [deg]", fontsize=12, fontweight='bold')
-        ax.set_title(f"Rotation vs Translation Task Performance\n{fusion_type.upper()}",
+        ax.set_title(f"Rotation vs {trans_label} Task Performance\n(Final 5 Epochs Average, All Fusion Methods)",
                     fontsize=13, fontweight='bold')
-        ax.legend(fontsize=11, loc='best')
+        ax.legend(fontsize=10, loc='best')
         ax.grid(True, alpha=0.3)
-
         plt.tight_layout()
-        save_figure(fig, output_dir, f"task_performance_{fusion_type}", fmt)
+        save_figure(fig, output_dir, f"task_performance_all_fusion_methods{filename_suffix}", fmt)
         plt.close()
 
-    print(f"✓ Task performance scatter plots saved to {output_dir}")
+        # ===== Plot 2: same data, with seed number labeled next to each point =====
+        fig, ax = plt.subplots(figsize=(10, 8))
+        for fusion_type, per_run in per_fusion_points.items():
+            color = colors.get(fusion_type, '#000000')
+            marker = markers.get(fusion_type, 'o')
+            ax.scatter(per_run["trans_val"], per_run["val_abs_rot_x"], label=fusion_type.upper(),
+                       s=100, alpha=0.7, color=color, marker=marker)
+            for trans, rot, seed in zip(per_run["trans_val"], per_run["val_abs_rot_x"], per_run["seed"]):
+                ax.annotate(str(seed), (trans, rot), textcoords="offset points", xytext=(6, 4), fontsize=8)
+
+        ax.set_xlabel(f"Validation {trans_label} Error [m]", fontsize=12, fontweight='bold')
+        ax.set_ylabel("Validation Rotation Error X [deg]", fontsize=12, fontweight='bold')
+        ax.set_title(f"Rotation vs {trans_label} Task Performance\n(Final 5 Epochs Average, Seed Labeled)",
+                    fontsize=13, fontweight='bold')
+        ax.legend(fontsize=10, loc='best')
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        save_figure(fig, output_dir, f"task_performance_all_fusion_methods_seeds{filename_suffix}", fmt)
+        plt.close()
+
+    print(f"✓ Task performance scatter plots (trans/y/z) saved to {output_dir}")
 
 
 def generate_summary_report(master_df: pd.DataFrame, output_dir: Path):
@@ -604,7 +685,8 @@ def main():
 
     # All plots
     plot_gate_specialization_over_training(master_df, output_dir / "specialization", fmt=args.format)
-    plot_gating_weights_distribution(master_df, output_dir / "weights_distribution", fmt=args.format)
+    plot_gate_specialization_score_over_training(master_df, output_dir / "specialization", fmt=args.format)
+    plot_gating_weights_distribution(master_df, runs_dir, output_dir / "weights_distribution", fmt=args.format)
     plot_rotation_vs_translation_comparison(master_df, output_dir / "task_performance", fmt=args.format)
 
     # Report

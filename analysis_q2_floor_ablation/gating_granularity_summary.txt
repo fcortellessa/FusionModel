@@ -1,0 +1,55 @@
+==========================================================================================
+Q2: GATING GRANULARITY ANALYSIS - SCALAR VS CHANNEL-WISE
+==========================================================================================
+
+
+================================================================================
+FUSION ARCHITECTURE: CHANNELWISE_GATED_CONCAT_FLOOR
+================================================================================
+
+  GATING TYPE: CHANNELWISE
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 6.37815 ± 1.16376
+    Val Abs Rotation X (deg): 0.8061 ± 0.0270
+    Val Abs Translation (m):  0.00073 ± 0.00001
+
+    Seeds Used: [46, 47, 48, 49, 50]
+
+================================================================================
+FUSION ARCHITECTURE: GATED_CONCAT_FLOOR
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 5.73712 ± 1.02553
+    Val Abs Rotation X (deg): 0.7696 ± 0.0160
+    Val Abs Translation (m):  0.00069 ± 0.00000
+
+    Seeds Used: [48, 50]
+
+==========================================================================================
+INTERPRETATION GUIDE
+==========================================================================================
+
+GATE SPECIALIZATION (Q2.2):
+  - Higher std/specialization = gates becoming more extreme (bimodal)
+  - Lower std/specialization = gates remain uncertain (near 0.5)
+  - Increasing trend = learning to specialize during training
+  - Flat trend = gates remain uncertain throughout
+
+GATING WEIGHTS DISTRIBUTION (Q2.1):
+  Scalar Gating:
+    - Single value per stream (RGB or Tactile)
+    - Boxplot shows spread across seeds/epochs
+    - Higher value = more trust in that stream
+
+  Channel-wise Gating:
+    - Multiple values per stream (one per channel)
+    - Histogram/violin shows per-channel trust distribution
+    - Spread indicates selective channel emphasis
+
+TASK PERFORMANCE (Q2.3):
+  - Scalar gating typically: faster convergence, potentially lower final performance
+  - Channel-wise gating typically: slower convergence, better selectivity
+  - Does specialization = higher performance?
+  - Which gating type balances rotation vs translation better?

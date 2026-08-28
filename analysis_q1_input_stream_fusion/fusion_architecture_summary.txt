@@ -6,12 +6,12 @@ INPUT STREAM FUSION ARCHITECTURE COMPARISON REPORT
 ================================================================================
 FUSION ARCHITECTURE: CONCAT
 ================================================================================
-  Val Loss (Last 5 Epochs):        6.43750 ± 2.66659
-  Val Abs Rotation X (deg):       1.5489 ± 0.9953
-  Val Abs Translation (m):        0.00270 ± 0.00169
-  Val Abs Y (m):                  0.00215
-  Val Abs Z (m):                  0.00129
-  Loss Improvement (Early→Late):  27.3%
+  Val Loss (Last 5 Epochs):        6.27610 ± 0.61462
+  Val Abs Rotation X (deg):       0.8262 ± 0.0122
+  Val Abs Translation (m):        0.00075 ± 0.00002
+  Val Abs Y (m):                  0.00059
+  Val Abs Z (m):                  0.00035
+  Loss Improvement (Early→Late):  -9.2%
 
   Seeds Used: [46, 47, 48, 49, 50]
   Total Runs: 5
@@ -19,12 +19,12 @@ FUSION ARCHITECTURE: CONCAT
 ================================================================================
 FUSION ARCHITECTURE: GATED
 ================================================================================
-  Val Loss (Last 5 Epochs):        5.88933 ± 1.15290
-  Val Abs Rotation X (deg):       0.8579 ± 0.0238
-  Val Abs Translation (m):        0.00146 ± 0.00138
-  Val Abs Y (m):                  0.00114
-  Val Abs Z (m):                  0.00071
-  Loss Improvement (Early→Late):  37.4%
+  Val Loss (Last 5 Epochs):        5.79160 ± 0.87644
+  Val Abs Rotation X (deg):       0.7876 ± 0.0121
+  Val Abs Translation (m):        0.00079 ± 0.00002
+  Val Abs Y (m):                  0.00058
+  Val Abs Z (m):                  0.00041
+  Loss Improvement (Early→Late):  -6.2%
 
   Seeds Used: [46, 47, 48, 49, 50]
   Total Runs: 5
@@ -32,15 +32,15 @@ FUSION ARCHITECTURE: GATED
 ================================================================================
 FUSION ARCHITECTURE: GATED_CONCAT
 ================================================================================
-  Val Loss (Last 5 Epochs):        6.35387 ± 2.17827
-  Val Abs Rotation X (deg):       1.7024 ± 1.2891
-  Val Abs Translation (m):        0.00187 ± 0.00168
-  Val Abs Y (m):                  0.00148
-  Val Abs Z (m):                  0.00089
-  Loss Improvement (Early→Late):  0.7%
+  Val Loss (Last 5 Epochs):        4.50788 ± 1.37927
+  Val Abs Rotation X (deg):       0.7861 ± 0.0304
+  Val Abs Translation (m):        0.00072 ± 0.00006
+  Val Abs Y (m):                  0.00055
+  Val Abs Z (m):                  0.00036
+  Loss Improvement (Early→Late):  14.7%
 
-  Seeds Used: [46, 47, 48]
-  Total Runs: 3
+  Seeds Used: [46, 47, 48, 49, 50]
+  Total Runs: 5
 
 ==========================================================================================
 FUSION ARCHITECTURE CHARACTERISTICS

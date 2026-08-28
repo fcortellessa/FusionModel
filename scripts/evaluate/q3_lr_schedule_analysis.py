@@ -184,16 +184,12 @@ def load_and_prepare_data(runs_dir: Path) -> Tuple[pd.DataFrame, Dict[str, dict]
 def plot_final_accuracy_scatter(master_df: pd.DataFrame, output_dir: Path, fmt=None):
     """
     Plot 1: Final accuracy by LR schedule
-    Scatter: rotation (loss_q) vs translation (loss_trans)
+    Scatter: rotation (loss_q) vs translation (loss_trans), plus the same
+    scatter re-run against the Y-only and Z-only translation loss
+    separately, since y/z can have different units/scales/behavior and a
+    combined metric can mask a per-axis effect.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    if "val_loss_q" not in master_df.columns or "val_loss_trans" not in master_df.columns:
-        print("Warning: val_loss_q or val_loss_trans not found, skipping scatter plot")
-        return
-
-    # Get final epochs
-    final_epochs = master_df[master_df["epoch"] >= master_df.groupby("run_name")["epoch"].transform("max") - 4]
 
     schedule_types = sorted(master_df["schedule_type"].unique())
     colors = {
@@ -204,92 +200,117 @@ def plot_final_accuracy_scatter(master_df: pd.DataFrame, output_dir: Path, fmt=N
         'unknown': '#888888'
     }
 
-    # ===== MATPLOTLIB SCATTER =====
-    fig, ax = plt.subplots(figsize=(12, 9))
+    # (translation loss column, axis label, filename suffix)
+    trans_metrics = [
+        ("val_loss_trans", "Translation", "trans"),
+        ("val_loss_y", "Y Translation", "y"),
+        ("val_loss_z", "Z Translation", "z"),
+    ]
 
-    for schedule_type in schedule_types:
-        sched_df = final_epochs[final_epochs["schedule_type"] == schedule_type]
-
-        if sched_df.empty:
+    for trans_col, trans_label, suffix in trans_metrics:
+        if "val_loss_q" not in master_df.columns or trans_col not in master_df.columns:
+            print(f"Warning: val_loss_q or {trans_col} not found, skipping scatter plot")
             continue
 
-        rot_vals = sched_df["val_loss_q"].values
-        trans_vals = sched_df["val_loss_trans"].values
-        seeds = sched_df["seed"].values
-        uncertainty = sched_df["uncertainty_enabled"].values
+        # Get final epochs, then average per run_name so each seed contributes
+        # exactly one point instead of one point per epoch (5x overplotting
+        # per seed otherwise).
+        final_epochs = master_df[master_df["epoch"] >= master_df.groupby("run_name")["epoch"].transform("max") - 4]
+        per_run = final_epochs.groupby(["run_name", "schedule_type"]).agg(
+            val_loss_q=("val_loss_q", "mean"),
+            trans_loss=(trans_col, "mean"),
+            seed=("seed", "first"),
+            uncertainty_enabled=("uncertainty_enabled", "first"),
+        ).reset_index()
 
-        color = colors.get(schedule_type, '#000000')
+        filename_suffix = "" if suffix == "trans" else f"_{suffix}"
 
-        # Plot points with uncertainty info in marker style
-        for i, (rot, trans, seed, unc) in enumerate(zip(rot_vals, trans_vals, seeds, uncertainty)):
-            marker = 'o' if not unc else 's'  # circle = no uncertainty, square = uncertainty
-            ax.scatter(trans, rot, s=150, alpha=0.7, color=color, marker=marker,
-                      edgecolors='black', linewidth=0.5)
-
-    # Create custom legend
-    from matplotlib.lines import Line2D
-    legend_elements = []
-    for schedule_type in schedule_types:
-        if schedule_type in colors:
-            legend_elements.append(Line2D([0], [0], marker='o', color='w',
-                                         markerfacecolor=colors[schedule_type], markersize=10,
-                                         label=schedule_type.replace('_', ' ')))
-    legend_elements.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='gray',
-                                 markersize=10, label='No Uncertainty'))
-    legend_elements.append(Line2D([0], [0], marker='s', color='w', markerfacecolor='gray',
-                                 markersize=10, label='Uncertainty Enabled'))
-
-    ax.legend(handles=legend_elements, fontsize=10, loc='best')
-
-    ax.set_xlabel("Validation Loss - Translation (val_loss_trans)", fontsize=12, fontweight='bold')
-    ax.set_ylabel("Validation Loss - Rotation (val_loss_q)", fontsize=12, fontweight='bold')
-    ax.set_title("Final Accuracy by LR Schedule\n(Circle=No Uncertainty | Square=Uncertainty Enabled)",
-                fontsize=13, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-
-    save_figure(fig, output_dir, "final_accuracy_by_lr_schedule", fmt)
-    plt.close()
-
-    # ===== PLOTLY INTERACTIVE =====
-    if PLOTLY_AVAILABLE and fmt and 'plotly_html' in fmt:
-        fig = go.Figure()
+        # ===== MATPLOTLIB SCATTER =====
+        fig, ax = plt.subplots(figsize=(12, 9))
 
         for schedule_type in schedule_types:
-            sched_df = final_epochs[final_epochs["schedule_type"] == schedule_type]
+            sched_df = per_run[per_run["schedule_type"] == schedule_type]
 
             if sched_df.empty:
                 continue
 
             rot_vals = sched_df["val_loss_q"].values
-            trans_vals = sched_df["val_loss_trans"].values
+            trans_vals = sched_df["trans_loss"].values
             seeds = sched_df["seed"].values
             uncertainty = sched_df["uncertainty_enabled"].values
 
             color = colors.get(schedule_type, '#000000')
 
-            fig.add_trace(go.Scatter(
-                x=trans_vals,
-                y=rot_vals,
-                mode='markers',
-                name=schedule_type.replace('_', ' '),
-                marker=dict(size=12, opacity=0.7, color=color),
-                text=[f"Seed: {s}, Uncertainty: {u}" for s, u in zip(seeds, uncertainty)],
-                hovertemplate='<b>%{fullData.name}</b><br>Trans Loss: %{x:.4f}<br>Rot Loss: %{y:.4f}<br>%{text}<extra></extra>'
-            ))
+            # Plot points with uncertainty info in marker style
+            for i, (rot, trans, seed, unc) in enumerate(zip(rot_vals, trans_vals, seeds, uncertainty)):
+                marker = 'o' if not unc else 's'  # circle = no uncertainty, square = uncertainty
+                ax.scatter(trans, rot, s=150, alpha=0.7, color=color, marker=marker,
+                          edgecolors='black', linewidth=0.5)
 
-        fig.update_layout(
-            title="Final Accuracy by LR Schedule (Interactive)",
-            xaxis_title="Validation Loss - Translation",
-            yaxis_title="Validation Loss - Rotation",
-            template="plotly_white",
-            height=700,
-            width=1000,
-            hovermode='closest'
-        )
+        # Create custom legend
+        from matplotlib.lines import Line2D
+        legend_elements = []
+        for schedule_type in schedule_types:
+            if schedule_type in colors:
+                legend_elements.append(Line2D([0], [0], marker='o', color='w',
+                                             markerfacecolor=colors[schedule_type], markersize=10,
+                                             label=schedule_type.replace('_', ' ')))
+        legend_elements.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='gray',
+                                     markersize=10, label='No Uncertainty'))
+        legend_elements.append(Line2D([0], [0], marker='s', color='w', markerfacecolor='gray',
+                                     markersize=10, label='Uncertainty Enabled'))
 
-        save_plotly_figure(fig, output_dir, "final_accuracy_by_lr_schedule")
+        ax.legend(handles=legend_elements, fontsize=10, loc='best')
 
-    print(f"✓ Final accuracy scatter plot saved to {output_dir}")
+        ax.set_xlabel(f"Validation Loss - {trans_label} ({trans_col})", fontsize=12, fontweight='bold')
+        ax.set_ylabel("Validation Loss - Rotation (val_loss_q)", fontsize=12, fontweight='bold')
+        ax.set_title(f"Final Accuracy by LR Schedule\n(Circle=No Uncertainty | Square=Uncertainty Enabled)",
+                    fontsize=13, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        save_figure(fig, output_dir, f"final_accuracy_by_lr_schedule{filename_suffix}", fmt)
+        plt.close()
+
+        # ===== PLOTLY INTERACTIVE =====
+        if PLOTLY_AVAILABLE and fmt and 'plotly_html' in fmt:
+            fig = go.Figure()
+
+            for schedule_type in schedule_types:
+                sched_df = per_run[per_run["schedule_type"] == schedule_type]
+
+                if sched_df.empty:
+                    continue
+
+                rot_vals = sched_df["val_loss_q"].values
+                trans_vals = sched_df["trans_loss"].values
+                seeds = sched_df["seed"].values
+                uncertainty = sched_df["uncertainty_enabled"].values
+
+                color = colors.get(schedule_type, '#000000')
+
+                fig.add_trace(go.Scatter(
+                    x=trans_vals,
+                    y=rot_vals,
+                    mode='markers',
+                    name=schedule_type.replace('_', ' '),
+                    marker=dict(size=12, opacity=0.7, color=color),
+                    text=[f"Seed: {s}, Uncertainty: {u}" for s, u in zip(seeds, uncertainty)],
+                    hovertemplate=f'<b>%{{fullData.name}}</b><br>{trans_label} Loss: %{{x:.4f}}<br>Rot Loss: %{{y:.4f}}<br>%{{text}}<extra></extra>'
+                ))
+
+            fig.update_layout(
+                title=f"Final Accuracy by LR Schedule (Interactive) - {trans_label}",
+                xaxis_title=f"Validation Loss - {trans_label}",
+                yaxis_title="Validation Loss - Rotation",
+                template="plotly_white",
+                height=700,
+                width=1000,
+                hovermode='closest'
+            )
+
+            save_plotly_figure(fig, output_dir, f"final_accuracy_by_lr_schedule{filename_suffix}")
+
+    print(f"✓ Final accuracy scatter plots (trans/y/z) saved to {output_dir}")
 
 
 def plot_convergence_loss_q(master_df: pd.DataFrame, output_dir: Path, fmt=None):
@@ -310,101 +331,93 @@ def plot_convergence_loss_q(master_df: pd.DataFrame, output_dir: Path, fmt=None)
         'unknown': '#888888'
     }
 
-    # ===== MATPLOTLIB =====
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    def _draw_ax(ax, col, split_label, log_scale):
+        # Log-scale variant skips std shading: mean-std can dip to <=0
+        # near a plateau, which is undefined on a log axis.
+        for schedule_type in schedule_types:
+            sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
+            by_epoch = sched_df.groupby("epoch")[col].agg(['mean', 'std']).reset_index()
 
-    # Train loss
-    ax_train = axes[0]
-    for schedule_type in schedule_types:
-        sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
-        by_epoch = sched_df.groupby("epoch")["train_loss_q"].agg(['mean', 'std']).reset_index()
-
-        color = colors.get(schedule_type, '#000000')
-        ax_train.plot(by_epoch["epoch"], by_epoch["mean"],
-                     label=schedule_type.replace('_', ' '), linewidth=2.5, color=color)
-        if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
-            ax_train.fill_between(by_epoch["epoch"],
+            color = colors.get(schedule_type, '#000000')
+            ax.plot(by_epoch["epoch"], by_epoch["mean"],
+                    label=schedule_type.replace('_', ' '), linewidth=2.5, color=color)
+            if not log_scale and by_epoch['std'].notna().any():
+                ax.fill_between(by_epoch["epoch"],
                                  by_epoch["mean"] - by_epoch["std"],
                                  by_epoch["mean"] + by_epoch["std"],
                                  alpha=0.15, color=color)
 
-    ax_train.set_title("Training Loss - Rotation (Loss_Q)", fontsize=11, fontweight='bold')
-    ax_train.set_xlabel("Epoch")
-    ax_train.set_ylabel("Loss Value")
-    ax_train.legend(fontsize=9)
-    ax_train.grid(True, alpha=0.3)
+        ax.set_title(f"{split_label}{' (log scale)' if log_scale else ''}", fontsize=11, fontweight='bold')
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss Value" + (" [log]" if log_scale else ""))
+        if log_scale:
+            ax.set_yscale('log')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3, which='both' if log_scale else 'major')
 
-    # Val loss
-    ax_val = axes[1]
-    for schedule_type in schedule_types:
-        sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
-        by_epoch = sched_df.groupby("epoch")["val_loss_q"].agg(['mean', 'std']).reset_index()
-
-        color = colors.get(schedule_type, '#000000')
-        ax_val.plot(by_epoch["epoch"], by_epoch["mean"],
-                   label=schedule_type.replace('_', ' '), linewidth=2.5, color=color)
-        if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
-            ax_val.fill_between(by_epoch["epoch"],
-                               by_epoch["mean"] - by_epoch["std"],
-                               by_epoch["mean"] + by_epoch["std"],
-                               alpha=0.15, color=color)
-
-    ax_val.set_title("Validation Loss - Rotation (Loss_Q)", fontsize=11, fontweight='bold')
-    ax_val.set_xlabel("Epoch")
-    ax_val.set_ylabel("Loss Value")
-    ax_val.legend(fontsize=9)
-    ax_val.grid(True, alpha=0.3)
-
+    # ===== MATPLOTLIB =====
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    _draw_ax(axes[0], "train_loss_q", "Training Loss - Rotation (Loss_Q)", log_scale=False)
+    _draw_ax(axes[1], "val_loss_q", "Validation Loss - Rotation (Loss_Q)", log_scale=False)
     save_figure(fig, output_dir, "convergence_loss_q_by_schedule", fmt)
+    plt.close()
+
+    # Log-y variant: early-training loss is often orders of magnitude
+    # above the plateau, compressing late-epoch differences on a linear
+    # axis. Log scale makes where each schedule actually converges legible.
+    fig_log, axes_log = plt.subplots(1, 2, figsize=(14, 5))
+    _draw_ax(axes_log[0], "train_loss_q", "Training Loss - Rotation (Loss_Q)", log_scale=True)
+    _draw_ax(axes_log[1], "val_loss_q", "Validation Loss - Rotation (Loss_Q)", log_scale=True)
+    save_figure(fig_log, output_dir, "convergence_loss_q_by_schedule_log", fmt)
     plt.close()
 
     # ===== PLOTLY INTERACTIVE =====
     if PLOTLY_AVAILABLE and fmt and 'plotly_html' in fmt:
-        fig = make_subplots(
-            rows=1, cols=2,
-            subplot_titles=("Training Loss - Rotation", "Validation Loss - Rotation"),
-            specs=[[{}, {}]]
-        )
-
-        for schedule_type in schedule_types:
-            sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
-            by_epoch_train = sched_df.groupby("epoch")["train_loss_q"].mean().reset_index()
-            by_epoch_val = sched_df.groupby("epoch")["val_loss_q"].mean().reset_index()
-
-            color = colors.get(schedule_type, '#000000')
-            label = schedule_type.replace('_', ' ')
-
-            fig.add_trace(
-                go.Scatter(x=by_epoch_train["epoch"], y=by_epoch_train["train_loss_q"],
-                          mode='lines', name=f"{label} (train)", line=dict(color=color)),
-                row=1, col=1
-            )
-            fig.add_trace(
-                go.Scatter(x=by_epoch_val["epoch"], y=by_epoch_val["val_loss_q"],
-                          mode='lines', name=f"{label} (val)", line=dict(color=color, dash='dash')),
-                row=1, col=2
+        for log_scale in (False, True):
+            fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=("Training Loss - Rotation", "Validation Loss - Rotation"),
+                specs=[[{}, {}]]
             )
 
-        fig.update_xaxes(title_text="Epoch", row=1, col=1)
-        fig.update_xaxes(title_text="Epoch", row=1, col=2)
-        fig.update_yaxes(title_text="Loss Value", row=1, col=1)
-        fig.update_yaxes(title_text="Loss Value", row=1, col=2)
-        fig.update_layout(template="plotly_white", height=500, width=1200, hovermode='x unified')
+            for schedule_type in schedule_types:
+                sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
+                by_epoch_train = sched_df.groupby("epoch")["train_loss_q"].mean().reset_index()
+                by_epoch_val = sched_df.groupby("epoch")["val_loss_q"].mean().reset_index()
 
-        save_plotly_figure(fig, output_dir, "convergence_loss_q_by_schedule")
+                color = colors.get(schedule_type, '#000000')
+                label = schedule_type.replace('_', ' ')
 
-    print(f"✓ Loss_Q convergence plot saved to {output_dir}")
+                fig.add_trace(
+                    go.Scatter(x=by_epoch_train["epoch"], y=by_epoch_train["train_loss_q"],
+                              mode='lines', name=f"{label} (train)", line=dict(color=color)),
+                    row=1, col=1
+                )
+                fig.add_trace(
+                    go.Scatter(x=by_epoch_val["epoch"], y=by_epoch_val["val_loss_q"],
+                              mode='lines', name=f"{label} (val)", line=dict(color=color, dash='dash')),
+                    row=1, col=2
+                )
+
+            fig.update_xaxes(title_text="Epoch", row=1, col=1)
+            fig.update_xaxes(title_text="Epoch", row=1, col=2)
+            fig.update_yaxes(title_text="Loss Value", type="log" if log_scale else "linear", row=1, col=1)
+            fig.update_yaxes(title_text="Loss Value", type="log" if log_scale else "linear", row=1, col=2)
+            fig.update_layout(template="plotly_white", height=500, width=1200, hovermode='x unified')
+
+            save_plotly_figure(fig, output_dir, "convergence_loss_q_by_schedule_log" if log_scale else "convergence_loss_q_by_schedule")
+
+    print(f"✓ Loss_Q convergence plots (linear + log-scale) saved to {output_dir}")
 
 
 def plot_convergence_loss_trans(master_df: pd.DataFrame, output_dir: Path, fmt=None):
     """
-    Plot 2b: Loss_Trans (translation) convergence over epochs
+    Plot 2b: Loss_Trans (translation) convergence over epochs, plus the same
+    convergence plot for the Y-only and Z-only translation loss separately,
+    since y/z can have different units/scales/behavior and a combined
+    metric can mask a per-axis effect.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    if "val_loss_trans" not in master_df.columns or "train_loss_trans" not in master_df.columns:
-        print("Warning: train_loss_trans or val_loss_trans not found, skipping loss_trans plot")
-        return
 
     schedule_types = sorted(master_df["schedule_type"].unique())
     colors = {
@@ -414,55 +427,54 @@ def plot_convergence_loss_trans(master_df: pd.DataFrame, output_dir: Path, fmt=N
         'unknown': '#888888'
     }
 
-    # ===== MATPLOTLIB =====
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    def _draw_ax(ax, col, split_label, log_scale):
+        for schedule_type in schedule_types:
+            sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
+            by_epoch = sched_df.groupby("epoch")[col].agg(['mean', 'std']).reset_index()
 
-    # Train loss
-    ax_train = axes[0]
-    for schedule_type in schedule_types:
-        sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
-        by_epoch = sched_df.groupby("epoch")["train_loss_trans"].agg(['mean', 'std']).reset_index()
-
-        color = colors.get(schedule_type, '#000000')
-        ax_train.plot(by_epoch["epoch"], by_epoch["mean"],
-                     label=schedule_type.replace('_', ' '), linewidth=2.5, color=color)
-        if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
-            ax_train.fill_between(by_epoch["epoch"],
+            color = colors.get(schedule_type, '#000000')
+            ax.plot(by_epoch["epoch"], by_epoch["mean"],
+                    label=schedule_type.replace('_', ' '), linewidth=2.5, color=color)
+            if not log_scale and by_epoch['std'].notna().any():
+                ax.fill_between(by_epoch["epoch"],
                                  by_epoch["mean"] - by_epoch["std"],
                                  by_epoch["mean"] + by_epoch["std"],
                                  alpha=0.15, color=color)
 
-    ax_train.set_title("Training Loss - Translation (Loss_Trans)", fontsize=11, fontweight='bold')
-    ax_train.set_xlabel("Epoch")
-    ax_train.set_ylabel("Loss Value")
-    ax_train.legend(fontsize=9)
-    ax_train.grid(True, alpha=0.3)
+        ax.set_title(f"{split_label}{' (log scale)' if log_scale else ''}", fontsize=11, fontweight='bold')
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss Value" + (" [log]" if log_scale else ""))
+        if log_scale:
+            ax.set_yscale('log')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3, which='both' if log_scale else 'major')
 
-    # Val loss
-    ax_val = axes[1]
-    for schedule_type in schedule_types:
-        sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
-        by_epoch = sched_df.groupby("epoch")["val_loss_trans"].agg(['mean', 'std']).reset_index()
+    # (train col, val col, axis label, filename suffix)
+    trans_metrics = [
+        ("train_loss_trans", "val_loss_trans", "Translation", "trans"),
+        ("loss_y", "val_loss_y", "Y Translation", "y"),
+        ("loss_z", "val_loss_z", "Z Translation", "z"),
+    ]
 
-        color = colors.get(schedule_type, '#000000')
-        ax_val.plot(by_epoch["epoch"], by_epoch["mean"],
-                   label=schedule_type.replace('_', ' '), linewidth=2.5, color=color)
-        if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
-            ax_val.fill_between(by_epoch["epoch"],
-                               by_epoch["mean"] - by_epoch["std"],
-                               by_epoch["mean"] + by_epoch["std"],
-                               alpha=0.15, color=color)
+    for train_col, val_col, trans_label, suffix in trans_metrics:
+        if val_col not in master_df.columns or train_col not in master_df.columns:
+            print(f"Warning: {train_col} or {val_col} not found, skipping {trans_label.lower()} loss plot")
+            continue
 
-    ax_val.set_title("Validation Loss - Translation (Loss_Trans)", fontsize=11, fontweight='bold')
-    ax_val.set_xlabel("Epoch")
-    ax_val.set_ylabel("Loss Value")
-    ax_val.legend(fontsize=9)
-    ax_val.grid(True, alpha=0.3)
+        # ===== MATPLOTLIB =====
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        _draw_ax(axes[0], train_col, f"Training Loss - {trans_label}", log_scale=False)
+        _draw_ax(axes[1], val_col, f"Validation Loss - {trans_label}", log_scale=False)
+        save_figure(fig, output_dir, f"convergence_loss_{suffix}_by_schedule", fmt)
+        plt.close()
 
-    save_figure(fig, output_dir, "convergence_loss_trans_by_schedule", fmt)
-    plt.close()
+        fig_log, axes_log = plt.subplots(1, 2, figsize=(14, 5))
+        _draw_ax(axes_log[0], train_col, f"Training Loss - {trans_label}", log_scale=True)
+        _draw_ax(axes_log[1], val_col, f"Validation Loss - {trans_label}", log_scale=True)
+        save_figure(fig_log, output_dir, f"convergence_loss_{suffix}_by_schedule_log", fmt)
+        plt.close()
 
-    print(f"✓ Loss_Trans convergence plot saved to {output_dir}")
+    print(f"✓ Loss_Trans convergence plots (trans/y/z, linear + log-scale) saved to {output_dir}")
 
 
 def plot_signed_errors(master_df: pd.DataFrame, output_dir: Path, fmt=None):
@@ -651,13 +663,12 @@ def plot_absolute_errors(master_df: pd.DataFrame, output_dir: Path, fmt=None):
 
 def plot_task_decoupling(master_df: pd.DataFrame, output_dir: Path, fmt=None):
     """
-    Plot 6: Task decoupling - loss ratio dynamics over training
+    Plot 6: Task decoupling - loss ratio dynamics over training, plus the
+    same ratio plot against the Y-only and Z-only translation loss
+    separately, since y/z can have different units/scales/behavior and a
+    combined metric can mask a per-axis effect.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    if "val_loss_q" not in master_df.columns or "val_loss_trans" not in master_df.columns:
-        print("Warning: Cannot compute loss ratio without loss_q and loss_trans")
-        return
 
     schedule_types = sorted(master_df["schedule_type"].unique())
     colors = {
@@ -667,37 +678,51 @@ def plot_task_decoupling(master_df: pd.DataFrame, output_dir: Path, fmt=None):
         'unknown': '#888888'
     }
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    # (translation loss column, axis label, filename suffix)
+    trans_metrics = [
+        ("val_loss_trans", "Loss_Trans", "trans"),
+        ("val_loss_y", "Loss_Y", "y"),
+        ("val_loss_z", "Loss_Z", "z"),
+    ]
 
-    for schedule_type in schedule_types:
-        sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
+    for trans_col, trans_label, suffix in trans_metrics:
+        if "val_loss_q" not in master_df.columns or trans_col not in master_df.columns:
+            print(f"Warning: Cannot compute loss ratio without loss_q and {trans_col}")
+            continue
 
-        # Compute loss ratio
-        sched_df = sched_df.copy()
-        sched_df['loss_ratio'] = sched_df['val_loss_q'] / (sched_df['val_loss_trans'] + 1e-6)
+        filename_suffix = "" if suffix == "trans" else f"_{suffix}"
 
-        by_epoch = sched_df.groupby("epoch")['loss_ratio'].agg(['mean', 'std']).reset_index()
+        fig, ax = plt.subplots(figsize=(12, 6))
 
-        color = colors.get(schedule_type, '#000000')
-        ax.plot(by_epoch["epoch"], by_epoch["mean"],
-               label=schedule_type.replace('_', ' '), linewidth=2.5, marker='o', markersize=3, color=color)
-        if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
-            ax.fill_between(by_epoch["epoch"],
-                           by_epoch["mean"] - by_epoch["std"],
-                           by_epoch["mean"] + by_epoch["std"],
-                           alpha=0.15, color=color)
+        for schedule_type in schedule_types:
+            sched_df = master_df[master_df["schedule_type"] == schedule_type].sort_values("epoch")
 
-    ax.set_title("Task Decoupling: Loss_Q / Loss_Trans Ratio Over Training\n(Global schedule forces ratio constant; Per-head allows variation)",
-                fontsize=11, fontweight='bold')
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss Ratio (Loss_Q / Loss_Trans)")
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
+            # Compute loss ratio
+            sched_df = sched_df.copy()
+            sched_df['loss_ratio'] = sched_df['val_loss_q'] / (sched_df[trans_col] + 1e-6)
 
-    save_figure(fig, output_dir, "task_decoupling_analysis", fmt)
-    plt.close()
+            by_epoch = sched_df.groupby("epoch")['loss_ratio'].agg(['mean', 'std']).reset_index()
 
-    print(f"✓ Task decoupling plot saved to {output_dir}")
+            color = colors.get(schedule_type, '#000000')
+            ax.plot(by_epoch["epoch"], by_epoch["mean"],
+                   label=schedule_type.replace('_', ' '), linewidth=2.5, marker='o', markersize=3, color=color)
+            if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
+                ax.fill_between(by_epoch["epoch"],
+                               by_epoch["mean"] - by_epoch["std"],
+                               by_epoch["mean"] + by_epoch["std"],
+                               alpha=0.15, color=color)
+
+        ax.set_title(f"Task Decoupling: Loss_Q / {trans_label} Ratio Over Training\n(Global schedule forces ratio constant; Per-head allows variation)",
+                    fontsize=11, fontweight='bold')
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel(f"Loss Ratio (Loss_Q / {trans_label})")
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        save_figure(fig, output_dir, f"task_decoupling_analysis{filename_suffix}", fmt)
+        plt.close()
+
+    print(f"✓ Task decoupling plots (trans/y/z) saved to {output_dir}")
 
 
 def plot_learning_rate_schedules(master_df: pd.DataFrame, output_dir: Path, fmt=None):

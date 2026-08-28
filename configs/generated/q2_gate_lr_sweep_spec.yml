@@ -1,0 +1,32 @@
+# Q2 follow-up: does the fusion gate need its own (higher) LR to reliably
+# leave initialization, instead of sharing the backbone's LR as part of the
+# optimizer's "base" param group? Tested on gated_concat (scalar gate) rather
+# than channelwise_gated_concat, to keep this intervention on a separate
+# architecture from the gate-floor fix being tried on channelwise_gated_concat
+# (see q2_gate_floor_full_grid_spec.yml) instead of compounding both on one
+# fusion type. gated_concat has its own instability history worth revisiting
+# under a dedicated gate LR: seeds 48/50 collapsed outright without grad_clip,
+# and seed 50 was still the earliest-stopping/weakest seed of the grid even
+# with grad_clip alone (runs/q2_ScalarVsChannelwise_gradclip).
+#
+# training.lr_fusion now gives the fusion module (utils/train_utils.py's
+# _build_named_param_groups "fusion" group) its own starting LR, independent
+# of training.lr (which stays at the baseline value for the backbone/heads).
+# Single-factor grid: lr_fusion only, fusion type held fixed at gated_concat,
+# same 5 seeds as every other q2 gradclip sweep for direct comparability.
+#
+# Template carries the exact grad_clip/warmup_cosine/early_stopping settings
+# the rest of the q2 gradclip grid used.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  model.fusion: "gated_concat"
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48, 49, 50]
+  training.lr_fusion:
+    - 0.0025   # 5x base lr (0.0005)
+    - 0.005    # 10x
+    - 0.01     # 20x

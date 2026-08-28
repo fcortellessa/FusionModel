@@ -1,0 +1,43 @@
+==========================================================================================
+Q2: GATING GRANULARITY ANALYSIS - SCALAR VS CHANNEL-WISE
+==========================================================================================
+
+
+================================================================================
+FUSION ARCHITECTURE: GATED_CONCAT
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 6.26450 ± 1.34752
+    Val Abs Rotation X (deg): 1.0006 ± 0.6774
+    Val Abs Translation (m):  0.00100 ± 0.00086
+
+    Seeds Used: [46, 47, 48, 49, 50]
+
+==========================================================================================
+INTERPRETATION GUIDE
+==========================================================================================
+
+GATE SPECIALIZATION (Q2.2):
+  - Higher std/specialization = gates becoming more extreme (bimodal)
+  - Lower std/specialization = gates remain uncertain (near 0.5)
+  - Increasing trend = learning to specialize during training
+  - Flat trend = gates remain uncertain throughout
+
+GATING WEIGHTS DISTRIBUTION (Q2.1):
+  Scalar Gating:
+    - Single value per stream (RGB or Tactile)
+    - Boxplot shows spread across seeds/epochs
+    - Higher value = more trust in that stream
+
+  Channel-wise Gating:
+    - Multiple values per stream (one per channel)
+    - Histogram/violin shows per-channel trust distribution
+    - Spread indicates selective channel emphasis
+
+TASK PERFORMANCE (Q2.3):
+  - Scalar gating typically: faster convergence, potentially lower final performance
+  - Channel-wise gating typically: slower convergence, better selectivity
+  - Does specialization = higher performance?
+  - Which gating type balances rotation vs translation better?

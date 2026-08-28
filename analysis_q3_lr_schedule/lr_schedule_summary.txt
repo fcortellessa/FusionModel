@@ -32,28 +32,28 @@ SCHEDULE: GLOBAL_WARMUP_COSINE
 ================================================================================
 SCHEDULE: PERHEAD_COSINE_LR_SCHEDULE
 ================================================================================
-  Combined Val Loss (Last 5 Epochs):  4.48399 ± 1.60163
-  Val Loss - Rotation (loss_q):        2.93614 ± 0.07688
-  Val Abs Rotation Error (deg):       0.8405 ± 0.0220
-  Val Abs Y Translation (m):          0.00061
-  Val Abs Z Translation (m):          0.00037
+  Combined Val Loss (Last 5 Epochs):  5.01359 ± 2.03009
+  Val Loss - Rotation (loss_q):        3.81524 ± 2.75028
+  Val Abs Rotation Error (deg):       1.0923 ± 0.7880
+  Val Abs Y Translation (m):          0.00087
+  Val Abs Z Translation (m):          0.00052
 
-  Seeds Used: [46, 47, 48]
-  Runs: 5
-  Best Epoch (mean ± std):            33.4 ± 13.6
+  Seeds Used: [46, 47, 48, 49, 50]
+  Runs: 10
+  Best Epoch (mean ± std):            31.1 ± 12.7
 
 ================================================================================
 SCHEDULE: PERHEAD_DECAYLRONPLATEAU
 ================================================================================
-  Combined Val Loss (Last 5 Epochs):  2.77133 ± 0.58432
-  Val Loss - Rotation (loss_q):        3.35418 ± 0.90712
-  Val Abs Rotation Error (deg):       0.9601 ± 0.2594
-  Val Abs Y Translation (m):          0.00077
-  Val Abs Z Translation (m):          0.00045
+  Combined Val Loss (Last 5 Epochs):  2.74847 ± 0.60031
+  Val Loss - Rotation (loss_q):        3.17025 ± 0.71261
+  Val Abs Rotation Error (deg):       0.9077 ± 0.2042
+  Val Abs Y Translation (m):          0.00075
+  Val Abs Z Translation (m):          0.00044
 
   Seeds Used: [46, 47, 48, 49, 50]
-  Runs: 11
-  Best Epoch (mean ± std):            28.9 ± 9.0
+  Runs: 10
+  Best Epoch (mean ± std):            30.3 ± 8.2
 
 ==========================================================================================
 INTERPRETATION GUIDE

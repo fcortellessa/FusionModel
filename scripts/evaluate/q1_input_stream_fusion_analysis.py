@@ -160,12 +160,18 @@ def plot_rotation_vs_translation_scatter(master_df: pd.DataFrame, output_dir: Pa
     for fusion_type in fusion_types:
         fuse_df = master_df[master_df["fusion_type"] == fusion_type]
 
-        # Take last 5 epochs for final performance estimate
+        # Take last 5 epochs for final performance estimate, then average
+        # per run_name so each seed contributes exactly one point instead
+        # of one point per epoch (5x overplotting per seed otherwise).
         final_epochs = fuse_df[fuse_df["epoch"] >= fuse_df.groupby("run_name")["epoch"].transform("max") - 4]
+        per_run = final_epochs.groupby("run_name").agg(
+            val_abs_rot_x=("val_abs_rot_x", "mean"),
+            val_abs_trans=("val_abs_trans", "mean"),
+        ) if "val_abs_rot_x" in final_epochs.columns and "val_abs_trans" in final_epochs.columns else None
 
-        if "val_abs_rot_x" in final_epochs.columns and "val_abs_trans" in final_epochs.columns:
-            rot_vals = final_epochs["val_abs_rot_x"].values
-            trans_vals = final_epochs["val_abs_trans"].values
+        if per_run is not None:
+            rot_vals = per_run["val_abs_rot_x"].values
+            trans_vals = per_run["val_abs_trans"].values
 
             color = colors.get(fusion_type, '#000000')
             ax.scatter(trans_vals, rot_vals, label=fusion_type.upper(), s=100, alpha=0.6, color=color)
@@ -187,11 +193,16 @@ def plot_rotation_vs_translation_scatter(master_df: pd.DataFrame, output_dir: Pa
         for fusion_type in fusion_types:
             fuse_df = master_df[master_df["fusion_type"] == fusion_type]
             final_epochs = fuse_df[fuse_df["epoch"] >= fuse_df.groupby("run_name")["epoch"].transform("max") - 4]
+            per_run = final_epochs.groupby("run_name").agg(
+                val_abs_rot_x=("val_abs_rot_x", "mean"),
+                val_abs_trans=("val_abs_trans", "mean"),
+                seed=("seed", "first"),
+            ) if "val_abs_rot_x" in final_epochs.columns and "val_abs_trans" in final_epochs.columns else None
 
-            if "val_abs_rot_x" in final_epochs.columns and "val_abs_trans" in final_epochs.columns:
-                rot_vals = final_epochs["val_abs_rot_x"].values
-                trans_vals = final_epochs["val_abs_trans"].values
-                seeds = final_epochs["seed"].values
+            if per_run is not None:
+                rot_vals = per_run["val_abs_rot_x"].values
+                trans_vals = per_run["val_abs_trans"].values
+                seeds = per_run["seed"].values
 
                 color = colors.get(fusion_type, '#000000')
                 fig.add_trace(go.Scatter(
@@ -220,6 +231,93 @@ def plot_rotation_vs_translation_scatter(master_df: pd.DataFrame, output_dir: Pa
     print(f"✓ Rotation vs Translation scatter plots saved to {output_dir}")
 
 
+def plot_rotation_vs_translation_scatter_comparison(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
+    """
+    Rotation vs translation scatter, plus the same scatter re-run against the
+    Y-only and Z-only translation error separately (in addition to the
+    combined val_abs_trans = sqrt(y^2+z^2)-style metric), since y/z can have
+    different units/scales/behavior and a combined metric can mask a
+    per-axis effect.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    colors = {'concat': '#1f77b4', 'gating': '#ff7f0e', 'gated_concat': '#2ca02c',
+              'gated_concatenation': '#2ca02c', 'simple_gated': '#d62728', 'ARGate_Fusion': '#9467bd'}
+    markers = {'concat': 'o', 'gating': 's', 'gated_concat': '^',
+               'gated_concatenation': '^', 'simple_gated': 'D', 'ARGate_Fusion': 'P'}
+
+    # (translation column, axis label, filename suffix)
+    trans_metrics = [
+        ("val_abs_trans", "Translation", "trans"),
+        ("val_abs_y", "Y Translation", "y"),
+        ("val_abs_z", "Z Translation", "z"),
+    ]
+
+    for trans_col, trans_label, suffix in trans_metrics:
+        # Take final epochs for evaluation, then average per run_name so each
+        # seed contributes exactly one point instead of one point per epoch
+        # (5x overplotting per seed otherwise).
+        per_fusion_points = {}
+        for fusion_type in fusion_types:
+            fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+            final_epochs = fusion_df[fusion_df["epoch"] >= fusion_df.groupby("run_name")["epoch"].transform("max") - 4]
+            if "val_abs_rot_x" not in final_epochs.columns or trans_col not in final_epochs.columns:
+                continue
+            per_run = final_epochs.groupby("run_name").agg(
+                val_abs_rot_x=("val_abs_rot_x", "mean"),
+                trans_val=(trans_col, "mean"),
+                seed=("seed", "first"),
+            )
+            if not per_run.empty:
+                per_fusion_points[fusion_type] = per_run
+
+        if not per_fusion_points:
+            print(f"Warning: no data for {trans_col}, skipping task performance scatter")
+            continue
+
+        filename_suffix = "" if suffix == "trans" else f"_{suffix}"
+
+        # ===== Plot 1: all fusion methods on one scatter =====
+        fig, ax = plt.subplots(figsize=(10, 8))
+        for fusion_type, per_run in per_fusion_points.items():
+            color = colors.get(fusion_type, '#000000')
+            marker = markers.get(fusion_type, 'o')
+            ax.scatter(per_run["trans_val"], per_run["val_abs_rot_x"], label=fusion_type.upper(),
+                       s=100, alpha=0.7, color=color, marker=marker)
+
+        ax.set_xlabel(f"Validation {trans_label} Error [m]", fontsize=12, fontweight='bold')
+        ax.set_ylabel("Validation Rotation Error X [deg]", fontsize=12, fontweight='bold')
+        ax.set_title(f"Rotation vs {trans_label} Task Performance\n(Final 5 Epochs Average, All Fusion Methods)",
+                    fontsize=13, fontweight='bold')
+        ax.legend(fontsize=10, loc='best')
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        save_figure(fig, output_dir, f"task_performance_all_fusion_methods{filename_suffix}", fmt)
+        plt.close()
+
+        # ===== Plot 2: same data, with seed number labeled next to each point =====
+        fig, ax = plt.subplots(figsize=(10, 8))
+        for fusion_type, per_run in per_fusion_points.items():
+            color = colors.get(fusion_type, '#000000')
+            marker = markers.get(fusion_type, 'o')
+            ax.scatter(per_run["trans_val"], per_run["val_abs_rot_x"], label=fusion_type.upper(),
+                       s=100, alpha=0.7, color=color, marker=marker)
+            for trans, rot, seed in zip(per_run["trans_val"], per_run["val_abs_rot_x"], per_run["seed"]):
+                ax.annotate(str(seed), (trans, rot), textcoords="offset points", xytext=(6, 4), fontsize=8)
+
+        ax.set_xlabel(f"Validation {trans_label} Error [m]", fontsize=12, fontweight='bold')
+        ax.set_ylabel("Validation Rotation Error X [deg]", fontsize=12, fontweight='bold')
+        ax.set_title(f"Rotation vs {trans_label} Task Performance\n(Final 5 Epochs Average, Seed Labeled)",
+                    fontsize=13, fontweight='bold')
+        ax.legend(fontsize=10, loc='best')
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        save_figure(fig, output_dir, f"task_performance_all_fusion_methods_seeds{filename_suffix}", fmt)
+        plt.close()
+
+    print(f"✓ Task performance scatter plots (trans/y/z) saved to {output_dir}")
+
 def plot_convergence_comparison(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
     """
     Line plots comparing convergence rates: high-dim (concat/gated_concat) vs low-dim (gating).
@@ -242,12 +340,42 @@ def plot_convergence_comparison(master_df: pd.DataFrame, output_dir: Path, fmt: 
     metrics = [
         ("loss_q", "val_loss_q", "Rotation Loss (fixed-scale, unweighted)", "Loss Value"),
         ("train_loss_trans", "val_loss_trans", "Translation Loss (unweighted)", "Loss Value"),
+        ("loss_y", "val_loss_y", "Translation Y Loss (unweighted)", "Loss Value"),
+        ("loss_z", "val_loss_z", "Translation Z Loss (unweighted)", "Loss Value"),
         ("train_abs_rot_x", "val_abs_rot_x", "Rotation Error", "Error [deg]"),
         ("train_abs_trans", "val_abs_trans", "Translation Error", "Error [m]"),
+        ("train_abs_y", "val_abs_y", "Translation Y Error", "Error [m]"),
+        ("train_abs_z", "val_abs_z", "Translation Z Error", "Error [m]"),
     ]
 
     colors = {'concat': '#1f77b4', 'gating': '#ff7f0e', 'gated_concat': '#2ca02c',
               'gated_concatenation': '#2ca02c', 'simple_gated': '#d62728', 'ARGate_Fusion': '#9467bd'}
+
+    def _draw_convergence_ax(ax, col, split_label, log_scale):
+        # On the log-scale variant, skip the std shading: mean-std can dip
+        # to <=0 for near-zero error metrics, which is undefined on a log
+        # axis and would silently clip/warn. Mean lines alone are what
+        # actually shows where each curve flattens out.
+        for fusion_type in fusion_types:
+            fuse_df = master_df[master_df["fusion_type"] == fusion_type].sort_values("epoch")
+            by_epoch = fuse_df.groupby("epoch")[col].agg(['mean', 'std']).reset_index()
+
+            color = colors.get(fusion_type, '#000000')
+            ax.plot(by_epoch["epoch"], by_epoch["mean"], label=fusion_type.upper(),
+                    linewidth=2, color=color)
+            if not log_scale and by_epoch['std'].notna().any():
+                ax.fill_between(by_epoch["epoch"],
+                                 by_epoch["mean"] - by_epoch["std"],
+                                 by_epoch["mean"] + by_epoch["std"],
+                                 alpha=0.15, color=color)
+
+        ax.set_title(f"{split_label}{' (log scale)' if log_scale else ''}", fontsize=11, fontweight='bold')
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel(ylabel + (" [log]" if log_scale else ""))
+        if log_scale:
+            ax.set_yscale('log')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3, which='both' if log_scale else 'major')
 
     # ===== MATPLOTLIB PLOTS =====
     for train_col, val_col, title, ylabel in metrics:
@@ -256,53 +384,22 @@ def plot_convergence_comparison(master_df: pd.DataFrame, output_dir: Path, fmt: 
             continue
 
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-        # Train plot
-        ax_train = axes[0]
-        for fusion_type in fusion_types:
-            fuse_df = master_df[master_df["fusion_type"] == fusion_type].sort_values("epoch")
-            by_epoch = fuse_df.groupby("epoch")[train_col].agg(['mean', 'std']).reset_index()
-
-            color = colors.get(fusion_type, '#000000')
-            ax_train.plot(by_epoch["epoch"], by_epoch["mean"], label=fusion_type.upper(),
-                         linewidth=2, color=color)
-            if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
-                ax_train.fill_between(by_epoch["epoch"],
-                                     by_epoch["mean"] - by_epoch["std"],
-                                     by_epoch["mean"] + by_epoch["std"],
-                                     alpha=0.15, color=color)
-
-        ax_train.set_title(f"Training {title}", fontsize=11, fontweight='bold')
-        ax_train.set_xlabel("Epoch")
-        ax_train.set_ylabel(ylabel)
-        ax_train.legend(fontsize=9)
-        ax_train.grid(True, alpha=0.3)
-
-        # Val plot
-        ax_val = axes[1]
-        for fusion_type in fusion_types:
-            fuse_df = master_df[master_df["fusion_type"] == fusion_type].sort_values("epoch")
-            by_epoch = fuse_df.groupby("epoch")[val_col].agg(['mean', 'std']).reset_index()
-
-            color = colors.get(fusion_type, '#000000')
-            ax_val.plot(by_epoch["epoch"], by_epoch["mean"], label=fusion_type.upper(),
-                       linewidth=2, color=color)
-            if 'std' in by_epoch.columns and by_epoch['std'].notna().any():
-                ax_val.fill_between(by_epoch["epoch"],
-                                   by_epoch["mean"] - by_epoch["std"],
-                                   by_epoch["mean"] + by_epoch["std"],
-                                   alpha=0.15, color=color)
-
-        ax_val.set_title(f"Validation {title}", fontsize=11, fontweight='bold')
-        ax_val.set_xlabel("Epoch")
-        ax_val.set_ylabel(ylabel)
-        ax_val.legend(fontsize=9)
-        ax_val.grid(True, alpha=0.3)
-
+        _draw_convergence_ax(axes[0], train_col, f"Training {title}", log_scale=False)
+        _draw_convergence_ax(axes[1], val_col, f"Validation {title}", log_scale=False)
         save_figure(fig, output_dir, f"convergence_{train_col.replace('train_', '')}", fmt)
         plt.close()
 
-    print(f"✓ Convergence comparison plots saved to {output_dir}")
+        # Log-y variant: early-training loss/error values are often
+        # orders of magnitude above the plateau, which compresses the
+        # late-epoch differences on a linear axis. Log scale makes the
+        # actual convergence point (where curves flatten) legible.
+        fig_log, axes_log = plt.subplots(1, 2, figsize=(14, 5))
+        _draw_convergence_ax(axes_log[0], train_col, f"Training {title}", log_scale=True)
+        _draw_convergence_ax(axes_log[1], val_col, f"Validation {title}", log_scale=True)
+        save_figure(fig_log, output_dir, f"convergence_{train_col.replace('train_', '')}_log", fmt)
+        plt.close()
+
+    print(f"✓ Convergence comparison plots (linear + log-scale) saved to {output_dir}")
 
 
 def plot_signed_errors_over_epochs(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
@@ -618,7 +715,7 @@ def main():
     print("\nGenerating analysis plots...")
 
     # All plots
-    plot_rotation_vs_translation_scatter(master_df, output_dir / "performance", fmt=args.format)
+    plot_rotation_vs_translation_scatter_comparison(master_df, output_dir / "performance", fmt=args.format)
     plot_convergence_comparison(master_df, output_dir / "convergence", fmt=args.format)
     plot_signed_errors_over_epochs(master_df, output_dir / "signed_errors", fmt=args.format)
     plot_signed_test_error_distribution(test_results, output_dir / "test_errors", fmt=args.format)

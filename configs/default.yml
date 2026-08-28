@@ -32,6 +32,15 @@ model:
 
 training:
   lr: 0.001
+  # Optional: starting LR for the fusion module's own parameters (the fusion
+  # module named `model.fusion` / `fusion_rotation` / `fusion_translation`,
+  # e.g. the channel-wise gate's conv/MLP layers), given its own optimizer
+  # param group instead of sharing `lr` with the pretrained backbone. Unset
+  # (or omitted) falls back to `lr`, matching the previous behavior where the
+  # fusion module was lumped into the backbone's "base" param group. Follows
+  # the same global LR schedule as "base" (scaled from this starting value),
+  # but does NOT get HeadLRDecayManager's per-head plateau decay.
+  # lr_fusion: 0.005
   batch_size: 16
   epochs: 50
   num_workers: 4
