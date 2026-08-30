@@ -1,0 +1,24 @@
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+# Companion sweep to Q2_spec.yml (configs/generated/q2_ScalarVsChannelwise), testing
+# whether widening the channel-wise gated-concat variants' gate MLP hidden bottleneck
+# from 32 -> 256 (channelwise_*_gated_concat_wide, see fusion/gated_concat.py) reduces
+# the per-channel gate saturation/collapse observed with the original 32-unit bottleneck
+# (~80% of channels pinned near 0/1 -- see analysis_q2_gating_granularity). Same seeds
+# and fixed_overrides as Q2_spec.yml so results are directly comparable against the
+# existing channelwise_gated_concat / channelwise_residual_gated_concat runs.
+
+fixed_overrides:
+  model.translation_head_mode: "joint"
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
+  data.split_seed: 40
+  group_aware_split: true
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.dropout_rot: 0.1
+
+grid:
+  training.seed: [46, 47, 48, 49, 50]
+  model.fusion:
+    - "channelwise_gated_concat_wide"
+    - "channelwise_residual_gated_concat_wide"

@@ -13,15 +13,26 @@ from .base import BaseFusion
 
 
 class _BaseGatedConcatFusion(BaseFusion):
-    """Shared gate MLP and input handling for gated concatenation modules."""
+    """Shared gate MLP and input handling for gated concatenation modules.
 
-    def __init__(self, dim: int, num_streams: int, gate_outputs: int):
+    `gate_hidden_dim` defaults to 32 -- the original width chosen (commit 5d1fd1a)
+    for the *scalar* gate variants, where gate_outputs = num_streams (e.g. 2). The
+    channel-wise variants (gate_outputs = num_streams * dim, e.g. 44800) inherited
+    that same 32-unit width unchanged, which forces every one of the ~45k per-channel
+    gate logits through a 32-dim bottleneck -- empirically this collapses ~80% of
+    channels into two saturated clusters (near 0 / near 1) rather than learning
+    independent per-channel trust (see q2_gating_granularity gate stats). The
+    "_wide" channel-wise variants below widen this bottleneck to give channel-wise
+    gating room to actually specialize per channel instead of per shared-latent-mode.
+    """
+
+    def __init__(self, dim: int, num_streams: int, gate_outputs: int, gate_hidden_dim: int = 32):
         super().__init__(dim, num_streams)
         self.gate = nn.Sequential(
-            nn.Linear(dim * num_streams, 32),
+            nn.Linear(dim * num_streams, gate_hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(32, gate_outputs),
+            nn.Linear(gate_hidden_dim, gate_outputs),
         )
 
         # Begin with near-neutral gates while retaining gradients for learning.
@@ -100,8 +111,8 @@ class ResidualGatedConcatFusion(_BaseGatedConcatFusion):
 class ChannelWiseGatedConcatFusion(_BaseGatedConcatFusion):
     """Apply an independent sigmoid gate to every channel of every stream, then concatenate."""
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, gate_outputs=num_streams * dim)
+    def __init__(self, dim: int, num_streams: int, gate_hidden_dim: int = 32):
+        super().__init__(dim, num_streams, gate_outputs=num_streams * dim, gate_hidden_dim=gate_hidden_dim)
 
     def forward(self, features_list):
         # Reshape flat gate logits into one (num_streams, dim) gate map per item.
@@ -115,6 +126,19 @@ class ChannelWiseGatedConcatFusion(_BaseGatedConcatFusion):
         ]
         out = torch.cat(weighted_features, dim=1)
         return out, weights
+
+
+@register_fusion("channelwise_gated_concat_wide")
+class ChannelWiseGatedConcatWideFusion(ChannelWiseGatedConcatFusion):
+    """channelwise_gated_concat with the gate MLP's hidden bottleneck widened from
+    32 to WIDE_HIDDEN_DIM, so ~44800 per-channel gate logits aren't all forced
+    through the same 32-dim shared representation (see _BaseGatedConcatFusion
+    docstring)."""
+
+    WIDE_HIDDEN_DIM = 256
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, gate_hidden_dim=self.WIDE_HIDDEN_DIM)
 
 
 @register_fusion("gated_concat_floor")
@@ -160,8 +184,8 @@ class ChannelWiseGatedConcatFloorFusion(_BaseFloorGatedConcatFusion):
 class ChannelWiseResidualGatedConcatFusion(_BaseGatedConcatFusion):
     """Concatenate streams after independently residual-gating every channel."""
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, gate_outputs=num_streams * dim)
+    def __init__(self, dim: int, num_streams: int, gate_hidden_dim: int = 32):
+        super().__init__(dim, num_streams, gate_outputs=num_streams * dim, gate_hidden_dim=gate_hidden_dim)
 
     def forward(self, features_list):
         # Reshape flat gate logits into one (num_streams, dim) gate map per item.
@@ -170,6 +194,164 @@ class ChannelWiseResidualGatedConcatFusion(_BaseGatedConcatFusion):
         weights = torch.sigmoid(weights)  # (B, num_streams, dim)
 
         # Residual channel-wise gates amplify without removing the base features.
+        weighted_features = [
+            (1 + weights[:, stream_idx, :]) * feature
+            for stream_idx, feature in enumerate(features_list)
+        ]
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
+@register_fusion("channelwise_residual_gated_concat_wide")
+class ChannelWiseResidualGatedConcatWideFusion(ChannelWiseResidualGatedConcatFusion):
+    """channelwise_residual_gated_concat with the gate MLP's hidden bottleneck
+    widened from 32 to WIDE_HIDDEN_DIM (see _BaseGatedConcatFusion docstring and
+    ChannelWiseGatedConcatWideFusion)."""
+
+    WIDE_HIDDEN_DIM = 256
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, gate_hidden_dim=self.WIDE_HIDDEN_DIM)
+
+
+class _PerChannelGatedConcatFusion(BaseFusion):
+    """Per-channel gate computed by a tiny weight-shared function applied
+    independently at every feature position (a 1x1 Conv1d over the `dim`
+    "sequence" length), instead of _BaseGatedConcatFusion's single dense
+    bottleneck shared by all `num_streams * dim` outputs.
+
+    _BaseGatedConcatFusion (and its "_wide" variants) route every one of the
+    ~44800 channel-gate decisions through the *same* small joint summary of the
+    whole feature vector -- widening that summary gives it more room, but every
+    channel's gate is still a function of the same shared numbers, so groups of
+    channels can still be tied together and collapse in lockstep. Here, each
+    channel gate is instead a function only of *that channel's own* per-stream
+    values (optionally plus a small shared global-context vector, see
+    `global_context_dim`), computed by one tiny function whose *weights* -- not
+    its output -- are shared across all `dim` positions. Channels are then only
+    coupled to each other through that tiny shared function's parameters, not
+    through a shared finite-dimensional bottleneck, so the parameter count is
+    independent of `dim`.
+
+    Args:
+        global_context_dim: 0 for a purely local gate (each channel sees only
+            its own stream values). >0 adds a small global summary of the whole
+            feature vector -- computed once per sample the same way
+            _BaseGatedConcatFusion's bottleneck is, then broadcast to every
+            position -- restoring cross-channel context at a parameter cost
+            that's still independent of `dim` beyond that one summary layer.
+    """
+
+    LOCAL_HIDDEN_DIM = 16
+
+    def __init__(self, dim: int, num_streams: int, global_context_dim: int = 0):
+        super().__init__(dim, num_streams)
+        self.global_context_dim = global_context_dim
+
+        if global_context_dim > 0:
+            self.global_context = nn.Sequential(
+                nn.Linear(dim * num_streams, global_context_dim),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+            )
+
+        per_position_in = num_streams + global_context_dim
+        self.local_gate = nn.Sequential(
+            nn.Conv1d(per_position_in, self.LOCAL_HIDDEN_DIM, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv1d(self.LOCAL_HIDDEN_DIM, num_streams, kernel_size=1),
+        )
+        # Begin with near-neutral gates while retaining gradients for learning,
+        # matching _BaseGatedConcatFusion's init.
+        nn.init.uniform_(self.local_gate[2].weight, -1e-3, 1e-3)
+        nn.init.zeros_(self.local_gate[2].bias)
+
+    def _gate_logits(self, features_list):
+        """Returns per-channel gate logits, shape (B, num_streams, dim)."""
+        self._validate(features_list)
+        per_position = torch.stack(features_list, dim=1)  # (B, num_streams, dim)
+
+        if self.global_context_dim > 0:
+            combined = torch.cat(features_list, dim=1)  # (B, dim * num_streams)
+            ctx = self.global_context(combined)  # (B, global_context_dim)
+            ctx = ctx.unsqueeze(-1).expand(-1, -1, self.dim)  # (B, global_context_dim, dim)
+            per_position = torch.cat([per_position, ctx], dim=1)  # (B, num_streams + ctx, dim)
+
+        return self.local_gate(per_position)  # (B, num_streams, dim)
+
+
+@register_fusion("channelwise_gated_concat_local")
+class ChannelWiseGatedConcatLocalFusion(_PerChannelGatedConcatFusion):
+    """channelwise_gated_concat with a purely local, weight-shared per-position
+    gate (see _PerChannelGatedConcatFusion) instead of the shared dense
+    bottleneck -- each channel's gate depends only on that channel's own
+    RGB/tactile values, not on the rest of the feature vector."""
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, global_context_dim=0)
+
+    def forward(self, features_list):
+        weights = torch.sigmoid(self._gate_logits(features_list))  # (B, num_streams, dim)
+        weighted_features = [
+            weights[:, stream_idx, :] * feature
+            for stream_idx, feature in enumerate(features_list)
+        ]
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
+@register_fusion("channelwise_gated_concat_hybrid")
+class ChannelWiseGatedConcatHybridFusion(_PerChannelGatedConcatFusion):
+    """channelwise_gated_concat_local, plus a small shared global-context vector
+    (summarizing the whole feature vector, same as _BaseGatedConcatFusion's
+    bottleneck) broadcast into every position's otherwise-local gate decision."""
+
+    GLOBAL_CONTEXT_DIM = 32
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, global_context_dim=self.GLOBAL_CONTEXT_DIM)
+
+    def forward(self, features_list):
+        weights = torch.sigmoid(self._gate_logits(features_list))  # (B, num_streams, dim)
+        weighted_features = [
+            weights[:, stream_idx, :] * feature
+            for stream_idx, feature in enumerate(features_list)
+        ]
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
+@register_fusion("channelwise_residual_gated_concat_local")
+class ChannelWiseResidualGatedConcatLocalFusion(_PerChannelGatedConcatFusion):
+    """channelwise_residual_gated_concat with a purely local, weight-shared
+    per-position gate (see _PerChannelGatedConcatFusion)."""
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, global_context_dim=0)
+
+    def forward(self, features_list):
+        weights = torch.sigmoid(self._gate_logits(features_list))  # (B, num_streams, dim)
+        weighted_features = [
+            (1 + weights[:, stream_idx, :]) * feature
+            for stream_idx, feature in enumerate(features_list)
+        ]
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
+@register_fusion("channelwise_residual_gated_concat_hybrid")
+class ChannelWiseResidualGatedConcatHybridFusion(_PerChannelGatedConcatFusion):
+    """channelwise_residual_gated_concat_local, plus a small shared global-context
+    vector broadcast into every position's gate decision (see
+    ChannelWiseGatedConcatHybridFusion)."""
+
+    GLOBAL_CONTEXT_DIM = 32
+
+    def __init__(self, dim: int, num_streams: int):
+        super().__init__(dim, num_streams, global_context_dim=self.GLOBAL_CONTEXT_DIM)
+
+    def forward(self, features_list):
+        weights = torch.sigmoid(self._gate_logits(features_list))  # (B, num_streams, dim)
         weighted_features = [
             (1 + weights[:, stream_idx, :]) * feature
             for stream_idx, feature in enumerate(features_list)

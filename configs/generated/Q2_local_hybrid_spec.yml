@@ -1,0 +1,36 @@
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+# Second companion sweep to Q2_spec.yml / Q2_wide_spec.yml, testing a structurally
+# different fix for the channel-wise gate MLP's bottleneck (see fusion/gated_concat.py
+# ::_PerChannelGatedConcatFusion) than simply widening the shared dense hidden layer:
+#
+#   _local:  each of the ~44800 per-channel gates is computed by a tiny weight-shared
+#            function applied independently at every feature position (no shared
+#            finite-dim bottleneck at all -- ~82 gate params total), so channels can't
+#            be tied together into the same saturated cluster the way they can when
+#            all channel-gates share one small joint summary.
+#   _hybrid: same, plus a small shared global-context vector (32-d, computed once like
+#            the original bottleneck) broadcast into every position's local decision,
+#            restoring cross-channel information sharing at a modest extra cost (~1.4M
+#            gate params, still far below the _wide variant's 22.9M).
+#
+# Same seeds/fixed_overrides as Q2_spec.yml / Q2_wide_spec.yml for direct comparability
+# against channelwise_gated_concat / channelwise_residual_gated_concat and their _wide
+# counterparts.
+
+fixed_overrides:
+  model.translation_head_mode: "joint"
+  data.root: /home/MA_Flavia/Documents/FusionModel/Data
+  data.split_seed: 40
+  group_aware_split: true
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.dropout_rot: 0.1
+
+grid:
+  training.seed: [47, 50]
+  model.fusion:
+    - "channelwise_gated_concat_hybrid"
+    - "channelwise_gated_concat_local"
+    - "channelwise_residual_gated_concat_hybrid"
+    - "channelwise_residual_gated_concat_local"
