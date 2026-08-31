@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 try:
     import plotly.graph_objects as go
@@ -37,8 +38,10 @@ RUN_FOLDERS_TO_BE_INFERENCED = [
     # "runs/run2",
 ]
 
-# Subdirectories within the ablation/run folder to completely skip
-IGNORE_FOLDERS = ["results", "overview"]
+# Subdirectories within the ablation/run folder to completely skip -- these
+# aren't run folders themselves (no manifest.json/config.yml inside), they're
+# other output trees that live alongside the run folders.
+IGNORE_FOLDERS = ["results", "overview", "tensorboard"]
 
 # Test-result columns the overview leaderboards/plots are built from.
 METRIC_COLS = ["val_abs_trans", "val_abs_y", "val_abs_z", "val_abs_rot_x", "val_abs_rot_z"]
@@ -53,6 +56,11 @@ _KNOWN_GROUP_COLORS = {
     'gated_Softmax': '#ff7f0e', 'gated_Sigmoid': '#e377c2', 'attention': '#8c564b',
     'spatial_gated_2d': '#17becf', 'residual_gated_concat': '#bcbd22',
     'channelwise_residual_gated_concat': '#7f7f7f',
+    # dual_fusion builds two independent instances of the base fusion module
+    # (own params per task branch, see pose_estimation_model.py) -- a
+    # genuinely different architecture from the shared-fusion variant, so it
+    # gets its own color rather than sharing the base fusion's slot.
+    'gated_concat (dual_fusion)': '#393b79',
 }
 
 
@@ -64,7 +72,9 @@ def _group_colors(group_values):
         if g in _KNOWN_GROUP_COLORS:
             colors[g] = _KNOWN_GROUP_COLORS[g]
         else:
-            colors[g] = cmap(fallback_i % 10)
+            # matplotlib.colors.to_hex, not the raw RGBA tuple cmap() returns --
+            # plotly's marker_color rejects tuples, and hex works for both libs.
+            colors[g] = mcolors.to_hex(cmap(fallback_i % 10))
             fallback_i += 1
     return colors
 
@@ -76,6 +86,19 @@ def _get_dotted(cfg, dotted_key, default="unknown"):
             return default
         node = node[part]
     return node if node is not None else default
+
+
+def _group_label(cfg, group_by):
+    """Resolve the group value for group_by, but when grouping by fusion
+    (model.fusion) fold in model.dual_fusion -- a dual_fusion run builds two
+    independent instances of the fusion module (separate params per task
+    branch) rather than sharing one, so it's a different architecture from
+    the base fusion type and must not be pooled into the same bucket.
+    """
+    val = _get_dotted(cfg, group_by)
+    if group_by == "model.fusion" and _get_dotted(cfg, "model.dual_fusion", False):
+        val = f"{val} (dual_fusion)"
+    return val
 
 
 def _resolve_run_config_path(folder_path):
@@ -124,9 +147,16 @@ def run_inference_on_folder(folder_path, plot_formats):
 
     from utils.utils import load_config
 
-    cfg_path = _resolve_run_config_path(folder_path)
-    cfg = load_config(cfg_path)
-    _ensure_matching_split(cfg, folder_path)
+    try:
+        cfg_path = _resolve_run_config_path(folder_path)
+        cfg = load_config(cfg_path)
+        _ensure_matching_split(cfg, folder_path)
+    except FileNotFoundError as e:
+        # Folder isn't actually a run folder (e.g. an unanticipated non-run
+        # subdirectory under --run_dir) -- skip it instead of aborting the
+        # whole batch so one bad folder can't swallow every run behind it.
+        print(f"⚠️ Skipping {folder_path}: {e}\n")
+        return None
 
     # Explicitly specify results subfolder inside the run folder
     results_dir = os.path.join(folder_path, "results")
@@ -177,7 +207,7 @@ def _collect_run_records(processed, group_by):
 
         cfg = entry["cfg"]
         run_name = os.path.basename(os.path.normpath(entry["folder_path"]))
-        group_val = _get_dotted(cfg, group_by)
+        group_val = _group_label(cfg, group_by)
         training_seed = cfg.get("training", {}).get("seed", "?")
         split_seed = resolve_split_seed(cfg)
 
@@ -275,6 +305,74 @@ def write_leaderboards(per_run_df, per_group_df, output_dir, group_by):
     print(f"✓ Leaderboards saved to {output_dir}")
 
 
+def _violin_panel(ax, pooled, groups, colors, label, log=False):
+    """One violin per group, sharing a single axis so groups sit side by
+    side instead of overlapping -- unlike alpha-blended histograms, colors
+    never blend into mud and each group's shape stays fully legible.
+
+    Test-error metrics are non-negative and span ~4-5 orders of magnitude
+    (sub-micron translation errors up to multi-degree outliers), which
+    collapses a linear-scale histogram/violin into one spike at zero with an
+    invisible tail. When log=True the KDE is computed in log10 space instead
+    (after flooring exact zeros to half the smallest positive value observed,
+    since log10(0) is undefined) and the y-ticks are relabeled back to the
+    metric's real units so the axis still reads in meters/degrees.
+    """
+    present = [g for g in groups if g in pooled and len(pooled[g])]
+    if not present:
+        return
+
+    if log:
+        all_vals = np.concatenate([pooled[g] for g in present])
+        positive = all_vals[all_vals > 0]
+        floor = positive.min() * 0.5 if positive.size else 1e-9
+        plot_data = [np.log10(np.clip(pooled[g], floor, None)) for g in present]
+    else:
+        plot_data = [pooled[g] for g in present]
+
+    parts = ax.violinplot(plot_data, showmedians=True, showextrema=True, widths=0.8)
+    for body, g in zip(parts["bodies"], present):
+        body.set_facecolor(colors[g])
+        body.set_edgecolor(colors[g])
+        body.set_alpha(0.65)
+    for key in ("cbars", "cmins", "cmaxes", "cmedians"):
+        if key in parts:
+            parts[key].set_color("#333333")
+            parts[key].set_linewidth(1)
+
+    ax.set_xticks(range(1, len(present) + 1))
+    ax.set_xticklabels([str(g) for g in present], rotation=20, ha="right", fontsize=8)
+
+    if log:
+        ymin, ymax = ax.get_ylim()
+        tick_locs = np.arange(np.floor(ymin), np.ceil(ymax) + 1)
+        ax.set_yticks(tick_locs)
+        ax.set_yticklabels([f"{10 ** t:.3g}" for t in tick_locs])
+
+    ax.set_title(label, fontsize=11, fontweight="bold")
+    ax.set_ylabel(label + (" (log scale)" if log else ""))
+    ax.grid(True, alpha=0.3, axis="y")
+
+
+def _boxplot_panel(ax, pooled, groups, colors, label):
+    """One boxplot per group on a shared axis -- factored out so the abs-error
+    and signed-error boxplot figures don't duplicate this."""
+    present_groups = [g for g in groups if g in pooled]
+    data = [pooled[g] for g in present_groups]
+    if not data:
+        return
+    bp = ax.boxplot(data, patch_artist=True, notch=True, labels=[str(g) for g in present_groups])
+    for patch, g in zip(bp["boxes"], present_groups):
+        patch.set_facecolor(colors[g])
+        patch.set_alpha(0.6)
+    ax.set_title(label, fontsize=11, fontweight="bold")
+    ax.set_ylabel(label)
+    # rotation alone (tick_params) leaves labels center-anchored, which
+    # collides adjacent long group names -- match _violin_panel's ha="right".
+    plt.setp(ax.get_xticklabels(), rotation=20, ha="right", fontsize=8)
+    ax.grid(True, alpha=0.3, axis="y")
+
+
 def _pooled_by_group(records, col):
     pooled = {}
     for rec in records:
@@ -292,48 +390,34 @@ def plot_pooled_distributions(records, output_dir, formats, group_by):
     groups = sorted({rec["group"] for rec in records}, key=str)
     colors = _group_colors(groups)
 
+    # val_abs_rot_z (full quaternion geodesic distance) is intentionally
+    # dropped from these overview panels: this is a planar in-hand pose task
+    # where roll is essentially the only rotation axis in play, so geodesic
+    # tracks roll almost exactly (e.g. 0.628 vs 0.626 deg mean on one run) and
+    # just duplicates the roll panel. Still logged per-sample in the test CSV
+    # (results_*.csv) and in the leaderboards if it's ever needed as a check.
     abs_metrics = [
         ("val_abs_y", "Y-Translation Abs Error [m]"),
         ("val_abs_z", "Z-Translation Abs Error [m]"),
         ("val_abs_rot_x", "Rotation Abs Error (roll) [deg]"),
-        ("val_abs_rot_z", "Rotation Abs Error (geodesic) [deg]"),
     ]
 
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f"Pooled Test Error Distributions by {group_by}", fontsize=16)
-    for ax, (col, label) in zip(axs.flat, abs_metrics):
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    fig.suptitle(f"Pooled Test Error Distributions by {group_by} (log scale)", fontsize=16)
+    for ax, (col, label) in zip(axs, abs_metrics):
         pooled = _pooled_by_group(records, col)
-        for g in groups:
-            if g not in pooled:
-                continue
-            ax.hist(pooled[g], bins=30, alpha=0.5, label=str(g), color=colors[g], density=True)
-        ax.set_title(label, fontsize=11, fontweight='bold')
-        ax.set_xlabel(label)
-        ax.set_ylabel("Density")
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+        _violin_panel(ax, pooled, groups, colors, label, log=True)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.94])
     for fmt in [f for f in formats if f in ("png", "svg")]:
         fig.savefig(output_dir / f"overview_abs_error_distributions.{fmt}", dpi=150)
     plt.close(fig)
 
     # Grouped boxplot comparison, one subplot per metric
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
     fig.suptitle(f"Test Error Comparison by {group_by} (boxplots)", fontsize=16)
-    for ax, (col, label) in zip(axs.flat, abs_metrics):
+    for ax, (col, label) in zip(axs, abs_metrics):
         pooled = _pooled_by_group(records, col)
-        present_groups = [g for g in groups if g in pooled]
-        data = [pooled[g] for g in present_groups]
-        if not data:
-            continue
-        bp = ax.boxplot(data, patch_artist=True, notch=True, labels=[str(g) for g in present_groups])
-        for patch, g in zip(bp['boxes'], present_groups):
-            patch.set_facecolor(colors[g])
-            patch.set_alpha(0.6)
-        ax.set_title(label, fontsize=11, fontweight='bold')
-        ax.set_ylabel(label)
-        ax.tick_params(axis='x', rotation=20)
-        ax.grid(True, alpha=0.3, axis='y')
+        _boxplot_panel(ax, pooled, groups, colors, label)
     plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     for fmt in [f for f in formats if f in ("png", "svg")]:
         fig.savefig(output_dir / f"overview_boxplot_by_group.{fmt}", dpi=150)
@@ -344,17 +428,23 @@ def plot_pooled_distributions(records, output_dir, formats, group_by):
     fig.suptitle(f"Pooled Signed Test Error Distributions by {group_by}", fontsize=16)
     for ax, col in zip(axs, SIGNED_METRIC_COLS):
         pooled = _pooled_by_group(records, col)
-        for g in groups:
-            if g not in pooled:
-                continue
-            ax.hist(pooled[g], bins=30, alpha=0.5, label=str(g), color=colors[g], density=True)
-        ax.axvline(0.0, color='black', linestyle='--', linewidth=1)
-        ax.set_title(col, fontsize=11, fontweight='bold')
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
+        _violin_panel(ax, pooled, groups, colors, col, log=False)
+        ax.axhline(0.0, color='black', linestyle='--', linewidth=1)
     plt.tight_layout(rect=[0, 0.03, 1, 0.94])
     for fmt in [f for f in formats if f in ("png", "svg")]:
         fig.savefig(output_dir / f"overview_signed_error_distributions.{fmt}", dpi=150)
+    plt.close(fig)
+
+    # Signed error boxplots (same pairing as the abs-error violin/boxplot pair above)
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    fig.suptitle(f"Signed Test Error Comparison by {group_by} (boxplots)", fontsize=16)
+    for ax, col in zip(axs, SIGNED_METRIC_COLS):
+        pooled = _pooled_by_group(records, col)
+        _boxplot_panel(ax, pooled, groups, colors, col)
+        ax.axhline(0.0, color='black', linestyle='--', linewidth=1)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.94])
+    for fmt in [f for f in formats if f in ("png", "svg")]:
+        fig.savefig(output_dir / f"overview_boxplot_signed_by_group.{fmt}", dpi=150)
     plt.close(fig)
 
     if "html" in formats and PLOTLY_AVAILABLE:

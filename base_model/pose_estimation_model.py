@@ -109,6 +109,21 @@ class PoseEstimationNet(nn.Module):
         self.stride_p5_1 = nn.Conv2d(c5//2, c5//2, kernel_size=3, stride=2, padding=1)
         self.stride_p5_2 = nn.Conv2d(c5//2, c5//2, kernel_size=3, stride=2, padding=1)
 
+        # Per-scale flattened sizes within the 1D per-stream feature vector, i.e. the
+        # boundaries of the [P3 | P4 | P5] blocks that forward_single_stream() later
+        # concatenates (torch.cat([p.flatten(1) for p in [p3, p4, p5]], dim=1)).
+        # Lets fusion-gate diagnostics (see scripts/train.py) break a channel-wise gate
+        # down by which pyramid scale each channel came from, not just its raw index.
+        with torch.no_grad():
+            p3_d = self.stride_p3_2(self.stride_p3_1(self.conv_p3(feats[0])))
+            p4_d = self.stride_p4_2(self.stride_p4_1(self.conv_p4(feats[1])))
+            p5_d = self.stride_p5_2(self.stride_p5_1(self.conv_p5(feats[2])))
+        self.stream_scale_dims = {
+            "p3": p3_d.shape[1] * p3_d.shape[2] * p3_d.shape[3],
+            "p4": p4_d.shape[1] * p4_d.shape[2] * p4_d.shape[3],
+            "p5": p5_d.shape[1] * p5_d.shape[2] * p5_d.shape[3],
+        }
+
         # 2. Fusion module
         # Determine spatial dimensions
         self.is_2d_fusion = (fusion == "spatial_gated_2d")

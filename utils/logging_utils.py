@@ -36,13 +36,13 @@ def compute_gate_statistics(weights_tensor):
         weights_tensor: torch.Tensor or None — fusion gate weights
 
     Returns:
-        dict with keys: mean, std, fraction_lt_0_1, fraction_gt_0_9, p25, p50, p75, p90
-        All values are Python floats or None if input is None.
+        dict with keys: mean, std, fraction_lt_0_1, fraction_gt_0_9, fraction_mid_0_4_0_6,
+        p25, p50, p75, p90. All values are Python floats or None if input is None.
     """
     if weights_tensor is None:
         return {
             "mean": None, "std": None,
-            "fraction_lt_0_1": None, "fraction_gt_0_9": None,
+            "fraction_lt_0_1": None, "fraction_gt_0_9": None, "fraction_mid_0_4_0_6": None,
             "p25": None, "p50": None, "p75": None, "p90": None,
         }
 
@@ -56,6 +56,9 @@ def compute_gate_statistics(weights_tensor):
         std_val = float(np.std(w_flat))
         frac_lt_01 = float(np.mean(w_flat < 0.1))
         frac_gt_09 = float(np.mean(w_flat > 0.9))
+        # Threshold-free complement to the two fractions above: how much of the gate
+        # sits near-undecided (~0.5) rather than committed to either extreme.
+        frac_mid = float(np.mean((w_flat >= 0.4) & (w_flat <= 0.6)))
 
         p25_val = float(np.percentile(w_flat, 25))
         p50_val = float(np.percentile(w_flat, 50))
@@ -67,6 +70,7 @@ def compute_gate_statistics(weights_tensor):
             "std": std_val,
             "fraction_lt_0_1": frac_lt_01,
             "fraction_gt_0_9": frac_gt_09,
+            "fraction_mid_0_4_0_6": frac_mid,
             "p25": p25_val,
             "p50": p50_val,
             "p75": p75_val,
@@ -76,7 +80,7 @@ def compute_gate_statistics(weights_tensor):
         print(f"Warning: Failed to compute gate statistics: {e}")
         return {
             "mean": None, "std": None,
-            "fraction_lt_0_1": None, "fraction_gt_0_9": None,
+            "fraction_lt_0_1": None, "fraction_gt_0_9": None, "fraction_mid_0_4_0_6": None,
             "p25": None, "p50": None, "p75": None, "p90": None,
         }
 
@@ -94,19 +98,33 @@ METRICS_FIELDNAMES = [
     "val_rot_x_best_10_percent_deg", "val_rot_x_median_deg", "val_rot_x_p90_deg",
     "fusion_weights", "train_fusion_gate_mean", "train_fusion_gate_std",
     "train_fusion_gate_fraction_lt_0_1", "train_fusion_gate_fraction_gt_0_9",
+    "train_fusion_gate_fraction_mid_0_4_0_6",
     "val_fusion_gate_mean", "val_fusion_gate_std",
     "val_fusion_gate_fraction_lt_0_1", "val_fusion_gate_fraction_gt_0_9",
+    "val_fusion_gate_fraction_mid_0_4_0_6",
     # per-task fusion gate parameters (for dual_fusion)
     "train_rotation_fusion_gate_mean", "train_rotation_fusion_gate_std",
     "train_rotation_fusion_gate_fraction_lt_0_1", "train_rotation_fusion_gate_fraction_gt_0_9",
+    "train_rotation_fusion_gate_fraction_mid_0_4_0_6",
     "val_rotation_fusion_gate_mean", "val_rotation_fusion_gate_std",
     "val_rotation_fusion_gate_fraction_lt_0_1", "val_rotation_fusion_gate_fraction_gt_0_9",
+    "val_rotation_fusion_gate_fraction_mid_0_4_0_6",
     "train_translation_fusion_gate_mean", "train_translation_fusion_gate_std",
     "train_translation_fusion_gate_fraction_lt_0_1", "train_translation_fusion_gate_fraction_gt_0_9",
+    "train_translation_fusion_gate_fraction_mid_0_4_0_6",
     "val_translation_fusion_gate_mean", "val_translation_fusion_gate_std",
     "val_translation_fusion_gate_fraction_lt_0_1", "val_translation_fusion_gate_fraction_gt_0_9",
+    "val_translation_fusion_gate_fraction_mid_0_4_0_6",
     "train_fusion_gate_p25", "train_fusion_gate_p50", "train_fusion_gate_p75", "train_fusion_gate_p90",
     "val_fusion_gate_p25", "val_fusion_gate_p50", "val_fusion_gate_p75", "val_fusion_gate_p90",
+    # per-scale (P3/P4/P5) mean gate value -- channel-wise, 1D-pipeline gates only
+    # (see PoseEstimationNet.stream_scale_dims)
+    "train_fusion_gate_p3_mean", "train_fusion_gate_p4_mean", "train_fusion_gate_p5_mean",
+    "val_fusion_gate_p3_mean", "val_fusion_gate_p4_mean", "val_fusion_gate_p5_mean",
+    "train_rotation_fusion_gate_p3_mean", "train_rotation_fusion_gate_p4_mean", "train_rotation_fusion_gate_p5_mean",
+    "val_rotation_fusion_gate_p3_mean", "val_rotation_fusion_gate_p4_mean", "val_rotation_fusion_gate_p5_mean",
+    "train_translation_fusion_gate_p3_mean", "train_translation_fusion_gate_p4_mean", "train_translation_fusion_gate_p5_mean",
+    "val_translation_fusion_gate_p3_mean", "val_translation_fusion_gate_p4_mean", "val_translation_fusion_gate_p5_mean",
     # general run metadata
     "best_loss", "epoch_time_sec", "checkpoint_path",
     "model_name", "streams", "fusion", "head_type", "freeze_backbone",

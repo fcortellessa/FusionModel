@@ -1,0 +1,93 @@
+==========================================================================================
+INPUT STREAM FUSION ARCHITECTURE COMPARISON REPORT
+==========================================================================================
+
+
+================================================================================
+FUSION ARCHITECTURE: CHANNELWISE_GATED_CONCAT_LOCAL
+================================================================================
+  Val Loss (Last 5 Epochs):        5.66678 ± 0.14573
+  Val Abs Rotation X (deg):       0.8080 ± 0.0055
+  Val Abs Translation (m):        0.00072 ± 0.00001
+  Val Abs Y (m):                  0.00056
+  Val Abs Z (m):                  0.00034
+  Loss Improvement (Early→Late):  3.4%
+
+  Seeds Used: [46]
+  Total Runs: 1
+
+================================================================================
+FUSION ARCHITECTURE: CONCAT
+================================================================================
+  Val Loss (Last 5 Epochs):        4.97580 ± 0.08068
+  Val Abs Rotation X (deg):       0.8384 ± 0.0084
+  Val Abs Translation (m):        0.00077 ± 0.00001
+  Val Abs Y (m):                  0.00061
+  Val Abs Z (m):                  0.00037
+  Loss Improvement (Early→Late):  11.3%
+
+  Seeds Used: [46]
+  Total Runs: 1
+
+================================================================================
+FUSION ARCHITECTURE: GATED
+================================================================================
+  Val Loss (Last 5 Epochs):        6.62474 ± 0.11295
+  Val Abs Rotation X (deg):       0.8043 ± 0.0078
+  Val Abs Translation (m):        0.00079 ± 0.00000
+  Val Abs Y (m):                  0.00058
+  Val Abs Z (m):                  0.00043
+  Loss Improvement (Early→Late):  13.9%
+
+  Seeds Used: [46]
+  Total Runs: 1
+
+================================================================================
+FUSION ARCHITECTURE: GATED_CONCAT
+================================================================================
+  Val Loss (Last 5 Epochs):        6.44509 ± 0.55925
+  Val Abs Rotation X (deg):       0.7595 ± 0.0186
+  Val Abs Translation (m):        0.00071 ± 0.00001
+  Val Abs Y (m):                  0.00055
+  Val Abs Z (m):                  0.00034
+  Loss Improvement (Early→Late):  1.1%
+
+  Seeds Used: [46]
+  Total Runs: 2
+
+==========================================================================================
+FUSION ARCHITECTURE CHARACTERISTICS
+==========================================================================================
+
+CONCATENATION (High-Dimensional):
+  - Preserves all raw features from both streams
+  - High-dimensional input to fusion module
+  - More parameters in fusion layers
+  - May preserve redundant information
+  → Expected: Slower convergence but potential for better final performance
+
+GATING (Low-Dimensional):
+  - Learns per-stream weight (scalar)
+  - Collapses features to single vector per stream
+  - Compression through gating mechanism
+  - Forces feature selection before fusion
+  → Expected: Faster convergence but may lose task-specific details
+
+GATED CONCATENATION (Hybrid):
+  - Concatenates features but with learned per-stream gates
+  - Balances information preservation with selective emphasis
+  - Medium-dimensional fusion input
+  → Expected: Compromise between convergence and performance
+
+KEY OBSERVATIONS:
+1. Rotation vs Translation Trade-off:
+   - Does compression hurt rotation or translation more?
+   - High-dim preserves modality-specific information better
+
+2. Convergence Rates:
+   - High-dim may learn slower but reach better optima
+   - Low-dim may converge faster but plateau earlier
+
+3. Error Distributions:
+   - Systematic biases (skewed errors) indicate architecture mismatch
+   - Symmetric distributions suggest balanced task learning

@@ -189,20 +189,25 @@ def _init_fusion_gate_stats():
     - GAP 2: Full distributions for TensorBoard histograms
     """
     return {
-        "sum": None, "sum_sq": None, "count": None, "lt_0_1": None, "gt_0_9": None,
+        "sum": None, "sum_sq": None, "count": None, "lt_0_1": None, "gt_0_9": None, "mid_0_4_0_6": None,
         # GAP 1: Per-task accumulators (dual_fusion only)
         "rotation_sum": None, "rotation_sum_sq": None, "rotation_count": None,
-        "rotation_lt_0_1": None, "rotation_gt_0_9": None,
+        "rotation_lt_0_1": None, "rotation_gt_0_9": None, "rotation_mid_0_4_0_6": None,
         "translation_sum": None, "translation_sum_sq": None, "translation_count": None,
-        "translation_lt_0_1": None, "translation_gt_0_9": None,
+        "translation_lt_0_1": None, "translation_gt_0_9": None, "translation_mid_0_4_0_6": None,
         # GAP 2: Raw weights for distributions (TensorBoard histograms)
         "raw_weights": [],  # List of tensors to concatenate later
         "raw_rotation_weights": [],
         "raw_translation_weights": [],
+        # Per-scale (P3/P4/P5) mean gate value per stream, keyed by (task_name, scale).
+        # Only populated when scale_dims is passed to _accumulate_fusion_gate_stats
+        # (channel-wise, 1D-pipeline gates only -- see PoseEstimationNet.stream_scale_dims).
+        "scale_sum": {},
+        "scale_count": {},
     }
 
 
-def _accumulate_fusion_gate_stats(stats, gates, task_name=None):
+def _accumulate_fusion_gate_stats(stats, gates, task_name=None, scale_dims=None):
     """
     Accumulate gate statistics for per-stream analysis.
 
@@ -212,6 +217,11 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None):
                Can also be None (skipped) or a dict with 'rotation'/'translation' keys for dual_fusion
         task_name: Optional task identifier ('rotation' or 'translation') for dual_fusion.
                    If None, accumulates to the main stats (non-dual case or averaged case).
+        scale_dims: Optional dict {"p3": size, "p4": size, "p5": size} giving the flattened
+                    per-scale channel counts within `gates`' last dim (see
+                    PoseEstimationNet.stream_scale_dims). When the gate shape matches
+                    (channel-wise, 1D pipeline), also accumulates a per-scale, per-stream
+                    mean so gate trust can be broken down by pyramid scale.
     """
     if gates is None:
         return
@@ -222,6 +232,23 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None):
         gates_cpu = gates.detach().float().cpu()
         stats[raw_key].append(gates_cpu)
 
+    # Per-scale breakdown: only meaningful for channel-wise gates from the 1D pipeline,
+    # i.e. shape (B, streams, channels) with channels == p3 + p4 + p5.
+    if scale_dims and gates.dim() == 3 and gates.shape[-1] == sum(scale_dims.values()):
+        gates_cpu = gates.detach().float().cpu()
+        offset = 0
+        for scale, size in scale_dims.items():
+            chunk = gates_cpu[:, :, offset:offset + size]  # (B, streams, size)
+            offset += size
+            chunk_mean = chunk.mean(dim=(0, 2))  # (streams,) -- mean over batch and this scale's channels
+            key = (task_name, scale)
+            if key not in stats["scale_sum"]:
+                stats["scale_sum"][key] = chunk_mean.clone()
+                stats["scale_count"][key] = 1
+            else:
+                stats["scale_sum"][key] += chunk_mean
+                stats["scale_count"][key] += 1
+
     # Gate shapes are (B, streams) or (B, streams, channels) or (B, streams, H, W).
     # Reshape to (num_streams, -1) so each row is all gate values for one stream.
     by_stream = gates.detach().float().cpu().movedim(1, 0).reshape(gates.shape[1], -1)
@@ -230,6 +257,11 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None):
     gate_count = torch.full_like(gate_sum, by_stream.shape[1])
     low_count = (by_stream < 0.1).sum(dim=1)
     high_count = (by_stream > 0.9).sum(dim=1)
+    # Threshold-free complement to lt_0_1/gt_0_9: how much of the gate sits near-undecided
+    # (~0.5) rather than committed to either extreme -- distinguishes a gate that's
+    # genuinely uncertain from one that's bimodally split, which lt_0_1+gt_0_9 alone
+    # can't tell apart.
+    mid_count = ((by_stream >= 0.4) & (by_stream <= 0.6)).sum(dim=1)
 
     # Determine which stats dict keys to update
     if task_name:
@@ -239,11 +271,13 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None):
         count_key = f"{task_name}_count"
         lt_key = f"{task_name}_lt_0_1"
         gt_key = f"{task_name}_gt_0_9"
+        mid_key = f"{task_name}_mid_0_4_0_6"
     else:
         # Standard accumulation (non-dual or averaged)
         sum_key, sum_sq_key = "sum", "sum_sq"
         count_key = "count"
         lt_key, gt_key = "lt_0_1", "gt_0_9"
+        mid_key = "mid_0_4_0_6"
 
     if stats[sum_key] is None:
         stats.update({
@@ -252,6 +286,7 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None):
             count_key: gate_count,
             lt_key: low_count,
             gt_key: high_count,
+            mid_key: mid_count,
         })
         return
 
@@ -261,6 +296,7 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None):
         count_key: gate_count,
         lt_key: low_count,
         gt_key: high_count,
+        mid_key: mid_count,
     }.items():
         stats[key] += value
 
@@ -283,18 +319,30 @@ def _summarize_fusion_gate_stats(stats, prefix):
         (summary_dict, mean_weights, raw_weights, raw_rotation_weights, raw_translation_weights)
         where each raw_* is either a concatenated tensor or None
     """
-    if stats["sum"] is None:
+    # `sum` (the non-dual/main accumulator) is only ever populated on the non-dual_fusion
+    # path (see call sites below); dual_fusion runs only fill rotation_sum/translation_sum.
+    # Previously this function early-returned an empty summary whenever `sum` was None,
+    # which silently discarded the rotation/translation stats too for every dual_fusion
+    # run (confirmed empirically: dual_fusion runs' metrics.csv had every
+    # *_fusion_gate_* column blank, main AND per-task). Guard the main block on `sum`
+    # instead, so per-task and per-scale stats still populate when only they are present.
+    if stats["sum"] is None and stats.get("rotation_sum") is None and stats.get("translation_sum") is None:
         return {}, None, None, None, None
 
+    summary = {}
+    mean = None
+
     # Main (averaged or non-dual) stats
-    mean = stats["sum"] / stats["count"]
-    variance = (stats["sum_sq"] / stats["count"] - mean.square()).clamp_min(0.0)
-    summary = {
-        f"{prefix}_fusion_gate_mean": format_fusion_weights(mean),
-        f"{prefix}_fusion_gate_std": format_fusion_weights(variance.sqrt()),
-        f"{prefix}_fusion_gate_fraction_lt_0_1": format_fusion_weights(stats["lt_0_1"] / stats["count"]),
-        f"{prefix}_fusion_gate_fraction_gt_0_9": format_fusion_weights(stats["gt_0_9"] / stats["count"]),
-    }
+    if stats["sum"] is not None:
+        mean = stats["sum"] / stats["count"]
+        variance = (stats["sum_sq"] / stats["count"] - mean.square()).clamp_min(0.0)
+        summary.update({
+            f"{prefix}_fusion_gate_mean": format_fusion_weights(mean),
+            f"{prefix}_fusion_gate_std": format_fusion_weights(variance.sqrt()),
+            f"{prefix}_fusion_gate_fraction_lt_0_1": format_fusion_weights(stats["lt_0_1"] / stats["count"]),
+            f"{prefix}_fusion_gate_fraction_gt_0_9": format_fusion_weights(stats["gt_0_9"] / stats["count"]),
+            f"{prefix}_fusion_gate_fraction_mid_0_4_0_6": format_fusion_weights(stats["mid_0_4_0_6"] / stats["count"]),
+        })
 
     # GAP 2: Option A - Compute and add percentiles to CSV
     from utils.logging_utils import compute_gate_statistics
@@ -319,6 +367,7 @@ def _summarize_fusion_gate_stats(stats, prefix):
             f"{prefix}_rotation_fusion_gate_std": rotation_stats["std"],
             f"{prefix}_rotation_fusion_gate_fraction_lt_0_1": rotation_stats["fraction_lt_0_1"],
             f"{prefix}_rotation_fusion_gate_fraction_gt_0_9": rotation_stats["fraction_gt_0_9"],
+            f"{prefix}_rotation_fusion_gate_fraction_mid_0_4_0_6": rotation_stats["fraction_mid_0_4_0_6"],
         })
 
     if raw_translation_weights is not None:
@@ -328,7 +377,17 @@ def _summarize_fusion_gate_stats(stats, prefix):
             f"{prefix}_translation_fusion_gate_std": translation_stats["std"],
             f"{prefix}_translation_fusion_gate_fraction_lt_0_1": translation_stats["fraction_lt_0_1"],
             f"{prefix}_translation_fusion_gate_fraction_gt_0_9": translation_stats["fraction_gt_0_9"],
+            f"{prefix}_translation_fusion_gate_fraction_mid_0_4_0_6": translation_stats["fraction_mid_0_4_0_6"],
         })
+
+    # Per-scale (P3/P4/P5) mean gate value per stream -- only present for channel-wise
+    # gates from the 1D pipeline (see PoseEstimationNet.stream_scale_dims and the
+    # scale_dims argument to _accumulate_fusion_gate_stats).
+    for (task_name, scale), total in stats["scale_sum"].items():
+        count = stats["scale_count"][(task_name, scale)]
+        scale_mean = total / count
+        col_prefix = f"{prefix}_{task_name}_" if task_name else f"{prefix}_"
+        summary[f"{col_prefix}fusion_gate_{scale}_mean"] = format_fusion_weights(scale_mean)
 
     return summary, mean, raw_weights, raw_rotation_weights, raw_translation_weights
 
@@ -430,13 +489,14 @@ def _train_single_epoch(
         signed_y, signed_z, signed_rot_x = _compute_signed_errors(pose_pred_unnorm, pose_unnorm, rotation_handler)
 
         # GAP 1: Accumulate per-task fusion gates if dual_fusion, else averaged
+        scale_dims = getattr(model, "stream_scale_dims", None)
         if isinstance(model.last_fusion_weights, dict) and model.dual_fusion:
             # Dual fusion: accumulate rotation and translation gates separately
-            _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("rotation"), task_name="rotation")
-            _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("translation"), task_name="translation")
+            _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("rotation"), task_name="rotation", scale_dims=scale_dims)
+            _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("translation"), task_name="translation", scale_dims=scale_dims)
         else:
             # Non-dual or averaged: use existing behavior
-            _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights))
+            _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights), scale_dims=scale_dims)
 
         _apply_metric_accumulation(
             train_metrics,
@@ -580,13 +640,14 @@ def validation_loop(
             pose_pred, _ = model(batch, aux_losses=aux_losses)
 
             # GAP 1: Accumulate per-task fusion gates if dual_fusion, else averaged
+            scale_dims = getattr(model, "stream_scale_dims", None)
             if isinstance(model.last_fusion_weights, dict) and model.dual_fusion:
                 # Dual fusion: accumulate rotation and translation gates separately
-                _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("rotation"), task_name="rotation")
-                _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("translation"), task_name="translation")
+                _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("rotation"), task_name="rotation", scale_dims=scale_dims)
+                _accumulate_fusion_gate_stats(fusion_gate_stats, model.last_fusion_weights.get("translation"), task_name="translation", scale_dims=scale_dims)
             else:
                 # Non-dual or averaged: use existing behavior
-                _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights))
+                _accumulate_fusion_gate_stats(fusion_gate_stats, _reduce_dual_fusion_branches(model.last_fusion_weights), scale_dims=scale_dims)
             
             # Compute loss and metrics using rotation handler
             loss, loss_q, loss_y, loss_z, loss_trans = rotation_handler.compute_loss(

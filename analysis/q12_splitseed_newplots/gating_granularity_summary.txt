@@ -1,0 +1,79 @@
+==========================================================================================
+Q2: GATING GRANULARITY ANALYSIS - SCALAR VS CHANNEL-WISE
+==========================================================================================
+
+
+================================================================================
+FUSION ARCHITECTURE: CHANNELWISE_GATED_CONCAT_LOCAL
+================================================================================
+
+  GATING TYPE: CHANNELWISE
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 5.66678 ± 0.14573
+    Val Abs Rotation X (deg): 0.8080 ± 0.0055
+    Val Abs Translation (m):  0.00072 ± 0.00001
+
+    Seeds Used: [46]
+
+================================================================================
+FUSION ARCHITECTURE: CONCAT
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 4.97580 ± 0.08068
+    Val Abs Rotation X (deg): 0.8384 ± 0.0084
+    Val Abs Translation (m):  0.00077 ± 0.00001
+
+    Seeds Used: [46]
+
+================================================================================
+FUSION ARCHITECTURE: GATED
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 6.62474 ± 0.11295
+    Val Abs Rotation X (deg): 0.8043 ± 0.0078
+    Val Abs Translation (m):  0.00079 ± 0.00000
+
+    Seeds Used: [46]
+
+================================================================================
+FUSION ARCHITECTURE: GATED_CONCAT
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 6.44509 ± 0.55925
+    Val Abs Rotation X (deg): 0.7595 ± 0.0186
+    Val Abs Translation (m):  0.00071 ± 0.00001
+
+    Seeds Used: [46]
+
+==========================================================================================
+INTERPRETATION GUIDE
+==========================================================================================
+
+GATE SPECIALIZATION (Q2.2):
+  - Higher std/specialization = gates becoming more extreme (bimodal)
+  - Lower std/specialization = gates remain uncertain (near 0.5)
+  - Increasing trend = learning to specialize during training
+  - Flat trend = gates remain uncertain throughout
+
+GATING WEIGHTS DISTRIBUTION (Q2.1):
+  Scalar Gating:
+    - Single value per stream (RGB or Tactile)
+    - Boxplot shows spread across seeds/epochs
+    - Higher value = more trust in that stream
+
+  Channel-wise Gating:
+    - Multiple values per stream (one per channel)
+    - Histogram/violin shows per-channel trust distribution
+    - Spread indicates selective channel emphasis
+
+TASK PERFORMANCE (Q2.3):
+  - Scalar gating typically: faster convergence, potentially lower final performance
+  - Channel-wise gating typically: slower convergence, better selectivity
+  - Does specialization = higher performance?
+  - Which gating type balances rotation vs translation better?
