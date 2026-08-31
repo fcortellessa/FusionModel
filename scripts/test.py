@@ -22,10 +22,26 @@ from base_model.pose_estimation_model import PoseEstimationNet
 from data_processing.dataloader_preprocessed import get_test_dataloader
 from data_processing.preprocess_data import ensure_test_split_current
 from utils.normalization import canonicalize_translation_norm_stats
-from utils.utils import load_checkpoint, load_config, get_optimizer, resolve_data_root
+from utils.utils import load_checkpoint, load_config, get_optimizer, resolve_data_root, resolve_split_seed
 from utils.train_utils import _build_named_param_groups
 
 REPO_ROOT = parent_dir
+
+
+def build_run_label(cfg, target_folder, cfg_path):
+    """Build a human-readable run identifier for plot titles/filenames.
+
+    Uses the run folder name (not the config snapshot's filename, which is
+    always literally "config.yml" inside every run folder) plus the fusion
+    strategy, training seed, and data split seed pulled from the config.
+    """
+    run_name = os.path.basename(os.path.normpath(target_folder)) if target_folder else os.path.basename(cfg_path)
+    fusion = cfg.get("model", {}).get("fusion", "?")
+    training_seed = cfg.get("training", {}).get("seed", "?")
+    split_seed = resolve_split_seed(cfg)
+    if split_seed is None:
+        split_seed = "?"
+    return f"{run_name} | fusion={fusion} | seed={training_seed} | split_seed={split_seed}"
 
 
 def _normalize_quaternions(quaternions):
@@ -246,11 +262,11 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
         f.write(f"Samples/sec: {1000 / avg_inference_per_sample_ms:.2f}\n")
 
 
-def plot_results_matplotlib(results_directory, csv_results, config_path, timestamp, formats):
+def plot_results_matplotlib(results_directory, csv_results, run_label, timestamp, formats):
     print(f"Generating Matplotlib visualization plots ({', '.join(formats)})...")
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f"Pose Estimation Test Results\nRun: {os.path.basename(config_path)}", fontsize=16)
+    fig.suptitle(f"Test Results: Absolute Errors\nRun: {run_label}", fontsize=16)
 
     # Plot 1: Histogram of Y-Translation Errors
     ax = axs[0, 0]
@@ -329,11 +345,11 @@ def plot_results_matplotlib(results_directory, csv_results, config_path, timesta
     plt.close()
 
 
-def plot_results_matplotlib_signed(results_directory, csv_results, config_path, timestamp, formats):
+def plot_results_matplotlib_signed(results_directory, csv_results, run_label, timestamp, formats):
     print(f"Generating signed-error Matplotlib visualization plots ({', '.join(formats)})...")
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f"Pose Estimation Test Results — Signed Error\nRun: {os.path.basename(config_path)}", fontsize=16)
+    fig.suptitle(f"Test Results: Signed Errors\nRun: {run_label}", fontsize=16)
 
     # Plot 1: Histogram of signed Y-Translation Errors
     ax = axs[0, 0]
@@ -416,7 +432,7 @@ def plot_results_matplotlib_signed(results_directory, csv_results, config_path, 
     plt.close()
 
 
-def plot_results_plotly(results_directory, csv_results, config_path, timestamp):
+def plot_results_plotly(results_directory, csv_results, run_label, timestamp):
     try:
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
@@ -458,7 +474,7 @@ def plot_results_plotly(results_directory, csv_results, config_path, timestamp):
     fig.add_trace(go.Box(y=csv_results['val_abs_rot_x'], name="Rot Error X", marker_color='#029e73'), row=2, col=2, secondary_y=True)
 
     fig.update_layout(
-        title_text=f"Pose Estimation Test Results — Run: {os.path.basename(config_path)}",
+        title_text=f"Test Results — Run: {run_label}",
         showlegend=False,
         template="plotly_white"
     )
@@ -475,7 +491,7 @@ def plot_results_plotly(results_directory, csv_results, config_path, timestamp):
     print(f"Saved interactive HTML plot to {html_path}")
 
 
-def dispatch_plots(results_directory, csv_results, config_path, formats):
+def dispatch_plots(results_directory, csv_results, run_label, formats):
     # Parse choice combinations
     requested_formats = set()
     for fmt in formats:
@@ -485,16 +501,16 @@ def dispatch_plots(results_directory, csv_results, config_path, formats):
             requested_formats.add(fmt)
 
     timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
-    
+
     # Static plots via Matplotlib
     mpl_formats = [f for f in ["png", "svg"] if f in requested_formats]
     if mpl_formats:
-        plot_results_matplotlib(results_directory, csv_results, config_path, timestamp, mpl_formats)
-        plot_results_matplotlib_signed(results_directory, csv_results, config_path, timestamp, mpl_formats)
+        plot_results_matplotlib(results_directory, csv_results, run_label, timestamp, mpl_formats)
+        plot_results_matplotlib_signed(results_directory, csv_results, run_label, timestamp, mpl_formats)
 
     # Interactive HTML via Plotly
     if "html" in requested_formats:
-        plot_results_plotly(results_directory, csv_results, config_path, timestamp)
+        plot_results_plotly(results_directory, csv_results, run_label, timestamp)
 
 
 if __name__ == "__main__":
@@ -563,13 +579,15 @@ if __name__ == "__main__":
     
     cfg = load_config(cfg_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    run_label = build_run_label(cfg, target_folder, cfg_path)
     print(f"Using device: {device}")
+    print(f"Run: {run_label}")
     print(f"Loading weights from: {model_path}")
     print(f"Saving outputs to: {results_dir}\n")
 
     infer_and_evaluate(cfg, model_path, None, results_dir, device)
-    
+
     csv_files = [os.path.join(results_dir, f) for f in os.listdir(results_dir) if f.endswith(".csv")]
     if csv_files:
         latest_csv = max(csv_files, key=os.path.getmtime)
-        dispatch_plots(results_dir, pd.read_csv(latest_csv), cfg_path, args.plot_format)
+        dispatch_plots(results_dir, pd.read_csv(latest_csv), run_label, args.plot_format)

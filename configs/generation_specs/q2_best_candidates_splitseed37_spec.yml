@@ -1,0 +1,30 @@
+output_dir: "configs/generated/q2_best_candidates_splitseed_sweep/03_splitseed37"
+
+fixed_overrides:
+  training.seed: 46
+  training.grad_clip.enabled: true
+  training.grad_clip.max_norm: 1.0
+  training.dropout_rot: 0.1
+  data.split_seed: 37
+
+variants:
+  - name: concat
+    overrides:
+      model.fusion: concat
+      model.dual_fusion: false
+  - name: gated
+    overrides:
+      model.fusion: gated
+      model.dual_fusion: false
+  - name: gated_concat
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: false
+  - name: channelwise_gated_concat_local
+    overrides:
+      model.fusion: channelwise_gated_concat_local
+      model.dual_fusion: false
+  - name: dual_gated_concat
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: true

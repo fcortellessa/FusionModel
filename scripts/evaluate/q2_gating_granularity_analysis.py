@@ -13,6 +13,7 @@ import yaml
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import torch
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -374,6 +375,88 @@ def plot_gate_specialization_score_over_training(master_df: pd.DataFrame, output
     print(f"✓ Gate specialization-score-over-training plots saved to {output_dir}")
 
 
+def plot_gate_sparsity_over_training_by_seed(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
+    """
+    Q2.2c: Gate specialization ("sparsity") score -- fraction_lt_0_1 +
+    fraction_gt_0_9, the fraction of gate weights sitting near the decisive
+    extremes 0/1 -- plotted one line per seed instead of averaged across
+    seeds. plot_gate_specialization_score_over_training's mean +/- std band
+    has the same pooling problem as plot_gating_weights_distribution's merged
+    violin: a seed that specializes hard (score -> 1) and a seed that never
+    moves off ~0.5 (score -> 0) average into a misleading "moderate,
+    high-variance" band that describes neither run. Keeping seeds as
+    separate lines shows which/how many seeds actually specialize.
+    One figure per fusion type, RGB and Tactile side by side.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    lt_col = "train_fusion_gate_fraction_lt_0_1"
+    gt_col = "train_fusion_gate_fraction_gt_0_9"
+
+    for fusion_type in fusion_types:
+        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+
+        if fusion_df.empty or lt_col not in fusion_df.columns or gt_col not in fusion_df.columns:
+            print(f"Warning: no {lt_col}/{gt_col} data for {fusion_type}, skipping")
+            continue
+
+        run_names = sorted(fusion_df["run_name"].unique())
+        cmap = plt.get_cmap("tab10")
+
+        # ===== MATPLOTLIB =====
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5.5), sharey=True)
+
+        per_run_series = []
+        for idx, run_name in enumerate(run_names):
+            run_df = fusion_df[fusion_df["run_name"] == run_name].sort_values("epoch")
+            seed = run_df["seed"].iloc[0]
+            lt_df = _extract_stream_series(run_df, lt_col)
+            gt_df = _extract_stream_series(run_df, gt_col)
+            spec_rgb = lt_df["rgb"] + gt_df["rgb"]
+            spec_tactile = lt_df["tactile"] + gt_df["tactile"]
+            color = cmap(idx % 10)
+            per_run_series.append((seed, lt_df["epoch"], spec_rgb, spec_tactile, color))
+
+            axes[0].plot(lt_df["epoch"], spec_rgb, label=f"seed {seed}", linewidth=2, color=color)
+            axes[1].plot(lt_df["epoch"], spec_tactile, label=f"seed {seed}", linewidth=2, color=color)
+
+        for ax, stream_name in zip(axes, ["RGB", "Tactile"]):
+            ax.set_title(stream_name, fontsize=11, fontweight='bold')
+            ax.set_xlabel("Epoch")
+            ax.set_ylim([0, 1])
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=8, loc='best')
+
+        axes[0].set_ylabel("Specialization Score (frac. < 0.1 + frac. > 0.9)")
+        fig.suptitle(f"Gate Specialization Over Training by Seed: {fusion_type.upper()}",
+                     fontsize=13, fontweight='bold')
+
+        save_figure(fig, output_dir, f"gate_sparsity_over_training_by_seed_{fusion_type}", fmt)
+        plt.close()
+
+        # ===== PLOTLY INTERACTIVE =====
+        if PLOTLY_AVAILABLE and fmt and 'plotly_html' in fmt:
+            fig_plotly = make_subplots(rows=1, cols=2, subplot_titles=("RGB", "Tactile"), shared_yaxes=True)
+            for seed, epochs, spec_rgb, spec_tactile, color_rgba in per_run_series:
+                r, g, b, _ = color_rgba
+                color = f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
+                fig_plotly.add_trace(go.Scatter(x=epochs, y=spec_rgb, mode='lines',
+                                                 name=f"seed {seed}", line=dict(color=color),
+                                                 legendgroup=str(seed)), row=1, col=1)
+                fig_plotly.add_trace(go.Scatter(x=epochs, y=spec_tactile, mode='lines',
+                                                 name=f"seed {seed}", line=dict(color=color),
+                                                 legendgroup=str(seed), showlegend=False), row=1, col=2)
+            fig_plotly.update_yaxes(range=[0, 1])
+            fig_plotly.update_layout(
+                title=f"Gate Specialization Over Training by Seed: {fusion_type.upper()}",
+                height=500, width=1100, template="plotly_white", hovermode='x unified'
+            )
+            save_plotly_figure(fig_plotly, output_dir, f"gate_sparsity_over_training_by_seed_{fusion_type}")
+
+    print(f"✓ Per-seed gate sparsity-over-training plots saved to {output_dir}")
+
+
 def load_best_epoch_gate_weights(run_dir: Path) -> Optional[torch.Tensor]:
     """
     Load the raw (unaggregated) validation gate-weight tensor saved next to
@@ -483,6 +566,97 @@ def plot_gating_weights_distribution(master_df: pd.DataFrame, runs_dir: Path, ou
     print(f"✓ Gating weights distribution plots saved to {output_dir}")
 
 
+def plot_gate_weight_violin_by_seed(master_df: pd.DataFrame, runs_dir: Path, output_dir: Path, fmt: str = "png"):
+    """
+    Q2.1b: Same raw per-sample / per-channel best-epoch gate weights as
+    plot_gating_weights_distribution, but faceted one violin pair (RGB,
+    Tactile) per seed instead of concatenated across all seeds into one
+    violin. Pooling seeds there can misrepresent heterogeneous behavior --
+    e.g. a seed whose gate collapsed to two clusters near 0/1 concatenated
+    with a seed that never moved off ~0.5 produces a blended density that
+    describes neither actual run. This shows each seed's own distribution
+    side by side so that heterogeneity is visible instead of averaged away.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    stream_colors = {'RGB': '#2ca02c', 'Tactile': '#d62728'}
+
+    for fusion_type in fusion_types:
+        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+        if fusion_df.empty:
+            continue
+
+        gating_type = fusion_df["gating_type"].iloc[0]
+        seed_runs = fusion_df[["seed", "run_name"]].drop_duplicates().sort_values("seed")
+
+        seeds, rgb_by_seed, tactile_by_seed = [], [], []
+        for _, row in seed_runs.iterrows():
+            tensor = load_best_epoch_gate_weights(runs_dir / row["run_name"])
+            if tensor is None:
+                print(f"Warning: no gate_weights_best_epoch.pt for {row['run_name']}, skipping that seed")
+                continue
+            tensor = tensor.float()
+
+            if tensor.dim() == 2:  # scalar gating: [n_samples, 2]
+                rgb_vals, tactile_vals = tensor[:, 0], tensor[:, 1]
+            elif tensor.dim() == 3:  # channel-wise gating: [n_samples, 2, n_channels]
+                per_channel_mean = tensor.mean(dim=0)  # [2, n_channels]
+                rgb_vals, tactile_vals = per_channel_mean[0], per_channel_mean[1]
+            else:
+                print(f"Warning: unexpected val_gate_weights shape {tuple(tensor.shape)} for {row['run_name']}, skipping")
+                continue
+
+            seeds.append(row["seed"])
+            rgb_by_seed.append(rgb_vals.numpy())
+            tactile_by_seed.append(tactile_vals.numpy())
+
+        if not seeds:
+            print(f"Warning: no gate weight tensors loaded for {fusion_type}, skipping seed-faceted violin")
+            continue
+
+        n_seeds = len(seeds)
+        fig, ax = plt.subplots(figsize=(max(7, 1.8 * n_seeds), 6))
+
+        # Two violins per seed slot: RGB at 2*i, Tactile at 2*i+1.
+        positions_rgb = [2 * i for i in range(n_seeds)]
+        positions_tactile = [2 * i + 1 for i in range(n_seeds)]
+
+        parts_rgb = ax.violinplot(rgb_by_seed, positions=positions_rgb, widths=0.8,
+                                   showmeans=True, showextrema=True)
+        parts_tactile = ax.violinplot(tactile_by_seed, positions=positions_tactile, widths=0.8,
+                                       showmeans=True, showextrema=True)
+        for body in parts_rgb['bodies']:
+            body.set_facecolor(stream_colors['RGB'])
+            body.set_alpha(0.7)
+        for body in parts_tactile['bodies']:
+            body.set_facecolor(stream_colors['Tactile'])
+            body.set_alpha(0.7)
+        for parts in (parts_rgb, parts_tactile):
+            for key in ('cbars', 'cmins', 'cmaxes', 'cmeans'):
+                parts[key].set_color('black')
+
+        ax.set_xticks([2 * i + 0.5 for i in range(n_seeds)])
+        ax.set_xticklabels([f"seed {s}" for s in seeds])
+        ax.set_ylim([0, 1])
+        ax.set_ylabel("Gate Weight Value [0-1]")
+        unit = "Per-Channel Mean" if gating_type == "channelwise" else "Per-Sample"
+        ax.set_title(f"Gate Weight Distribution by Seed: {fusion_type.upper()}\n"
+                     f"({unit}, Best Epoch)", fontsize=11, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+
+        legend_elems = [
+            Patch(facecolor=stream_colors['RGB'], alpha=0.7, label='RGB'),
+            Patch(facecolor=stream_colors['Tactile'], alpha=0.7, label='Tactile'),
+        ]
+        ax.legend(handles=legend_elems, fontsize=9, loc='upper right')
+
+        save_figure(fig, output_dir, f"gating_weights_distribution_by_seed_{fusion_type}", fmt)
+        plt.close()
+
+    print(f"✓ Seed-faceted gating weights distribution plots saved to {output_dir}")
+
+
 def plot_rotation_vs_translation_comparison(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
     """
     Q2.3: Rotation vs Translation Task Performance.
@@ -542,8 +716,11 @@ def plot_rotation_vs_translation_comparison(master_df: pd.DataFrame, output_dir:
 
         ax.set_xlabel(f"Validation {trans_label} Error [m]", fontsize=12, fontweight='bold')
         ax.set_ylabel("Validation Rotation Error X [deg]", fontsize=12, fontweight='bold')
-        ax.set_title(f"Rotation vs {trans_label} Task Performance\n(Final 5 Epochs Average, All Fusion Methods)",
+        # ax.set_title(f"Rotation vs {trans_label} Task Performance\n(Final 5 Epochs Average, All Fusion Methods)",
+        #            fontsize=13, fontweight='bold')
+        ax.set_title(f"Rotation vs {trans_label} Task Performance",
                     fontsize=13, fontweight='bold')
+        
         ax.legend(fontsize=10, loc='best')
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
@@ -562,8 +739,10 @@ def plot_rotation_vs_translation_comparison(master_df: pd.DataFrame, output_dir:
 
         ax.set_xlabel(f"Validation {trans_label} Error [m]", fontsize=12, fontweight='bold')
         ax.set_ylabel("Validation Rotation Error X [deg]", fontsize=12, fontweight='bold')
-        ax.set_title(f"Rotation vs {trans_label} Task Performance\n(Final 5 Epochs Average, Seed Labeled)",
-                    fontsize=13, fontweight='bold')
+        # ax.set_title(f"Rotation vs {trans_label} Task Performance\n(Final 5 Epochs Average, Seed Labeled)",
+        #            fontsize=13, fontweight='bold')
+        ax.set_title(f"Rotation vs {trans_label} Task Performance\n",
+                   fontsize=13, fontweight='bold')
         ax.legend(fontsize=10, loc='best')
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
@@ -686,7 +865,9 @@ def main():
     # All plots
     plot_gate_specialization_over_training(master_df, output_dir / "specialization", fmt=args.format)
     plot_gate_specialization_score_over_training(master_df, output_dir / "specialization", fmt=args.format)
+    plot_gate_sparsity_over_training_by_seed(master_df, output_dir / "specialization", fmt=args.format)
     plot_gating_weights_distribution(master_df, runs_dir, output_dir / "weights_distribution", fmt=args.format)
+    plot_gate_weight_violin_by_seed(master_df, runs_dir, output_dir / "weights_distribution", fmt=args.format)
     plot_rotation_vs_translation_comparison(master_df, output_dir / "task_performance", fmt=args.format)
 
     # Report
