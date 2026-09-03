@@ -97,9 +97,14 @@ CANDIDATE_SHORT_NAME = {
     "2. Gating": "gated",
     "3. Softmax gated concatenation (scalar)": "gated_concat",
     "4. Residual sigmoid gated concatenation (scalar)": "residual_gated_concat",
-    "5. Channelwise local sigmoid gated concatenation": "channelwise_local_gated_concat",
-    "6. Channelwise hybrid residual sigmoid gated concatenation": "channelwise_residual_gated_concat",
-    "7. Dual Fusion": "dual_gated_concat",
+    # Deliberately matches the exact model.fusion registry string (fusion/gated_concat.py),
+    # not a shortened form -- the repo also has plain, non-suffixed
+    # "channelwise_gated_concat"/"channelwise_residual_gated_concat" fusion types
+    # (different strategies, not just a naming shorthand for these), so a shortened
+    # label here would silently collide with those in the printed table.
+    "5. Channelwise local sigmoid gated concatenation": "channelwise_gated_concat_local",
+    "6. Channelwise hybrid residual sigmoid gated concatenation": "channelwise_residual_gated_concat_hybrid",
+    "7. Dual Fusion": "dual_fusion (gated_concat)",
 }
 
 CANDIDATE_COLORS = {
@@ -353,11 +358,17 @@ def build_summary_table(df: pd.DataFrame, target_candidates_only: bool = True) -
     for cand in candidates:
         cdf = df[df["candidate"].astype(str) == cand]
         n = len(cdf)
+        run_folders = sorted(cdf["run_folder"].tolist())
+        # Container dir = the run folder's parent (e.g. "q1_ConcatVsGated_gradclip"),
+        # i.e. which --run_dir group each contributing run actually came from.
+        container_dirs = sorted(set(Path(rf).parent.name for rf in run_folders))
         rows.append({
             "candidate": cand,
             "short_name": CANDIDATE_SHORT_NAME.get(cand, cand),
             "n_runs": n,
             "seeds": sorted(cdf["seed"].dropna().astype(int).unique().tolist()),
+            "run_folders": run_folders,
+            "container_dirs": container_dirs,
             "rot_x_deg_mean": cdf["rot_x_deg"].mean(), "rot_x_deg_std": cdf["rot_x_deg"].std(),
             "trans_mm_mean": cdf["trans_l2_mm"].mean(), "trans_mm_std": cdf["trans_l2_mm"].std(),
             "y_mm_mean": cdf["y_mm"].mean(), "y_mm_std": cdf["y_mm"].std(),
@@ -366,7 +377,37 @@ def build_summary_table(df: pd.DataFrame, target_candidates_only: bool = True) -
     return pd.DataFrame(rows)
 
 
-def write_summary_table(summary_df: pd.DataFrame, output_dir: Path):
+def flag_comparability(summary_df: pd.DataFrame) -> pd.DataFrame:
+    """Adds a 'flags' column (list of strings) noting, per candidate row, why it
+    might NOT be a fair apples-to-apples comparison against the others: fewer
+    seeds than the majority, or sourced from a container dir no other candidate
+    used (so any dir-level config difference wouldn't be caught by the
+    same-candidate config-drift check, which only compares runs already grouped
+    together)."""
+    if summary_df.empty:
+        return summary_df
+
+    summary_df = summary_df.copy()
+    max_n = summary_df["n_runs"].max()
+    all_container_dirs = {}
+    for _, row in summary_df.iterrows():
+        for d in row["container_dirs"]:
+            all_container_dirs.setdefault(d, []).append(row["short_name"])
+
+    flags_col = []
+    for _, row in summary_df.iterrows():
+        flags = []
+        if row["n_runs"] < max_n:
+            flags.append(f"only {row['n_runs']} seed(s) vs {max_n} for the others")
+        exclusive_dirs = [d for d in row["container_dirs"] if len(all_container_dirs[d]) == 1]
+        if exclusive_dirs and len(summary_df) > 1:
+            flags.append(f"only sourced from {exclusive_dirs} (no other candidate shares that run_dir)")
+        flags_col.append(flags)
+    summary_df["flags"] = flags_col
+    return summary_df
+
+
+def write_summary_table(summary_df: pd.DataFrame, output_dir: Path, run_dir_args):
     if summary_df.empty:
         return
 
@@ -378,16 +419,19 @@ def write_summary_table(summary_df: pd.DataFrame, output_dir: Path):
         return f"{mean:.3f} ± {std:.3f}"
 
     lines = [
-        "| fusion | n_seeds | test rot_x (deg) | test trans (mm) | test y (mm) | test z (mm) |",
-        "|---|---|---|---|---|---|",
+        f"Run dirs scanned (`--run_dir`): {run_dir_args}\n",
+        "| fusion | n_seeds | run folders used | test rot_x (deg) | test trans (mm) | test y (mm) | test z (mm) | flags |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for _, row in summary_df.iterrows():
+        folder_names = ", ".join(Path(rf).name for rf in row["run_folders"])
+        flags_txt = "; ".join(row.get("flags", [])) or "-"
         lines.append(
-            f"| {row['short_name']} | {row['n_runs']} | "
+            f"| {row['short_name']} | {row['n_runs']} | {folder_names} | "
             f"{fmt(row['rot_x_deg_mean'], row['rot_x_deg_std'], row['n_runs'])} | "
             f"{fmt(row['trans_mm_mean'], row['trans_mm_std'], row['n_runs'])} | "
             f"{fmt(row['y_mm_mean'], row['y_mm_std'], row['n_runs'])} | "
-            f"{fmt(row['z_mm_mean'], row['z_mm_std'], row['n_runs'])} |"
+            f"{fmt(row['z_mm_mean'], row['z_mm_std'], row['n_runs'])} | {flags_txt} |"
         )
     table_md = "\n".join(lines)
 
@@ -534,10 +578,28 @@ def main():
     plot_scatter_per_sample(per_sample_df, output_dir, rot_col, rot_label)
 
     summary_df = build_summary_table(per_run_df, target_candidates_only=not args.include_other_candidates)
-    table_md = write_summary_table(summary_df, output_dir)
+    summary_df = flag_comparability(summary_df)
+    table_md = write_summary_table(summary_df, output_dir, args.run_dir)
     if table_md:
         print("\nTest-set summary (mean ± std across seeds/runs):\n")
         print(table_md)
+        for _, row in summary_df.iterrows():
+            for flag in row.get("flags", []):
+                print(f"  ⚠️  {row['short_name']}: {flag}")
+
+    # Runs found but not part of the clean 7-candidate table: either a non-target
+    # fusion/dual_fusion combo, or tagged [+task_adapter] because a task-specific
+    # adapter was enabled (see has_task_adapter()) -- not a fair comparison against
+    # the plain fusion-only candidates even though it shares the same model.fusion.
+    other_candidates = sorted(
+        c for c in per_run_df["candidate"].astype(str).unique() if c not in CANDIDATE_ORDER
+    )
+    if other_candidates and not args.include_other_candidates:
+        print(f"\nFound but NOT included in the table above (not comparable to the 7 target candidates):")
+        for cand in other_candidates:
+            cdf = per_run_df[per_run_df["candidate"].astype(str) == cand]
+            reason = "task-specific adapter enabled" if "[+task_adapter]" in cand else "outside the 7 target fusion/dual_fusion combos"
+            print(f"  - {cand} (n={len(cdf)}, {reason}): {sorted(cdf['run_folder'].apply(lambda p: Path(p).name).tolist())}")
 
     notes = compute_config_drift_notes(per_run_df, configs)
     if notes:
