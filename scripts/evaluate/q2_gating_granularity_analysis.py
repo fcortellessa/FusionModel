@@ -657,6 +657,249 @@ def plot_gate_weight_violin_by_seed(master_df: pd.DataFrame, runs_dir: Path, out
     print(f"✓ Seed-faceted gating weights distribution plots saved to {output_dir}")
 
 
+_SCALE_STREAM_COL_LABELS = ["P3-RGB", "P3-Tac", "P4-RGB", "P4-Tac", "P5-RGB", "P5-Tac"]
+
+
+def _has_scale_columns(master_df: pd.DataFrame, prefix: str, value_kind: str) -> bool:
+    cols = [f"{prefix}_fusion_gate_{s}_{value_kind}" for s in ("p3", "p4", "p5")]
+    return all(c in master_df.columns for c in cols)
+
+
+def _heatmap_text_color(val: float) -> str:
+    return "white" if (val < 0.25 or val > 0.75) else "black"
+
+
+def plot_scale_stream_summary_heatmap(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
+    """
+    Q2.4a: Per-scale (P3/P4/P5) x per-stream (RGB/Tactile) mean gate weight,
+    one row per fusion type -- final-5-epochs average per run, then averaged
+    across seeds. Requires the per-scale logging columns added to
+    scripts/train.py (train_fusion_gate_p3_mean etc, channel-wise 1D-pipeline
+    gates only via PoseEstimationNet.stream_scale_dims); runs predating that
+    change won't have these columns and are skipped with a warning rather
+    than silently plotting blanks.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = "val"
+
+    if not _has_scale_columns(master_df, prefix, "mean"):
+        print(f"Warning: no {prefix}_fusion_gate_p{{3,4,5}}_mean columns found -- rerun with "
+              f"the updated per-scale logging (scripts/train.py) to populate them. Skipping "
+              f"scale/stream summary heatmap.")
+        return
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    rows, row_labels = [], []
+
+    for fusion_type in fusion_types:
+        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+        final_epochs = fusion_df[fusion_df["epoch"] >= fusion_df.groupby("run_name")["epoch"].transform("max") - 4]
+
+        per_seed_vals = []
+        for run_name, run_df in final_epochs.groupby("run_name"):
+            vals, ok = [], True
+            for scale in ("p3", "p4", "p5"):
+                col = f"{prefix}_fusion_gate_{scale}_mean"
+                parsed = [parse_fusion_weights_string(s) for s in run_df.get(col, [])]
+                parsed = [p for p in parsed if len(p) == 2]
+                if not parsed:
+                    ok = False
+                    break
+                vals.extend(np.mean(np.array(parsed), axis=0).tolist())
+            if ok:
+                per_seed_vals.append(vals)
+
+        if not per_seed_vals:
+            continue
+        row_labels.append(fusion_type)
+        rows.append(np.mean(np.array(per_seed_vals), axis=0))
+
+    if not rows:
+        print("Warning: no fusion type had usable per-scale gate data, skipping summary heatmap")
+        return
+
+    matrix = np.array(rows)
+
+    fig, ax = plt.subplots(figsize=(max(8, 1.3 * len(_SCALE_STREAM_COL_LABELS)), max(3, 1.0 * len(row_labels) + 1)))
+    im = ax.imshow(matrix, cmap="RdBu_r", vmin=0, vmax=1, aspect="auto")
+    ax.set_xticks(range(len(_SCALE_STREAM_COL_LABELS)))
+    ax.set_xticklabels(_SCALE_STREAM_COL_LABELS)
+    ax.set_yticks(range(len(row_labels)))
+    ax.set_yticklabels(row_labels)
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            ax.text(j, i, f"{matrix[i, j]:.2f}", ha="center", va="center",
+                     color=_heatmap_text_color(matrix[i, j]), fontsize=9)
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("Mean Gate Weight [0=Tactile-trust, 1=RGB-trust]")
+    ax.set_title("Per-Scale / Per-Stream Gate Trust by Fusion Type\n(Final 5 Epochs, Averaged Across Seeds)",
+                 fontsize=12, fontweight='bold')
+
+    save_figure(fig, output_dir, "scale_stream_summary_heatmap", fmt)
+    plt.close()
+
+    print(f"✓ Scale/stream summary heatmap saved to {output_dir}")
+
+
+def plot_scale_stream_heatmap_by_seed(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
+    """
+    Q2.4b: Same per-scale x per-stream mean gate weight as
+    plot_scale_stream_summary_heatmap, but one small 3x2 tile per (fusion_type,
+    seed) instead of averaged across seeds -- companion view showing whether
+    all seeds agree on which scale/stream a fusion type leans on, or whether
+    that varies by seed the way the raw weight distribution did (see
+    plot_gate_weight_violin_by_seed).
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = "val"
+
+    if not _has_scale_columns(master_df, prefix, "mean"):
+        print(f"Warning: no {prefix}_fusion_gate_p{{3,4,5}}_mean columns found -- rerun with "
+              f"the updated per-scale logging (scripts/train.py) to populate them. Skipping "
+              f"per-seed scale/stream heatmaps.")
+        return
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+    row_labels, col_labels = ["P3", "P4", "P5"], ["RGB", "Tactile"]
+
+    for fusion_type in fusion_types:
+        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+        final_epochs = fusion_df[fusion_df["epoch"] >= fusion_df.groupby("run_name")["epoch"].transform("max") - 4]
+        run_names = sorted(final_epochs["run_name"].unique())
+
+        tiles, seeds = [], []
+        for run_name in run_names:
+            run_df = final_epochs[final_epochs["run_name"] == run_name]
+            matrix_rows, ok = [], True
+            for scale in ("p3", "p4", "p5"):
+                col = f"{prefix}_fusion_gate_{scale}_mean"
+                parsed = [parse_fusion_weights_string(s) for s in run_df.get(col, [])]
+                parsed = [p for p in parsed if len(p) == 2]
+                if not parsed:
+                    ok = False
+                    break
+                matrix_rows.append(np.mean(np.array(parsed), axis=0))
+            if not ok:
+                continue
+            tiles.append(np.array(matrix_rows))
+            seeds.append(run_df["seed"].iloc[0])
+
+        if not tiles:
+            print(f"Warning: no per-scale gate data for {fusion_type}, skipping")
+            continue
+
+        n = len(tiles)
+        # save_figure() unconditionally calls plt.tight_layout() -- a colorbar spanning
+        # a *list* of axes (fig.colorbar(im, ax=axes)) isn't compatible with that (either
+        # overlaps a subplot's ticks, or raises with constrained_layout engine mismatch).
+        # Attaching the colorbar to a single Axes instead is a layout tight_layout
+        # understands natively, so give the last tile its own colorbar rather than
+        # sharing one across all tiles.
+        fig, axes = plt.subplots(1, n, figsize=(3.2 * n + 0.6, 3.6))
+        axes = [axes] if n == 1 else list(axes)
+        for idx, (ax, tile, seed) in enumerate(zip(axes, tiles, seeds)):
+            im = ax.imshow(tile, cmap="RdBu_r", vmin=0, vmax=1, aspect="auto")
+            ax.set_xticks(range(2))
+            ax.set_xticklabels(col_labels)
+            ax.set_yticks(range(3))
+            ax.set_yticklabels(row_labels)
+            ax.set_title(f"seed {seed}", fontsize=10)
+            for i in range(3):
+                for j in range(2):
+                    ax.text(j, i, f"{tile[i, j]:.2f}", ha="center", va="center",
+                             color=_heatmap_text_color(tile[i, j]), fontsize=8)
+            if idx == n - 1:
+                fig.colorbar(im, ax=ax, shrink=0.85, label="Mean Gate Weight")
+        fig.suptitle(f"Per-Scale / Per-Stream Gate Trust by Seed: {fusion_type.upper()}\n(Final 5 Epochs)",
+                     fontsize=12, fontweight='bold')
+
+        save_figure(fig, output_dir, f"scale_stream_heatmap_by_seed_{fusion_type}", fmt)
+        plt.close()
+
+    print(f"✓ Per-seed scale/stream heatmaps saved to {output_dir}")
+
+
+def plot_scale_stream_specialization_over_training(master_df: pd.DataFrame, output_dir: Path,
+                                                     fmt: str = "png", n_epoch_bins: int = 20):
+    """
+    Q2.4c: Per-scale (P3/P4/P5) x per-stream (RGB/Tactile) specialization score
+    (fraction_lt_0_1 + fraction_gt_0_9, logged directly as
+    train_fusion_gate_{scale}_specialization -- see scripts/train.py) over
+    training, one heatmap per fusion type: rows = epoch (binned into
+    n_epoch_bins if there are more epochs than that), columns = scale x
+    stream. Averaged across seeds -- see plot_gate_sparsity_over_training_by_seed
+    for the per-seed line-plot version of the (non-scale-broken-down) score;
+    a per-seed x per-scale x per-epoch view would be 4D and doesn't fit one
+    legible heatmap, so this trades seed detail for scale detail.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = "train"
+
+    if not _has_scale_columns(master_df, prefix, "specialization"):
+        print(f"Warning: no {prefix}_fusion_gate_p{{3,4,5}}_specialization columns found -- "
+              f"rerun with the updated per-scale logging (scripts/train.py) to populate them. "
+              f"Skipping per-scale specialization-over-training heatmaps.")
+        return
+
+    fusion_types = sorted(master_df["fusion_type"].unique())
+
+    for fusion_type in fusion_types:
+        fusion_df = master_df[master_df["fusion_type"] == fusion_type]
+
+        per_scale_epoch_means = {}
+        for scale in ("p3", "p4", "p5"):
+            col = f"{prefix}_fusion_gate_{scale}_specialization"
+            stream_df = _extract_stream_series(fusion_df, col)
+            per_scale_epoch_means[scale] = stream_df.groupby("epoch").agg(
+                rgb=("rgb", "mean"), tactile=("tactile", "mean")
+            )
+
+        combined = pd.concat(per_scale_epoch_means, axis=1)
+        combined.columns = [f"{scale}_{stream}" for scale, stream in combined.columns]
+        combined = combined[["p3_rgb", "p3_tactile", "p4_rgb", "p4_tactile", "p5_rgb", "p5_tactile"]]
+        combined = combined.sort_index().dropna(how="all")
+
+        if combined.empty:
+            print(f"Warning: no per-scale specialization data for {fusion_type}, skipping")
+            continue
+
+        n_epochs = len(combined)
+        if n_epochs > n_epoch_bins:
+            bin_edges = np.linspace(0, n_epochs, n_epoch_bins + 1).astype(int)
+            binned_rows, bin_labels = [], []
+            for i in range(len(bin_edges) - 1):
+                chunk = combined.iloc[bin_edges[i]:bin_edges[i + 1]]
+                if chunk.empty:
+                    continue
+                binned_rows.append(chunk.mean(axis=0))
+                bin_labels.append(f"{int(chunk.index.min())}-{int(chunk.index.max())}")
+            plot_df = pd.DataFrame(binned_rows, index=bin_labels)
+            y_label = "Epoch (binned)"
+        else:
+            plot_df = combined.copy()
+            plot_df.index = [str(int(e)) for e in plot_df.index]
+            y_label = "Epoch"
+
+        matrix_vals = plot_df.values.astype(float)
+
+        fig, ax = plt.subplots(figsize=(9, max(4, 0.3 * len(plot_df) + 1)))
+        im = ax.imshow(matrix_vals, cmap="viridis", vmin=0, vmax=1, aspect="auto")
+        ax.set_xticks(range(len(_SCALE_STREAM_COL_LABELS)))
+        ax.set_xticklabels(_SCALE_STREAM_COL_LABELS)
+        ax.set_yticks(range(len(plot_df)))
+        ax.set_yticklabels(plot_df.index, fontsize=7)
+        ax.set_ylabel(y_label)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label("Specialization Score (frac. < 0.1 + frac. > 0.9)")
+        ax.set_title(f"Per-Scale Gate Specialization Over Training: {fusion_type.upper()}\n"
+                     f"(Averaged Across Seeds)", fontsize=12, fontweight='bold')
+
+        save_figure(fig, output_dir, f"scale_stream_specialization_over_training_{fusion_type}", fmt)
+        plt.close()
+
+    print(f"✓ Per-scale specialization-over-training heatmaps saved to {output_dir}")
+
+
 def plot_rotation_vs_translation_comparison(master_df: pd.DataFrame, output_dir: Path, fmt: str = "png"):
     """
     Q2.3: Rotation vs Translation Task Performance.
@@ -868,6 +1111,9 @@ def main():
     plot_gate_sparsity_over_training_by_seed(master_df, output_dir / "specialization", fmt=args.format)
     plot_gating_weights_distribution(master_df, runs_dir, output_dir / "weights_distribution", fmt=args.format)
     plot_gate_weight_violin_by_seed(master_df, runs_dir, output_dir / "weights_distribution", fmt=args.format)
+    plot_scale_stream_summary_heatmap(master_df, output_dir / "scale_breakdown", fmt=args.format)
+    plot_scale_stream_heatmap_by_seed(master_df, output_dir / "scale_breakdown", fmt=args.format)
+    plot_scale_stream_specialization_over_training(master_df, output_dir / "scale_breakdown", fmt=args.format)
     plot_rotation_vs_translation_comparison(master_df, output_dir / "task_performance", fmt=args.format)
 
     # Report

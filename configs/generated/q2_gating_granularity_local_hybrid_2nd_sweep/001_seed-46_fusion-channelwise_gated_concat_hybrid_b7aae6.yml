@@ -4,7 +4,7 @@ model:
   streams:
   - rgb_image
   - digit_image
-  fusion: concat
+  fusion: channelwise_gated_concat_hybrid
   head_type: quaternion
   rotation_loss_type: geodesic
   normalize_translation: true
@@ -19,7 +19,7 @@ model:
   translation_head_mode: joint
   spatial_grid_size: 10
 training:
-  seed: 48
+  seed: 46
   lr: 0.0005
   batch_size: 16
   epochs: 80

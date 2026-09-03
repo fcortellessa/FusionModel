@@ -4,7 +4,7 @@ model:
   streams:
   - rgb_image
   - digit_image
-  fusion: gated
+  fusion: channelwise_gated_concat_local
   head_type: quaternion
   rotation_loss_type: geodesic
   normalize_translation: true

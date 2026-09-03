@@ -4,7 +4,7 @@ model:
   streams:
   - rgb_image
   - digit_image
-  fusion: gated_concat
+  fusion: channelwise_gated_concat_hybrid
   head_type: quaternion
   rotation_loss_type: geodesic
   normalize_translation: true
@@ -19,7 +19,7 @@ model:
   translation_head_mode: joint
   spatial_grid_size: 10
 training:
-  seed: 47
+  seed: 49
   lr: 0.0005
   batch_size: 16
   epochs: 80
@@ -51,7 +51,6 @@ training:
     min_delta: 0.01
   deterministic: true
   weight_decay: 0.0025
-  lr_fusion: 0.01
 data:
   root: /home/MA_Flavia/Documents/FusionModel/Data
   streams:

@@ -117,14 +117,20 @@ METRICS_FIELDNAMES = [
     "val_translation_fusion_gate_fraction_mid_0_4_0_6",
     "train_fusion_gate_p25", "train_fusion_gate_p50", "train_fusion_gate_p75", "train_fusion_gate_p90",
     "val_fusion_gate_p25", "val_fusion_gate_p50", "val_fusion_gate_p75", "val_fusion_gate_p90",
-    # per-scale (P3/P4/P5) mean gate value -- channel-wise, 1D-pipeline gates only
-    # (see PoseEstimationNet.stream_scale_dims)
+    # per-scale (P3/P4/P5) mean + specialization gate value -- channel-wise, 1D-pipeline
+    # gates only (see PoseEstimationNet.stream_scale_dims)
     "train_fusion_gate_p3_mean", "train_fusion_gate_p4_mean", "train_fusion_gate_p5_mean",
     "val_fusion_gate_p3_mean", "val_fusion_gate_p4_mean", "val_fusion_gate_p5_mean",
+    "train_fusion_gate_p3_specialization", "train_fusion_gate_p4_specialization", "train_fusion_gate_p5_specialization",
+    "val_fusion_gate_p3_specialization", "val_fusion_gate_p4_specialization", "val_fusion_gate_p5_specialization",
     "train_rotation_fusion_gate_p3_mean", "train_rotation_fusion_gate_p4_mean", "train_rotation_fusion_gate_p5_mean",
     "val_rotation_fusion_gate_p3_mean", "val_rotation_fusion_gate_p4_mean", "val_rotation_fusion_gate_p5_mean",
+    "train_rotation_fusion_gate_p3_specialization", "train_rotation_fusion_gate_p4_specialization", "train_rotation_fusion_gate_p5_specialization",
+    "val_rotation_fusion_gate_p3_specialization", "val_rotation_fusion_gate_p4_specialization", "val_rotation_fusion_gate_p5_specialization",
     "train_translation_fusion_gate_p3_mean", "train_translation_fusion_gate_p4_mean", "train_translation_fusion_gate_p5_mean",
     "val_translation_fusion_gate_p3_mean", "val_translation_fusion_gate_p4_mean", "val_translation_fusion_gate_p5_mean",
+    "train_translation_fusion_gate_p3_specialization", "train_translation_fusion_gate_p4_specialization", "train_translation_fusion_gate_p5_specialization",
+    "val_translation_fusion_gate_p3_specialization", "val_translation_fusion_gate_p4_specialization", "val_translation_fusion_gate_p5_specialization",
     # general run metadata
     "best_loss", "epoch_time_sec", "checkpoint_path",
     "model_name", "streams", "fusion", "head_type", "freeze_backbone",

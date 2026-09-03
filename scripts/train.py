@@ -204,6 +204,12 @@ def _init_fusion_gate_stats():
         # (channel-wise, 1D-pipeline gates only -- see PoseEstimationNet.stream_scale_dims).
         "scale_sum": {},
         "scale_count": {},
+        # Per-scale specialization (fraction of that scale's channels with gate <0.1 /
+        # >0.9), keyed the same way -- lets a per-scale heatmap show *decisiveness*,
+        # not just average trust, per pyramid scale.
+        "scale_lt_0_1": {},
+        "scale_gt_0_9": {},
+        "scale_elem_count": {},
     }
 
 
@@ -241,13 +247,22 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None, scale_dims=None)
             chunk = gates_cpu[:, :, offset:offset + size]  # (B, streams, size)
             offset += size
             chunk_mean = chunk.mean(dim=(0, 2))  # (streams,) -- mean over batch and this scale's channels
+            chunk_lt = (chunk < 0.1).sum(dim=(0, 2)).float()  # (streams,)
+            chunk_gt = (chunk > 0.9).sum(dim=(0, 2)).float()  # (streams,)
+            chunk_elems = chunk.shape[0] * chunk.shape[2]
             key = (task_name, scale)
             if key not in stats["scale_sum"]:
                 stats["scale_sum"][key] = chunk_mean.clone()
                 stats["scale_count"][key] = 1
+                stats["scale_lt_0_1"][key] = chunk_lt.clone()
+                stats["scale_gt_0_9"][key] = chunk_gt.clone()
+                stats["scale_elem_count"][key] = chunk_elems
             else:
                 stats["scale_sum"][key] += chunk_mean
                 stats["scale_count"][key] += 1
+                stats["scale_lt_0_1"][key] += chunk_lt
+                stats["scale_gt_0_9"][key] += chunk_gt
+                stats["scale_elem_count"][key] += chunk_elems
 
     # Gate shapes are (B, streams) or (B, streams, channels) or (B, streams, H, W).
     # Reshape to (num_streams, -1) so each row is all gate values for one stream.
@@ -380,14 +395,19 @@ def _summarize_fusion_gate_stats(stats, prefix):
             f"{prefix}_translation_fusion_gate_fraction_mid_0_4_0_6": translation_stats["fraction_mid_0_4_0_6"],
         })
 
-    # Per-scale (P3/P4/P5) mean gate value per stream -- only present for channel-wise
-    # gates from the 1D pipeline (see PoseEstimationNet.stream_scale_dims and the
-    # scale_dims argument to _accumulate_fusion_gate_stats).
+    # Per-scale (P3/P4/P5) mean + specialization gate value per stream -- only present
+    # for channel-wise gates from the 1D pipeline (see PoseEstimationNet.stream_scale_dims
+    # and the scale_dims argument to _accumulate_fusion_gate_stats).
     for (task_name, scale), total in stats["scale_sum"].items():
         count = stats["scale_count"][(task_name, scale)]
         scale_mean = total / count
         col_prefix = f"{prefix}_{task_name}_" if task_name else f"{prefix}_"
         summary[f"{col_prefix}fusion_gate_{scale}_mean"] = format_fusion_weights(scale_mean)
+
+        elem_count = stats["scale_elem_count"][(task_name, scale)]
+        scale_lt = stats["scale_lt_0_1"][(task_name, scale)] / elem_count
+        scale_gt = stats["scale_gt_0_9"][(task_name, scale)] / elem_count
+        summary[f"{col_prefix}fusion_gate_{scale}_specialization"] = format_fusion_weights(scale_lt + scale_gt)
 
     return summary, mean, raw_weights, raw_rotation_weights, raw_translation_weights
 

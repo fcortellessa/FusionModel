@@ -28,7 +28,7 @@ fixed_overrides:
   training.dropout_rot: 0.1
 
 grid:
-  training.seed: [47, 50]
+  training.seed: [46, 48, 49]
   model.fusion:
     - "channelwise_gated_concat_hybrid"
     - "channelwise_gated_concat_local"
