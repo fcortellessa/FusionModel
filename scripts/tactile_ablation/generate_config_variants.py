@@ -5,25 +5,6 @@ Generate config variants from a template config and a YAML variant spec.
 The spec lets you choose exactly which config paths vary without changing the
 script itself.
 
-Example spec:
-
-fixed_overrides:
-  data.use_preaugmented_train_dir: false
-  data.root: ""
-
-grid:
-  training.seed: [40, 41, 42]
-  data.augmentation.enabled_noise: [false]
-  data.augmentation.enabled_brightness: [true, false]
-
-variants:
-  - name: blur_only
-    overrides:
-      data.augmentation.enabled_noise: false
-      data.augmentation.enabled_brightness: false
-      data.augmentation.enabled_contrast: false
-      data.augmentation.enabled_blur: true
-      data.augmentation.enabled_channel_scaling: false
 
 If both `grid` and `variants` are given, every variant is generated once per
 grid point (a full cross product), e.g. 3 variants x 10 grid combos = 30
@@ -31,6 +12,15 @@ files, each named `<variant_name>__<grid_overrides>__<hash>.yml`. If only one
 of `grid`/`variants` is given, that set alone determines the output (grid
 combos get an auto-generated name from the varying grid keys; explicit
 variants use their own `name`).
+
+By default the cross product is ordered variant-major: all grid combos for
+one variant are emitted before moving to the next variant. Pass
+`--grid-major` to flip this to grid-major order: all variants for one grid
+combo are emitted before moving to the next grid combo. This matters when a
+grid dimension is expensive to change between runs — e.g. `training.seed`
+triggers a new data split (`--force_preprocess`) — since it lets you launch
+generated configs in file order and only pay that cost once per seed instead
+of once per variant.
 """
 
 from __future__ import annotations
@@ -155,7 +145,7 @@ def expand_grid(grid: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return combinations
 
 
-def load_variant_entries(spec: Mapping[str, Any]) -> List[Dict[str, Any]]:
+def load_variant_entries(spec: Mapping[str, Any], grid_major: bool = False) -> List[Dict[str, Any]]:
     fixed_overrides = spec.get("fixed_overrides", {})
     if fixed_overrides and not isinstance(fixed_overrides, Mapping):
         raise TypeError("spec.fixed_overrides must be a mapping")
@@ -180,6 +170,16 @@ def load_variant_entries(spec: Mapping[str, Any]) -> List[Dict[str, Any]]:
         # Cross product: every explicit variant is generated once per grid
         # point, so seed/grid sweeps apply to LR-schedule-style variants too
         # instead of producing two disjoint, independently-named sets.
+        #
+        # Iteration order is controlled by `grid_major`:
+        #   - variant-major (default): all grid combos for one variant are
+        #     emitted before moving to the next variant.
+        #   - grid-major: all variants for one grid combo (e.g. one data
+        #     split seed) are emitted before moving to the next grid combo.
+        #     Useful when a grid dimension (like `training.seed`) is
+        #     expensive to change (triggers a new data split), so runs that
+        #     share a seed should be launched back-to-back.
+        parsed_variants: List[Dict[str, Any]] = []
         for variant in explicit_variants:
             if not isinstance(variant, Mapping):
                 raise TypeError("Each entry in spec.variants must be a mapping")
@@ -189,21 +189,29 @@ def load_variant_entries(spec: Mapping[str, Any]) -> List[Dict[str, Any]]:
             variant_name = variant.get("name")
             if variant_name is not None and not isinstance(variant_name, str):
                 raise TypeError("Each spec.variants[*].name must be a string when provided")
+            parsed_variants.append({"name": variant_name, "overrides": variant_overrides})
 
+        def make_entry(variant: Mapping[str, Any], combo: Mapping[str, Any]) -> Dict[str, Any]:
+            overrides = dict(fixed_overrides)
+            overrides.update(combo)
+            overrides.update(variant["overrides"])
+            grid_name_overrides = {key: combo[key] for key in varying_grid_keys}
+            return {
+                "prefix": prefix,
+                "name": variant["name"],
+                "overrides": overrides,
+                "name_overrides": variant["overrides"],
+                "grid_name_overrides": grid_name_overrides,
+            }
+
+        if grid_major:
             for combo in grid_combos:
-                overrides = dict(fixed_overrides)
-                overrides.update(combo)
-                overrides.update(variant_overrides)
-                grid_name_overrides = {key: combo[key] for key in varying_grid_keys}
-                entries.append(
-                    {
-                        "prefix": prefix,
-                        "name": variant_name,
-                        "overrides": overrides,
-                        "name_overrides": variant_overrides,
-                        "grid_name_overrides": grid_name_overrides,
-                    }
-                )
+                for variant in parsed_variants:
+                    entries.append(make_entry(variant, combo))
+        else:
+            for variant in parsed_variants:
+                for combo in grid_combos:
+                    entries.append(make_entry(variant, combo))
     elif grid:
         for combo in grid_combos:
             overrides = dict(fixed_overrides)
@@ -242,11 +250,12 @@ def write_config_variants(
     output_dir: Path,
     overwrite: bool = False,
     dry_run: bool = False,
+    grid_major: bool = False,
 ) -> List[Path]:
     template_config = load_yaml(template_config_path)
     spec = load_yaml(spec_path)
 
-    variants = load_variant_entries(spec)
+    variants = load_variant_entries(spec, grid_major=grid_major)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     written_paths: List[Path] = []
@@ -302,6 +311,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Show what would be generated without writing files",
     )
+    parser.add_argument(
+        "--grid-major",
+        action="store_true",
+        help=(
+            "Order output so every explicit variant is generated for one grid "
+            "combo before moving to the next grid combo (default: every grid "
+            "combo is generated for one variant before moving to the next "
+            "variant). Use this when a grid dimension is expensive to change "
+            "across runs (e.g. training.seed triggers a new data split), so "
+            "runs sharing that value are grouped together."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -324,6 +345,7 @@ def main() -> None:
         output_dir=output_dir,
         overwrite=args.overwrite,
         dry_run=args.dry_run,
+        grid_major=args.grid_major,
     )
 
     action = "Would write" if args.dry_run else "Wrote"

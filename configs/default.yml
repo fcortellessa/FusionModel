@@ -1,17 +1,62 @@
 model:
   backbone: yolo26n.pt
+  # NOTE: freeze_backbone has been a no-op since this model was written --
+  # ultralytics' YOLO(...) loader returns every backbone parameter with
+  # requires_grad=False already, and this flag only ever set requires_grad=False
+  # (never back to True), so every run in this project's history with
+  # freeze_backbone=false (the near-universal setting, including this default)
+  # has actually trained with a FULLY FROZEN backbone regardless of this value.
+  # It stays a no-op deliberately, to preserve exact backward compatibility with
+  # every existing run/comparison. Use backbone_trainable (below) to actually
+  # enable backbone gradients -- a separate, explicit opt-in.
   freeze_backbone: false
+  # Opt-in for actually training the backbone (see freeze_backbone's note above).
+  # Default false preserves every prior run's behavior exactly. True is the
+  # first time this project would train the backbone rather than run it frozen.
+  # Raises at construction if combined with freeze_backbone: true (contradictory).
+  # backbone_trainable: true
   streams: ["rgb_image", "digit_image"]
-  fusion: "concat" # concat | gated_concat | residual_gated_concat | 
-  # channelwise_gated_concat | channelwise_residual_gated_concat | 
-  
+  fusion: "concat" # concat | gated_concat | residual_gated_concat |
+  # channelwise_gated_concat | channelwise_residual_gated_concat |
+  # scale_gated_concat: like gated_concat, but with one independent sigmoid gate
+  # per stream PER PYRAMID SCALE (P3/P4/P5) instead of one gate per stream total --
+  # a middle ground between gated_concat (can't distinguish scales at all) and
+  # channelwise_gated_concat_local (can, but empirically converges to nearly
+  # identical P3/P4/P5 gate values anyway, see the final_ablation gate
+  # diagnostics). 1D pipeline only (needs PoseEstimationNet.stream_scale_dims).
+
   # True dual fusion: build two independent instances of the `fusion` module above
   # (separate learned parameters), one combining the RGB/tactile streams for the
   # rotation branch and one for the translation branch, instead of sharing a single
   # fused vector between both heads. Off by default; incompatible with head_type
   # 'se3_direct' (that head needs one joint fused vector).
   dual_fusion: false
+  # Optional: initial sigmoid gate output (before training) for the gated_concat
+  # fusion family (gated_concat / residual_gated_concat / channelwise_gated_concat*
+  # / channelwise_residual_gated_concat*, including _local/_hybrid), set via the
+  # gate's bias term. Unset (or omitted, or null) leaves every fusion class at its
+  # own default of 0.5 -- identical to the previous zero-bias init, fully backward
+  # compatible. Must be strictly between 0 and 1 when set (e.g. 0.88 biases the
+  # gate toward trusting/passing through both streams at init, without capping
+  # where it can move to over training -- unlike a hard floor). Ignored by fusion
+  # types that don't expose this (concat, attention, the softmax/sigmoid
+  # weighted-sum "gated" family, spatial_gated_2d).
+  # gate_init_prob: 0.88
   head_type: quaternion
+  # Multiplies the raw rotation loss (geodesic angle, radians -- or the handler's
+  # own native unit for other head_types) before it's summed with translation MSE,
+  # so the two loss terms are numerically comparable (see "Unit balancing" in
+  # CLAUDE.md). Unset (or omitted, or null; the default) leaves every handler at
+  # its own hardcoded default -- 200.0 for quaternion/angle/lie_algebra, 2000.0 for
+  # 2D_unit_vector -- identical to every existing run/config. Those hardcoded
+  # defaults are NOT derived from matching raw loss magnitudes (an empirical check
+  # via a fresh, untrained forward pass on real data found raw rotation loss and
+  # raw translation MSE already within ~2x of each other at initialization, given
+  # this project's translation representation isn't actually normalized -- see the
+  # MEAN_Y/STD_Y pitfall in utils/normalization.py) -- so 200.0 should not be
+  # treated as a principled value if you disable training.task_weighting, which
+  # otherwise adaptively corrects for whatever imbalance a fixed value leaves.
+  # rot_scaling_factor: 200.0
   # separate: independent y_head/z_head MLPs (default, current behavior).
   # joint: single trans_head MLP outputting both y and z together.
   translation_head_mode: separate
@@ -22,13 +67,32 @@ model:
   mlp_trans_1: 256
   mlp_trans_2: 128
   mlp_trans_3: 64
-  # Fixed grid each of P3/P4/P5 is adaptive-avg-pooled to before flattening into the
-  # fused feature vector (1D pipeline only; ignored by fusion: spatial_gated_2d, which
-  # operates on the unpooled spatial maps directly). fused_dim scales with the square
-  # of this value, so e.g. 10 -> 100x the per-channel pooled size feeding the heads;
-  # accepts a single int (square grid) or a [h, w] pair. Default 10 preserves the
-  # original hardcoded (10, 10) behavior.
+  # CORRECTED NOTE (this comment was wrong until now): despite the description this
+  # key used to carry, spatial_grid_size does NOT affect the 1D pipeline (gated_concat
+  # / channelwise_gated_concat* / anything not spatial_gated_2d) at all -- P3/P4/P5 are
+  # downsampled there via fixed, hardcoded stride-2 convolutions
+  # (base_model/pose_estimation_model.py's forward_single_stream), always producing
+  # 20x20/10x10/5x5 regardless of this value. It's referenced only inside the 2D-fusion
+  # (spatial_gated_2d) branch's fused_dim calculation, which itself refers to
+  # `self.spatial_grid_size` -- an attribute that is never actually assigned anywhere in
+  # PoseEstimationNet, so that reference is dead/unreachable too. In short:
+  # spatial_grid_size has never done anything, for any fusion type, despite every
+  # config (including this default) setting it. Kept here unchanged for backward
+  # compatibility (existing configs still parse); use pre_head_grid_size below for the
+  # real, working equivalent on the 1D pipeline.
   spatial_grid_size: 10
+  # Optional real mechanism (new) to shrink the 1D pipeline's pre-head bottleneck:
+  # applies an extra AdaptiveAvgPool2d to P3/P4/P5 (same target size for all three)
+  # right before flattening, on top of the fixed 20x20/10x10/5x5 stride-conv output
+  # above. The head's first layer is otherwise a single dense projection out of the
+  # full flattened size (e.g. rot_head's first layer is ~183.5M of its ~192.9M total
+  # parameters at the current fixed sizes) -- this shrinks that projection's input.
+  # Unset (or omitted, or null) skips the extra pooling entirely, fully backward
+  # compatible with every existing run. Accepts a single int (square grid) or a
+  # [h, w] pair. Sizes larger than 5 (P5's current smallest dimension) pool P5
+  # upward rather than down, so values <= 5 are the ones that actually shrink all
+  # three scales.
+  # pre_head_grid_size: 6
 
 training:
   lr: 0.001
@@ -41,6 +105,13 @@ training:
   # the same global LR schedule as "base" (scaled from this starting value),
   # but does NOT get HeadLRDecayManager's per-head plateau decay.
   # lr_fusion: 0.005
+  # Optional: starting LR for the backbone's own parameters (model.feature_extractors.*).
+  # Only meaningful when model.backbone_trainable: true -- otherwise those parameters
+  # have requires_grad=False and never appear in any optimizer param group regardless
+  # of this value. Unset (or omitted) falls back to `lr`. Same schedule behavior as
+  # lr_fusion (tracks the global LR schedule from this starting value, no per-group
+  # plateau decay).
+  # lr_backbone: 0.0001
   batch_size: 16
   epochs: 50
   num_workers: 4
@@ -98,11 +169,24 @@ training:
     min_lr_mult: 0.00001
   early_stopping:
     enabled: false
-    # Stop once val_loss hasn't improved by more than min_delta for this many
-    # consecutive epochs (checked against the same val_loss used for checkpoint
-    # selection). Training still stops no later than `epochs`.
+    # CORRECTED NOTE (this comment was wrong until now): this is NOT checked
+    # against val_loss. utils/train_utils.py's PerHeadEarlyStoppingManager is the
+    # only early-stopping class scripts/train.py ever instantiates (the
+    # val_loss-based EarlyStoppingManager class exists but is dead code, never
+    # called) -- it stops once BOTH val_abs_rot_x (degrees) and val_abs_trans
+    # (meters) have independently gone `patience` consecutive epochs without a
+    # min_delta relative improvement. Training still stops no later than `epochs`.
     patience: 10
     min_delta: 0.0
+    # Optional EMA smoothing (new) applied to val_abs_rot_x/val_abs_trans before
+    # comparing against the running best, instead of comparing raw per-epoch
+    # values. 1.0 (default) = no smoothing, identical to the previous behavior.
+    # Lower = more smoothing (e.g. 0.3 ~ a 3-4 epoch effective window) -- use this
+    # if a run stops prematurely on a noisy metric (see
+    # q2_channelwise_backbone_trainable, where val_abs_trans swung 30-50% epoch
+    # to epoch within a single run and one lucky low epoch set an unrealistically
+    # strict bar for every subsequent epoch to clear).
+    # smoothing_alpha: 0.3
 
 data:
   root: ""

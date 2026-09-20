@@ -1,0 +1,62 @@
+# Manual follow-up batch of 6 targeted head-architecture configs for
+# channelwise_gated_concat_local under backbone_trainable=true, chosen by hand
+# to build single-factor-isolated comparisons around the two Optuna anchors
+# (colleague's head: 256/1024/0/1024/16, current production's head:
+# 4096/2048/512/256/64) plus a new quat_1=2048 midpoint value not present in
+# the Optuna categorical grid (256/1024/4096).
+#
+# Each variant differs from at least one other variant (or from an existing
+# completed Optuna trial) by exactly one factor -- see conversation for the
+# full comparison-pair reasoning. Single seed (43, inherited from template)
+# per config since this is a quick targeted comparison, not a final
+# multi-seed confirmation.
+template_config: configs/generated/q2_optuna_channelwise_backbone_trainable_template.yml
+
+variants:
+  - name: q1-4096_q2-2048_q3-512_t2-1024_t3-16
+    overrides:
+      model.mlp_quat_1: 4096
+      model.mlp_quat_2: 2048
+      model.mlp_quat_3: 512
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: q1-256_q2-1024_q3-0_t2-256_t3-64
+    overrides:
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_2: 256
+      model.mlp_trans_3: 64
+
+  - name: q1-2048_q2-1024_q3-512_t2-256_t3-64
+    overrides:
+      model.mlp_quat_1: 2048
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 512
+      model.mlp_trans_2: 256
+      model.mlp_trans_3: 64
+
+  - name: q1-2048_q2-1024_q3-0_t2-1024_t3-16
+    overrides:
+      model.mlp_quat_1: 2048
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: q1-2048_q2-1024_q3-512_t2-1024_t3-16
+    overrides:
+      model.mlp_quat_1: 2048
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 512
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: q1-4096_q2-2048_q3-0_t2-1024_t3-16
+    overrides:
+      model.mlp_quat_1: 4096
+      model.mlp_quat_2: 2048
+      model.mlp_quat_3: 0
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

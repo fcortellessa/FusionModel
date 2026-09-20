@@ -1,0 +1,39 @@
+# Single sanity-check trial: is warmup_cosine the right LR schedule *family*,
+# or does an adaptive reduce_on_plateau schedule do at least as well without
+# hand-tuned shape parameters? Motivated by q2_channelwise_lr_schedule_gentleness
+# showing every gentler cosine variant lost to the current aggressive one --
+# that's evidence the current cosine SHAPE is well-tuned, not evidence that
+# cosine is the right FAMILY. This is the one clean test of the alternative
+# family actually available in this codebase (GlobalPlateauLRManager).
+#
+# Same winning head architecture as the LR-schedule-gentleness batch:
+# mlp_quat_1=2048, mlp_quat_2=1024, mlp_quat_3=512, mlp_trans_2=256,
+# mlp_trans_3=64.
+#
+# reduce_on_plateau watches val_fixed_loss = val_loss_q + val_loss_y + val_loss_z
+# (NOT the uncertainty-weighted val_loss column, which drifts independent of
+# actual prediction quality -- see GlobalPlateauLRManager.update docstring).
+# That metric empirically settles around ~1.92-1.98 in this config's late
+# epochs with ~0.03-0.08 epoch-to-epoch noise, which is what min_delta=0.02
+# below is sized against.
+#
+# NOTE: min_lr here is a floor on GlobalPlateauLRManager's internal multiplier
+# (starts at 1.0), NOT an absolute LR -- 0.05 matches the cosine schedule's own
+# final_lr_mult=0.05 so the comparison is apples-to-apples.
+template_config: configs/generated/q2_optuna_channelwise_backbone_trainable_template.yml
+
+fixed_overrides:
+  model.mlp_quat_1: 2048
+  model.mlp_quat_2: 1024
+  model.mlp_quat_3: 512
+  model.mlp_trans_2: 256
+  model.mlp_trans_3: 64
+  training.lr_schedule.type: reduce_on_plateau
+  training.lr_schedule.factor: 0.5
+  training.lr_schedule.patience: 7
+  training.lr_schedule.min_delta: 0.02
+  training.lr_schedule.min_lr: 0.05
+
+variants:
+  - name: reduce_on_plateau_f0.5_p7
+    overrides: {}

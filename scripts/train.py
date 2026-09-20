@@ -760,6 +760,7 @@ def train_loop(
     trans_norm_stats=None,
     grad_clip_max_norm=None,
     resume_state=None,
+    rot_scaling_factor=None,
 ):
     # resume_state is the raw checkpoint dict from load_checkpoint_for_resume()
     # (model/optimizer/uncertainty weights are already restored by that point --
@@ -817,7 +818,8 @@ def train_loop(
     rotation_handler = get_rotation_handler(
         model.rotation_parametrisation,
         criterion=criterion,
-        rotation_loss_type=rotation_loss_type
+        rotation_loss_type=rotation_loss_type,
+        rot_scaling_factor=rot_scaling_factor,
     )
 
     try:
@@ -1259,6 +1261,7 @@ def main(
         trans_norm_stats=trans_norm_stats,
         grad_clip_max_norm=grad_clip_max_norm,
         resume_state=resume_checkpoint,
+        rot_scaling_factor=cfg.get("model", {}).get("rot_scaling_factor"),
     )
 
 

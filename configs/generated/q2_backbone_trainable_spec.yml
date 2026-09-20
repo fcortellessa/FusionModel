@@ -1,0 +1,43 @@
+# Q2 follow-up: does actually training the backbone help? This is the first
+# time in this project's history the backbone has ever been unfrozen -- every
+# prior run (including every other q2 gate/warmup/pre_head grid this session)
+# used freeze_backbone=false, which turned out to be a no-op (see
+# base_model/pose_estimation_model.py: ultralytics' YOLO(...) loader returns
+# every parameter with requires_grad=False already, and this codebase never
+# explicitly re-enabled it). backbone_trainable (new) is the real, explicit
+# opt-in; lr_backbone gives the backbone its own optimizer param group instead
+# of sharing lr with the fresh heads/fusion.
+#
+# Motivated directly by q2_pre_head_grid_size's result: shrinking the fused
+# vector feeding the heads made accuracy consistently WORSE (not better) at
+# every seed tested, suggesting the frozen backbone's spatial detail is doing
+# real work the heads depend on -- but that detail is still generic
+# COCO-pretrained, never adapted to this RGB+tactile task. Backbone LR values
+# are deliberately conservative (well below base lr=0.0005): a pretrained
+# backbone fine-tuned at the same rate as freshly-initialized heads/fusion
+# risks catastrophic forgetting of useful pretrained features.
+#   0.00005  (0.1x base)
+#   0.00001  (0.02x base)
+#
+# Only 3 seeds, not the usual 5: measured backbone_trainable=true at ~2.44x
+# slower per batch than frozen (full backward pass now reaches ~4.5M backbone
+# params instead of being pruned entirely by autograd), so a full 5-seed x
+# 2-value grid would be a much larger compute commitment for what is a first,
+# exploratory pass into genuinely new territory for this project.
+#
+# gate_init_prob, lr_fusion, and pre_head_grid_size are all left at their
+# defaults so this stays isolated to backbone_trainable/lr_backbone alone.
+# Same template/split_seed as every other q2 comparison this session.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  model.fusion: "gated_concat"
+  model.backbone_trainable: true
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48]
+  training.lr_backbone:
+    - 0.00005
+    - 0.00001

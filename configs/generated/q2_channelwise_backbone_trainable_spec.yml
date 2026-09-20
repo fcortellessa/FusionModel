@@ -1,0 +1,51 @@
+# Q2 follow-up: does channelwise gating actually earn its keep once the
+# backbone can adapt, rather than under the frozen, generic features every
+# earlier fusion comparison this session used? channelwise_gated_concat_local/
+# hybrid showed roughly comparable (not clearly better) accuracy vs. plain
+# gated_concat in the original q2_gating_granularity_local_hybrid sweep --
+# but that comparison ran entirely on a frozen backbone (see the
+# freeze_backbone/backbone_trainable discovery), where per-channel features
+# were fixed and generic (COCO-pretrained, never adapted to this task). If
+# there wasn't much genuine per-channel structure to differentiate on, a
+# channel-wise gate wouldn't be expected to beat a scalar one -- which is
+# exactly what we saw. Now that backbone_trainable produces real gate std
+# increases and a ~36% rotation improvement (see q2_backbone_trainable), the
+# backbone's features are actually task-adapted, and channelwise gating has
+# real per-channel structure to work with for the first time.
+#
+# Tests both non-residual channelwise variants (residual variants already
+# ruled out separately -- their 1+gate floor structurally blocks suppression,
+# unrelated to backbone freezing, see conversation history):
+#   channelwise_gated_concat_local
+#   channelwise_gated_concat_hybrid
+#
+# backbone_trainable: true, lr_backbone fixed at 5e-05 (the winner from
+# q2_backbone_trainable/q2_backbone_trainable_higher) -- NOT re-swept here,
+# to isolate the fusion-type x backbone-training interaction alone rather
+# than compounding it with a second search over lr_backbone.
+#
+# Same 3 seeds (46, 47, 48) as every other backbone_trainable grid this
+# session (real added compute, ~1.3-1.5x slower per epoch than frozen).
+# Same template/split_seed as the original gated_concat backbone_trainable
+# grids for direct comparability -- mlp_quat_*/mlp_trans_*/translation_head_mode
+# already match the local/hybrid sweep's own template (both descend from the
+# same architecture), only model.fusion differs.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  model.backbone_trainable: true
+  training.lr_backbone: 0.00005
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48]
+
+variants:
+  - name: channelwise_local
+    overrides:
+      model.fusion: "channelwise_gated_concat_local"
+
+  - name: channelwise_hybrid
+    overrides:
+      model.fusion: "channelwise_gated_concat_hybrid"

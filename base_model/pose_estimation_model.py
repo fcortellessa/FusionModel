@@ -39,8 +39,64 @@ class PoseEstimationNet(nn.Module):
     def __init__(self, model_name='yolo26n.pt', streams=("mono_cam", "tactile"), fusion="concat", freeze_backbone=False, rotation_parametrisation="quaternion", activation=nn.GELU(),
                  rotation_layers = [256, 1024, 16], translation_layers = [1024, 1024, 0], dropout_rot = 0.0, dropout_trans = 0.0, use_batchnorm = True, task_adapter=None,
                  task_feature_adapter=False, task_feature_adapter_type="channel_attention", dual_fusion=False, translation_head_mode="separate",
-                 spatial_grid_size=(10, 10)):
+                 spatial_grid_size=(10, 10), gate_init_prob=None, backbone_trainable=False, pre_head_grid_size=None):
         super().__init__()
+
+        # Optional additional AdaptiveAvgPool2d applied to P3/P4/P5 (all three, same
+        # target size) right before flattening into the fused vector, for the 1D
+        # pipeline only (forward_single_stream) -- shrinks the bottleneck feeding the
+        # prediction heads, whose first layer is otherwise a single dense projection
+        # out of the full flattened size (e.g. rot_head's first layer is ~183.5M of
+        # its ~192.9M total parameters at the current fixed 20x20/10x10/5x5 sizes).
+        #
+        # This is a NEW, separate mechanism -- NOT a fix/wiring of the existing
+        # `spatial_grid_size` parameter above. spatial_grid_size is referenced only
+        # in the (dead, unreachable) 2D-fusion fused_dim calculation further below,
+        # which itself refers to `self.spatial_grid_size`, an attribute that is
+        # never actually assigned anywhere in this class -- so spatial_grid_size has
+        # never affected this (1D pipeline / gated_concat family) forward path at
+        # all, regardless of its config value. Every existing config sets
+        # spatial_grid_size: 10 without it ever doing anything for gated_concat/
+        # channelwise_gated_concat*; reusing that key for this new, real mechanism
+        # would silently change what "10" has always (inertly) meant. Hence a new,
+        # separate name here instead.
+        #
+        # None (default) skips the extra pooling entirely -- fused_dim stays exactly
+        # what the fixed stride convs above already produce, identical to every
+        # existing run. Accepts a single int (square grid, e.g. 6 -> AdaptiveAvgPool2d(6))
+        # or a [h, w] pair, matching spatial_grid_size's own documented convention.
+        if pre_head_grid_size is None:
+            self.pre_head_pool = None
+        else:
+            if isinstance(pre_head_grid_size, int):
+                pre_head_grid_size = (pre_head_grid_size, pre_head_grid_size)
+            else:
+                pre_head_grid_size = tuple(pre_head_grid_size)
+            self.pre_head_pool = nn.AdaptiveAvgPool2d(pre_head_grid_size)
+
+        # New, explicitly-named opt-in for actually training the backbone (see the
+        # extended comment at the freeze/unfreeze site below for why this exists
+        # separately from freeze_backbone, which stays pinned to its historical --
+        # always-frozen -- behavior for backward compatibility). Default False
+        # preserves that historical behavior exactly; True is the first time this
+        # project would ever actually fine-tune the backbone.
+        self.backbone_trainable = bool(backbone_trainable)
+        if freeze_backbone and self.backbone_trainable:
+            raise ValueError(
+                "freeze_backbone=True and backbone_trainable=True are contradictory: "
+                "freeze_backbone historically has no unfreezing effect (see the "
+                "feature_extractors setup below) and backbone_trainable is the only "
+                "thing that can actually enable backbone gradients. Set "
+                "freeze_backbone=False when using backbone_trainable=True."
+            )
+
+        # Optional initial sigmoid gate output for the gated_concat fusion family (see
+        # fusion/gated_concat.py's _sigmoid_init_bias). None (default) leaves every
+        # accepting fusion class at its own default of 0.5, identical to the previous
+        # zero-bias init -- fully backward compatible. Ignored by fusion types that
+        # don't expose a gate_init_prob kwarg (concat, attention, the softmax/sigmoid
+        # weighted-sum "gated" family, spatial_gated_2d).
+        self.gate_init_prob = gate_init_prob
 
         if dual_fusion and rotation_parametrisation == "se3_direct":
             raise ValueError(
@@ -76,9 +132,23 @@ class PoseEstimationNet(nn.Module):
             else:
                 self.in_channels[stream] = 3
             
-            if freeze_backbone:
-                for p in extractor.parameters():
-                    p.requires_grad = False
+            # NOTE: ultralytics' YOLO(model_name) loader returns every parameter with
+            # requires_grad=False already set (confirmed empirically -- YOLO('yolo26n.pt')
+            # loads with 0/366 params trainable). freeze_backbone historically only ever
+            # set requires_grad=False (when True) and never set it back to True when
+            # False -- so every run in this repo's history that used freeze_backbone=False
+            # (the near-universal default, incl. configs/default.yml and every fusion/gate
+            # ablation this project has run) has actually trained with a FULLY FROZEN
+            # backbone regardless of that flag's value. freeze_backbone therefore stays a
+            # no-op below (both True and False produce an all-frozen backbone), preserving
+            # exact backward compatibility with every existing run/comparison.
+            #
+            # backbone_trainable (new, default False) is the only thing that can actually
+            # enable backbone gradients -- an explicit, separately-named opt-in rather than
+            # a reinterpretation of freeze_backbone, so turning it on is a deliberate choice
+            # that doesn't retroactively change what freeze_backbone=False has always meant.
+            for p in extractor.parameters():
+                p.requires_grad = self.backbone_trainable
 
             self.feature_extractors[stream] = extractor
 
@@ -144,14 +214,14 @@ class PoseEstimationNet(nn.Module):
                 # Independent fusion module + post-conv per task branch: RGB/tactile
                 # features are combined separately for rotation and for translation,
                 # each with its own learned parameters (no sharing between branches).
-                self.fusion_rotation = build_fusion(fusion, self.total_spatial_channels, len(streams))
-                self.fusion_translation = build_fusion(fusion, self.total_spatial_channels, len(streams))
+                self.fusion_rotation = build_fusion(fusion, self.total_spatial_channels, len(streams), gate_init_prob=self.gate_init_prob)
+                self.fusion_translation = build_fusion(fusion, self.total_spatial_channels, len(streams), gate_init_prob=self.gate_init_prob)
                 self.fusion_post_conv_rotation = build_post_conv()
                 self.fusion_post_conv_translation = build_post_conv()
                 fusion_for_aux_check = self.fusion_rotation
             else:
                 # Instantiate the 2D fusion via registry
-                self.fusion = build_fusion(fusion, self.total_spatial_channels, len(streams))
+                self.fusion = build_fusion(fusion, self.total_spatial_channels, len(streams), gate_init_prob=self.gate_init_prob)
                 # Post-fusion convolution to mix features spatially across scales
                 self.fusion_post_conv = build_post_conv()
                 fusion_for_aux_check = self.fusion
@@ -167,6 +237,7 @@ class PoseEstimationNet(nn.Module):
             concat_output_fusions = {
                 "concat",
                 "gated_concat",
+                "scale_gated_concat",
                 "channelwise_gated_concat",
                 "channelwise_gated_concat_wide",
                 "channelwise_gated_concat_local",
@@ -183,12 +254,12 @@ class PoseEstimationNet(nn.Module):
             if self.dual_fusion:
                 # Independent fusion module per task branch (own parameters), fed
                 # from the same shared per-stream backbone features.
-                self.fusion_rotation = build_fusion(fusion, feat_dim, len(streams))
-                self.fusion_translation = build_fusion(fusion, feat_dim, len(streams))
+                self.fusion_rotation = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims)
+                self.fusion_translation = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims)
                 fusion_for_aux_check = self.fusion_rotation
             else:
                 # build_fusion returns a single fusion module instance as specified by the config
-                self.fusion = build_fusion(fusion, feat_dim, len(streams))
+                self.fusion = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims)
                 fusion_for_aux_check = self.fusion
 
             fused_dim = feat_dim * len(streams) if fusion in concat_output_fusions else feat_dim
@@ -330,6 +401,17 @@ class PoseEstimationNet(nn.Module):
         p3 = self.stride_p3_2(self.stride_p3_1(self.conv_p3(p3)))  # 80×80 -> 40×40 -> 20×20
         p4 = self.stride_p4_2(self.stride_p4_1(self.conv_p4(p4)))  # 40×40 -> 20×20 -> 10×10
         p5 = self.stride_p5_2(self.stride_p5_1(self.conv_p5(p5)))  # 20×20 -> 10×10 -> 5×5
+
+        # Optional additional shrink of the pre-flatten bottleneck (see
+        # pre_head_grid_size in __init__). None (default) skips this entirely,
+        # preserving the fixed 20x20/10x10/5x5 sizes above exactly -- identical to
+        # every existing run/config, none of which have ever actually varied this
+        # (the long-dead, unrelated `spatial_grid_size` key never affected this
+        # 1D pipeline at all -- see the extended note in __init__).
+        if self.pre_head_pool is not None:
+            p3 = self.pre_head_pool(p3)
+            p4 = self.pre_head_pool(p4)
+            p5 = self.pre_head_pool(p5)
 
         return torch.cat([p.flatten(1) for p in [p3, p4, p5]], dim=1)
 

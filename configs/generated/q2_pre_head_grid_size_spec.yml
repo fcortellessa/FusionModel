@@ -1,0 +1,43 @@
+# Q2 follow-up: does shrinking the fused-vector bottleneck feeding the
+# prediction heads actually help, holding head widths (mlp_quat_*/mlp_trans_*)
+# fixed at their established values? 95% of rot_head's 192.9M parameters live
+# in exactly one layer -- rot_head.net.0.weight, shape (4096, 44800) -- the
+# projection out of the flattened, concatenated fusion vector.
+#
+# Uses the NEW pre_head_grid_size mechanism (base_model/pose_estimation_model.py),
+# NOT the long-dead `spatial_grid_size` key -- that key never affected this (1D
+# pipeline / gated_concat family) forward path at all, for any fusion type,
+# despite every existing config setting it to 10 (see the corrected note in
+# configs/default.yml). pre_head_grid_size is a real, newly-wired
+# AdaptiveAvgPool2d applied to P3/P4/P5 right before flattening.
+#
+# Values: 6 (-> fused_dim=16,128, confirmed empirically -- matches
+# optuna_phase1a_head_architecture_grid6.py's own docstring claim, though that
+# script's spatial_grid_size=6 override was itself inert for the same reason
+# above, so this is the first time that fused_dim has actually been tested)
+# and 3 (-> fused_dim=4,032, a more aggressive shrink). 10-equivalent (i.e.
+# pre_head_grid_size unset) is NOT regenerated -- already have full 5-seed
+# baseline data (runs/q2_ScalarVsChannelwise_gradclip).
+#
+# mlp_quat_*/mlp_trans_* held at the template's existing values -- deliberately
+# NOT re-searched jointly with pre_head_grid_size here (that's a legitimate
+# follow-up, analogous to optuna_phase1a, only if this shows a smaller
+# bottleneck helps at all; see conversation history for why testing both at
+# once here would leave any effect unattributable to either factor alone).
+#
+# Same template/seeds/split_seed as every other q2 gate/warmup/backbone
+# comparison this session for direct comparability. gate_init_prob, lr_fusion,
+# lr_backbone/backbone_trainable, and the warmup-shape overrides are all left
+# at their defaults so this stays isolated to pre_head_grid_size alone.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  model.fusion: "gated_concat"
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48, 49, 50]
+  model.pre_head_grid_size:
+    - 6
+    - 3

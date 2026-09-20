@@ -1,0 +1,73 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" agent="generate_architecture_diagrams.py" version="24.0.0">
+ <diagram id="page-01_concat" name="01_concat">
+  <mxGraphModel dx="1000" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="616" math="0" shadow="0">
+   <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="n2" value="&lt;b&gt;1. Concat&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=22;" vertex="1" parent="1">
+     <mxGeometry x="40" y="14" width="820" height="36" as="geometry" />
+    </mxCell>
+    <mxCell id="n3" value="RGB Features&lt;br&gt;22,400-dim" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="70" y="74" width="340" height="80" as="geometry" />
+    </mxCell>
+    <mxCell id="n4" value="Tactile Features&lt;br&gt;22,400-dim" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="490" y="74" width="340" height="80" as="geometry" />
+    </mxCell>
+    <mxCell id="n5" value="Concatenate Streams&lt;br&gt;[RGB | Tactile]&lt;br&gt;44,800-dim" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="240" y="210" width="420" height="90" as="geometry" />
+    </mxCell>
+    <mxCell id="e6" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n3" target="n5">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="240" y="182" />
+       <mxPoint x="450" y="182" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e7" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n4" target="n5">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="660" y="182" />
+       <mxPoint x="450" y="182" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n8" value="Rotation Head (MLP)&lt;br&gt;44,800 → 256 → 1024 → 4&lt;br&gt;&lt;font style='font-size:11px'&gt;GELU · Dropout 0.1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#0066cc;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="40" y="370" width="400" height="96" as="geometry" />
+    </mxCell>
+    <mxCell id="n9" value="Translation Head (MLP)&lt;br&gt;44,800 → 1024 → 1024 → 16 → 2&lt;br&gt;&lt;font style='font-size:11px'&gt;GELU · Dropout 0.1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#0066cc;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="460" y="370" width="400" height="96" as="geometry" />
+    </mxCell>
+    <mxCell id="e10" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n5" target="n8">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="450" y="340" />
+       <mxPoint x="240" y="340" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e11" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n5" target="n9">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="450" y="340" />
+       <mxPoint x="660" y="340" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n12" value="Quaternion &lt;i&gt;&lt;b&gt;q&lt;/b&gt;&lt;/i&gt;&lt;br&gt;&lt;font style='font-size:11px'&gt;L2-normalised, ℝ⁴&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="90" y="522" width="300" height="64" as="geometry" />
+    </mxCell>
+    <mxCell id="n13" value="Translation Vector [&lt;i&gt;y&lt;/i&gt;, &lt;i&gt;z&lt;/i&gt;]&lt;br&gt;&lt;font style='font-size:11px'&gt;x fixed to 0&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="510" y="522" width="300" height="64" as="geometry" />
+    </mxCell>
+    <mxCell id="e14" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n8" target="n12">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e15" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n9" target="n13">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+   </root>
+  </mxGraphModel>
+ </diagram>
+</mxfile>

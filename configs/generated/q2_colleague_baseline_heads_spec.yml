@@ -1,0 +1,40 @@
+# Direct comparison: colleague's original head architecture vs. the current
+# production values, under backbone_trainable=true (never tested before --
+# every prior head-architecture comparison, including whatever established
+# the current mlp_quat_*/mlp_trans_* values, ran on a frozen backbone).
+#
+# Colleague's baseline, exactly as given:
+#   mlp_quat_1: 256, mlp_quat_2: 1024, mlp_quat_3: 0   -- 0 is dropped by
+#     to_list() in pose_estimation_model.py, i.e. a 2-hidden-layer rotation
+#     head (256 -> 1024), widening, not the current 3-layer narrowing head
+#     (4096 -> 2048 -> 512).
+#   mlp_trans_1: 1024, mlp_trans_2: 1024, mlp_trans_3: 16 -- 3-layer
+#     translation head, flat then a sharp bottleneck (1024 -> 1024 -> 16),
+#     vs. the current gradual narrowing (1024 -> 256 -> 64).
+#
+# Compare directly against the existing gated_concat @ lr_backbone=5e-05
+# results (runs/q2_backbone_trainable, current mlp_quat_*/mlp_trans_* values)
+# -- same seeds, same template, same everything else, so any difference is
+# attributable to head architecture alone.
+#
+# 3 seeds (46, 47, 48), matching every other backbone_trainable grid this
+# session -- this result is meant to be citable/explainable, not just an
+# internal sanity check, so it gets the same seed count as everything else
+# rather than a single-seed quick look.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  model.fusion: "gated_concat"
+  model.backbone_trainable: true
+  training.lr_backbone: 0.00005
+  model.mlp_quat_1: 256
+  model.mlp_quat_2: 1024
+  model.mlp_quat_3: 0
+  model.mlp_trans_1: 1024
+  model.mlp_trans_2: 1024
+  model.mlp_trans_3: 16
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48]

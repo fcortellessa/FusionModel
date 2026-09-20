@@ -376,14 +376,25 @@ class QuaternionHandler(RotationLossHandler):
         )
 
 
-def get_rotation_handler(rotation_parametrisation, criterion=None, rotation_loss_type="geodesic"):
-    """Factory function to get the appropriate rotation loss handler."""
+def get_rotation_handler(rotation_parametrisation, criterion=None, rotation_loss_type="geodesic",
+                          rot_scaling_factor=None):
+    """Factory function to get the appropriate rotation loss handler.
+
+    rot_scaling_factor: optional override for the handler's own hardcoded default
+    (see "Unit balancing" in CLAUDE.md). None (unset, the default) preserves every
+    existing config's behavior exactly -- each handler falls back to its own
+    default (200.0, or 2000.0 for 2D_unit_vector) unchanged. The quaternion case
+    doesn't take this directly (SE3DirectHandler doesn't use rot_scaling_factor at
+    all); a configured value for it is instead baked into the passed-in `criterion`
+    itself -- see TrainingConfigBuilder.build_loss_function.
+    """
+    kwargs = {} if rot_scaling_factor is None else {"rot_scaling_factor": rot_scaling_factor}
     if rotation_parametrisation == "2D_unit_vector":
-        return TwoDUnitVectorHandler(rotation_loss_type=rotation_loss_type)
+        return TwoDUnitVectorHandler(rotation_loss_type=rotation_loss_type, **kwargs)
     elif rotation_parametrisation == "angle":
-        return AngleHandler()
+        return AngleHandler(**kwargs)
     elif rotation_parametrisation == "lie_algebra":
-        return LieAlgebraHandler()
+        return LieAlgebraHandler(**kwargs)
     elif rotation_parametrisation == "se3_direct":
         return SE3DirectHandler()
     else:

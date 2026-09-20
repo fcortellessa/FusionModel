@@ -124,6 +124,35 @@ def _resolve_run_config_path(folder_path):
     raise FileNotFoundError(f"Could not resolve a config file for run folder: {folder_path}")
 
 
+def _split_seed_sort_key(folder_path):
+    """Sort key putting runs that share a split seed next to each other.
+    Folders without a resolvable config/seed sort last (they get skipped later)."""
+    from utils.utils import load_config, resolve_split_seed
+
+    try:
+        seed = resolve_split_seed(load_config(_resolve_run_config_path(folder_path)))
+    except FileNotFoundError:
+        seed = None
+    return (seed is None, seed if seed is not None else 0)
+
+
+def _existing_results_record(folder_path):
+    """Same record run_inference_on_folder returns, but for a run whose test results
+    already exist (used by --overview-only). None if the folder has no results."""
+    from utils.utils import load_config
+
+    results_dir = os.path.join(folder_path, "results")
+    if not glob.glob(os.path.join(results_dir, "results_*.csv")):
+        print(f"⚠️ Skipping {folder_path}: no results/results_*.csv")
+        return None
+    try:
+        cfg = load_config(_resolve_run_config_path(folder_path))
+    except FileNotFoundError as e:
+        print(f"⚠️ Skipping {folder_path}: {e}")
+        return None
+    return {"folder_path": folder_path, "cfg": cfg, "results_dir": results_dir}
+
+
 def _ensure_matching_split(cfg, folder_path):
     from utils.utils import resolve_data_root
     from data_processing.preprocess_data import ensure_test_split_current
@@ -354,14 +383,18 @@ def _violin_panel(ax, pooled, groups, colors, label, log=False):
     ax.grid(True, alpha=0.3, axis="y")
 
 
-def _boxplot_panel(ax, pooled, groups, colors, label):
+def _boxplot_panel(ax, pooled, groups, colors, label, showfliers=False):
     """One boxplot per group on a shared axis -- factored out so the abs-error
-    and signed-error boxplot figures don't duplicate this."""
+    and signed-error boxplot figures don't duplicate this.
+
+    Fliers are hidden by default: with thousands of per-sample errors per group the
+    outlier dots swamp the (tiny) boxes; the tails stay visible in the violin plots."""
     present_groups = [g for g in groups if g in pooled]
     data = [pooled[g] for g in present_groups]
     if not data:
         return
-    bp = ax.boxplot(data, patch_artist=True, notch=True, labels=[str(g) for g in present_groups])
+    bp = ax.boxplot(data, patch_artist=True, notch=True, showfliers=showfliers,
+                    labels=[str(g) for g in present_groups])
     for patch, g in zip(bp["boxes"], present_groups):
         patch.set_facecolor(colors[g])
         patch.set_alpha(0.6)
@@ -382,13 +415,14 @@ def _pooled_by_group(records, col):
     return {g: np.concatenate(v) for g, v in pooled.items() if v}
 
 
-def plot_pooled_distributions(records, output_dir, formats, group_by):
+def plot_pooled_distributions(records, output_dir, formats, group_by, title_suffix=""):
     """Same shape as test.py's per-run summary plots, but pooling every
     run/seed sharing a group value into one figure per metric so groups are
     directly comparable."""
     output_dir.mkdir(parents=True, exist_ok=True)
     groups = sorted({rec["group"] for rec in records}, key=str)
     colors = _group_colors(groups)
+    group_by = f"{group_by}{title_suffix}"
 
     # val_abs_rot_z (full quaternion geodesic distance) is intentionally
     # dropped from these overview panels: this is a planar in-hand pose task
@@ -414,7 +448,7 @@ def plot_pooled_distributions(records, output_dir, formats, group_by):
 
     # Grouped boxplot comparison, one subplot per metric
     fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-    fig.suptitle(f"Test Error Comparison by {group_by} (boxplots)", fontsize=16)
+    fig.suptitle(f"Test Error Comparison by {group_by} (boxplots, outliers hidden)", fontsize=16)
     for ax, (col, label) in zip(axs, abs_metrics):
         pooled = _pooled_by_group(records, col)
         _boxplot_panel(ax, pooled, groups, colors, label)
@@ -437,7 +471,7 @@ def plot_pooled_distributions(records, output_dir, formats, group_by):
 
     # Signed error boxplots (same pairing as the abs-error violin/boxplot pair above)
     fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-    fig.suptitle(f"Signed Test Error Comparison by {group_by} (boxplots)", fontsize=16)
+    fig.suptitle(f"Signed Test Error Comparison by {group_by} (boxplots, outliers hidden)", fontsize=16)
     for ax, col in zip(axs, SIGNED_METRIC_COLS):
         pooled = _pooled_by_group(records, col)
         _boxplot_panel(ax, pooled, groups, colors, col)
@@ -465,7 +499,7 @@ def plot_pooled_distributions(records, output_dir, formats, group_by):
     print(f"✓ Pooled distribution plots saved to {output_dir}")
 
 
-def generate_overview(processed, overview_dir, plot_formats, group_by):
+def generate_overview(processed, overview_dir, plot_formats, group_by, split_overview=True):
     records = _collect_run_records(processed, group_by)
     if not records:
         print("⚠️ No test results available to build an overview from.")
@@ -474,6 +508,17 @@ def generate_overview(processed, overview_dir, plot_formats, group_by):
     per_run_df, per_group_df = build_leaderboards(records)
     write_leaderboards(per_run_df, per_group_df, overview_dir, group_by)
     plot_pooled_distributions(records, overview_dir, plot_formats, group_by)
+
+    # Each data.split_seed has its own test set, so pooling splits mixes different test
+    # samples into one box. Also write one overview per split seed (comparable groups only).
+    if split_overview:
+        for split_seed in sorted({r["split_seed"] for r in records if r["split_seed"] != "?"}, key=str):
+            subset = [r for r in records if r["split_seed"] == split_seed]
+            sub_dir = overview_dir / f"split_seed-{split_seed}"
+            sub_run_df, sub_group_df = build_leaderboards(subset)
+            write_leaderboards(sub_run_df, sub_group_df, sub_dir, group_by)
+            plot_pooled_distributions(subset, sub_dir, plot_formats, group_by,
+                                      title_suffix=f" | split_seed={split_seed}")
 
 
 # ==============================================================================
@@ -505,6 +550,16 @@ def main():
         "--skip-overview",
         action="store_true",
         help="Skip building the aggregate leaderboard/overview plots after processing runs."
+    )
+    parser.add_argument(
+        "--overview-only",
+        action="store_true",
+        help="Don't run inference: build the overview from the results/ already present in each run folder."
+    )
+    parser.add_argument(
+        "--no-split-overview",
+        action="store_true",
+        help="Only build the pooled overview; skip the per-split-seed overviews (overview/split_seed-<N>/)."
     )
     args = parser.parse_args()
 
@@ -540,6 +595,11 @@ def main():
     # Remove duplicates while preserving order
     folders_to_process = list(dict.fromkeys(folders_to_process))
 
+    # Group runs by split seed: each seed needs its own Data_split/test rebuild
+    # (ensure_test_split_current), so consecutive same-seed runs reuse it.
+    # sorted() is stable, so timestamp order is kept within a seed.
+    folders_to_process.sort(key=_split_seed_sort_key)
+
     if not folders_to_process:
         print("⚠️ No folders found to process. Please check your CLI arguments or script config.")
         return
@@ -551,7 +611,10 @@ def main():
     for folder in folders_to_process:
         absolute_folder = os.path.abspath(folder)
         if os.path.exists(absolute_folder):
-            record = run_inference_on_folder(absolute_folder, plot_formats)
+            if args.overview_only:
+                record = _existing_results_record(absolute_folder)
+            else:
+                record = run_inference_on_folder(absolute_folder, plot_formats)
             if record is not None:
                 processed.append(record)
         else:
@@ -566,7 +629,8 @@ def main():
             overview_dir = Path(os.path.commonpath([os.path.abspath(f) for f in folders_to_process])) / "overview"
 
         print(f"\n📊 Building overview (grouped by {args.group_by}) at {overview_dir} ...")
-        generate_overview(processed, overview_dir, plot_formats, args.group_by)
+        generate_overview(processed, overview_dir, plot_formats, args.group_by,
+                          split_overview=not args.no_split_overview)
 
 
 if __name__ == "__main__":

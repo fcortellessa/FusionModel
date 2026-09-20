@@ -1,0 +1,36 @@
+# Extension of q2_colleague_baseline_heads_spec.yml: same colleague head
+# architecture (mlp_quat_1=256/mlp_quat_2=1024/mlp_quat_3=0 -- a 2-hidden-layer
+# widening rotation head, since to_list() in pose_estimation_model.py drops
+# any <=0 entry; mlp_trans_1=1024/mlp_trans_2=1024/mlp_trans_3=16 -- a
+# 3-hidden-layer translation head with a sharp bottleneck to 16 right before
+# output), this time on channelwise_gated_concat_local instead of gated_concat,
+# to see whether the head-architecture comparison changes for a channelwise
+# gate vs. the scalar one.
+#
+# Motivated by: channelwise gating only showed its real advantage over
+# gated_concat once the backbone was trainable (q2_channelwise_backbone_trainable,
+# confirmed on q2_channelwise_backbone_trainable_smoothed once the premature-
+# stopping issue was fixed) -- so it's an open question whether a much smaller,
+# differently-shaped head (colleague's baseline) still lets that channelwise
+# advantage show up, or whether channelwise gating specifically benefits from
+# the current, larger head architecture in a way gated_concat doesn't.
+#
+# Same backbone_trainable=true, lr_backbone=5e-05 (the value already confirmed
+# to work for channelwise_local), same 3 seeds (46, 47, 48), same template.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  model.fusion: "channelwise_gated_concat_local"
+  model.backbone_trainable: true
+  training.lr_backbone: 0.00005
+  model.mlp_quat_1: 256
+  model.mlp_quat_2: 1024
+  model.mlp_quat_3: 0
+  model.mlp_trans_1: 1024
+  model.mlp_trans_2: 1024
+  model.mlp_trans_3: 16
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48]

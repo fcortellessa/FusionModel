@@ -1,0 +1,89 @@
+# Tests whether the rot_scaling_factor=1.0 vs 200 gap in the final ablation is a
+# warm-up artefact of the uncertainty weighting.
+#
+# With task_weighting=uncertainty the rotation task's effective weight on the raw
+# geodesic error is s * exp(-log_var_rot). log_var_rot starts at 0 and settles at
+# ~log(s * geodesic); at s=200 the run therefore starts at effective weight 200,
+# at s=1.0 at effective weight 1, and takes ~41 epochs (vs ~11) to reach the same
+# ~510-530 plateau (see runs/candidate_analysis/uncertainty_scale/).
+#
+# The ONLY change vs. the existing rot_scaling_factor=1.0 final-ablation runs is
+#     training.task_weighting.init_log_var_rot: -ln(200) = -5.298317366548036
+# which starts the effective rotation weight at 1 * exp(5.298...) = 200, i.e. exactly
+# where the s=200 runs start. init_log_var_trans stays 0.
+#
+# Cells = the 12 (candidate, split_seed) cells that already have BOTH an s=200 and an
+# s=1.0 (init 0) run: concat, gated_concat, channelwise_gated_concat_local,
+# dual_gated_concat x split seeds 36-38. Everything else is copied from
+# final_ablation_candidates_rescale_spec.yml (same template, early stopping, seed 50, ...).
+#
+# Note: the checkpoint-selection criterion (val loss_q + loss_y + loss_z) still carries
+# rot_scaling_factor, so at s=1.0 it stays translation-dominated. This spec only tests
+# the weighting warm-up, not that effect.
+#
+# Generate (grouped by split seed so each data split is built once):
+#   python scripts/tactile_ablation/generate_config_variants.py \
+#       --template-config configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml \
+#       --spec configs/generation_specs/final_ablation_init_log_var_rot_spec.yml \
+#       --output-dir configs/generated/final_ablation_init_log_var_rot/ --grid-major
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.task_weighting.init_log_var_rot: -5.298317366548036
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: concat
+    overrides:
+      model.fusion: concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: gated_concat
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: channelwise_gated_concat_local
+    overrides:
+      model.fusion: channelwise_gated_concat_local
+      model.dual_fusion: false
+      model.mlp_quat_1: 2048
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 512
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 256
+      model.mlp_trans_3: 64
+
+  - name: dual_gated_concat
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

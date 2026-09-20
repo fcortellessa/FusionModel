@@ -1,0 +1,75 @@
+# The 5 still-missing seed=39 fusion types (concat and gated already completed
+# under rot_scaling_factor=200 -- not regenerated). See
+# final_ablation_remaining_spec.yml for the rot_scaling_factor=1.0 rationale
+# and the accepted seed-consistency tradeoff.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+
+grid:
+  data.split_seed: [39]
+
+variants:
+  - name: gated_concat
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: residual_gated_concat
+    overrides:
+      model.fusion: residual_gated_concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: channelwise_gated_concat_local
+    overrides:
+      model.fusion: channelwise_gated_concat_local
+      model.dual_fusion: false
+      model.mlp_quat_1: 2048
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 512
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 256
+      model.mlp_trans_3: 64
+
+  - name: channelwise_residual_gated_concat_local
+    overrides:
+      model.fusion: channelwise_residual_gated_concat_local
+      model.dual_fusion: false
+      model.mlp_quat_1: 2048
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 512
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 256
+      model.mlp_trans_3: 64
+
+  - name: dual_gated_concat
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

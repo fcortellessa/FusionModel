@@ -1,0 +1,32 @@
+# Follow-up to q2_channelwise_headsearch_manual: isolates mlp_quat_3 (0 vs 256
+# vs the already-tested 512) specifically at the new best-known combo
+# (quat_1=2048, quat_2=1024, trans_2/3=256/64 -- config 003 from the prior
+# manual batch, score 1.0239). mlp_quat_3=512 has only been compared against
+# 0 in one other context (quat_1=2048 paired with colleague's trans head
+# 1024/16, where 0 won) -- this batch checks whether 512 is actually optimal
+# in the trans=256/64 context too, or whether a smaller value does even
+# better there.
+#
+# mlp_quat_3=64/16 deliberately not tested here: they'd reproduce the same
+# late-abrupt-bottleneck shape already shown to hurt on the translation head
+# (1024->256->64 beating 1024->1024->16 consistently), so a narrow third
+# rotation layer is expected to underperform for the same reason -- not
+# worth the compute given the mechanism is already established.
+template_config: configs/generated/q2_optuna_channelwise_backbone_trainable_template.yml
+
+variants:
+  - name: q1-2048_q2-1024_q3-0_t2-256_t3-64
+    overrides:
+      model.mlp_quat_1: 2048
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_2: 256
+      model.mlp_trans_3: 64
+
+  - name: q1-2048_q2-1024_q3-256_t2-256_t3-64
+    overrides:
+      model.mlp_quat_1: 2048
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 256
+      model.mlp_trans_2: 256
+      model.mlp_trans_3: 64

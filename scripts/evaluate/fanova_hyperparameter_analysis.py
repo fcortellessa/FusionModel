@@ -18,8 +18,8 @@ Usage:
     python fanova_hyperparameter_analysis.py --path runs/ --metric val_loss --output results/fanova/
     python fanova_hyperparameter_analysis.py --path runs/ --metric test_rotation_error --output results/fanova/ --n-points 50
 
-Author: Claude Code
-Date: 2026-09-03
+
+Dependencies: pandas, numpy, scipy, matplotlib, plotly (optional)
 """
 
 import os
@@ -36,7 +36,8 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
+from matplotlib.colors import LinearSegmentedColormap, Normalize
+import matplotlib.patches as mpatches
 from scipy import interpolate, stats
 from scipy.spatial.distance import pdist, squareform
 
@@ -411,9 +412,13 @@ class FANOVAVisualizer:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Set style
-        sns.set_style("whitegrid")
+        # Set matplotlib style
         plt.rcParams['figure.figsize'] = (12, 8)
+        plt.rcParams['axes.grid'] = True
+        plt.rcParams['grid.alpha'] = 0.3
+        plt.rcParams['grid.linestyle'] = '-'
+        plt.rcParams['grid.linewidth'] = 0.5
+        plt.rcParams['axes.axisbelow'] = True
 
     def plot_importance_ranking(self) -> Path:
         """Plot hyperparameter importance as a horizontal bar chart."""
@@ -518,23 +523,34 @@ class FANOVAVisualizer:
                     except Exception as e:
                         logger.warning(f"Failed to compute interaction {param1}×{param2}: {e}")
 
-        # Plot heatmap
+        # Plot heatmap using matplotlib
         fig, ax = plt.subplots(figsize=(8, 7))
 
-        sns.heatmap(
-            interaction_matrix,
-            xticklabels=top_params,
-            yticklabels=top_params,
-            annot=True,
-            fmt='.3f',
-            cmap='YlOrRd',
-            cbar_kws={'label': 'Interaction Importance (Fraction of Variance)'},
-            ax=ax,
-            vmin=0,
-        )
+        # Create custom colormap (YlOrRd: Yellow -> Orange -> Red)
+        cmap = plt.cm.YlOrRd
+
+        # Display heatmap
+        im = ax.imshow(interaction_matrix, cmap=cmap, aspect='auto', vmin=0, vmax=interaction_matrix.max())
+
+        # Set ticks and labels
+        ax.set_xticks(np.arange(n))
+        ax.set_yticks(np.arange(n))
+        ax.set_xticklabels(top_params, rotation=45, ha='right')
+        ax.set_yticklabels(top_params)
+
+        # Add text annotations
+        for i in range(n):
+            for j in range(n):
+                text = ax.text(j, i, f'{interaction_matrix[i, j]:.3f}',
+                             ha="center", va="center", color="black", fontsize=9)
+
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Interaction Importance (Fraction of Variance)', fontsize=10)
 
         ax.set_title(f'Pairwise Interaction Effects (Top {top_k} Parameters)',
-                    fontsize=14, fontweight='bold')
+                    fontsize=14, fontweight='bold', pad=20)
+
         plt.tight_layout()
 
         output_path = self.output_dir / 'interaction_heatmap.png'

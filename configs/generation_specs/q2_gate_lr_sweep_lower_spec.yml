@@ -1,0 +1,52 @@
+# Q2 follow-up, low-side counterpart to q2_gate_lr_sweep_spec.yml: does a
+# SLOWER (not faster) fusion-gate LR reduce the near-zero-variance gate
+# collapse, instead of accelerating it?
+#
+# q2_gate_lr_sweep_spec.yml tested lr_fusion at 5x/10x/20x the base LR
+# (0.0025/0.005/0.01 vs base 0.0005) and found every single run collapsed
+# val_fusion_gate_std to exactly 0.000 -- worse than the unmodified baseline's
+# already-small-but-nonzero 0.02-0.04 -- plus one outright catastrophic
+# failure (seed 47 @ 5x, val_loss 13.9 by epoch 15). Giving the gate a bigger
+# gradient signal didn't help it explore and specialize; it just reached a
+# degenerate fixed point faster and more completely. No value below 1x base
+# has ever been tested -- this grid fills that gap.
+#
+# Indirect supporting evidence a slower gate LR is worth testing: the
+# temperature-scaled softmax gate (fusion: "gated" == GatedSoftmaxFusion,
+# temperature=50) shows meaningfully healthier behavior than any sigmoid
+# variant tested so far (11/12 runs land on a balanced ~0.6/0.4 split, not a
+# collapsed one) -- and dividing logits by a large temperature has the same
+# effect on effective step size as a smaller LR would, uniformly damping how
+# far any single gradient step can move the gate. That's a plausible
+# explanation for softmax's relative stability that argues for the SLOW
+# direction, not the fast one already ruled out.
+#
+# lr_fusion values: 0.0003 (0.6x base) and 0.0001 (0.2x base) -- a real slow-
+# down without going so low the gate is effectively frozen. Same 5 seeds and
+# same split_seed=40 as every other q2 gate-collapse comparison this session
+# for direct comparability (including the original higher-side sweep and the
+# unmodified baseline in runs/q2_ScalarVsChannelwise_gradclip).
+#
+# model.gate_init_prob and the warmup-shape overrides (q2_warmup_gentleness)
+# are left at their defaults so this stays isolated to lr_fusion alone --
+# don't compound with those two other single-factor experiments here.
+#
+# Compare via val_fusion_gate_std and val_fusion_gate_mean in metrics.csv,
+# not loss alone -- std moving off ~0 is the actual signal this experiment is
+# testing for, same convention as q2_gate_init_prob_*.
+#
+# Template carries the exact grad_clip/warmup_cosine/early_stopping settings
+# the rest of the q2 gradclip grid used (same template as
+# q2_gate_lr_sweep_spec.yml and q2_gate_init_prob_gated_concat_spec.yml).
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  model.fusion: "gated_concat"
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48, 49, 50]
+  training.lr_fusion:
+    - 0.0003   # 0.6x base lr (0.0005)
+    - 0.0001   # 0.2x base lr

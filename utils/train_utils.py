@@ -15,7 +15,7 @@ def _get_lr_by_group(optimizer, group_name):
             return float(group["lr"])
     return float(optimizer.param_groups[0]["lr"])
 
-def _build_named_param_groups(model, base_lr, fusion_lr=None):
+def _build_named_param_groups(model, base_lr, fusion_lr=None, backbone_lr=None):
     """
     Args:
         fusion_lr: Optional starting LR for the fusion module's own parameters
@@ -29,9 +29,18 @@ def _build_named_param_groups(model, base_lr, fusion_lr=None):
             there for the fusion group's distinct starting LR to be respected
             by the global schedule. It does NOT get HeadLRDecayManager's
             per-head plateau decay (only head_rot/head_y/head_z/head_trans do).
+        backbone_lr: Optional starting LR for the backbone's own parameters
+            (self.feature_extractors.*). Only meaningful when
+            model.backbone_trainable=True -- otherwise those parameters have
+            requires_grad=False and are filtered out below before grouping,
+            same as any other frozen parameter, so this group ends up empty
+            and is dropped. Defaults to base_lr when None. Same schedule/decay
+            behavior as fusion_lr (tracks the global LR schedule, no per-group
+            plateau decay).
     """
     grouped_params = {
         "base": [],
+        "backbone": [],
         "fusion": [],
         "head_rot": [],
         "head_y": [],
@@ -52,13 +61,18 @@ def _build_named_param_groups(model, base_lr, fusion_lr=None):
             grouped_params["head_trans"].append(param)
         elif name.startswith("fusion"):
             grouped_params["fusion"].append(param)
+        elif name.startswith("feature_extractors."):
+            grouped_params["backbone"].append(param)
         else:
             grouped_params["base"].append(param)
 
-    group_lrs = {"fusion": float(fusion_lr) if fusion_lr is not None else float(base_lr)}
+    group_lrs = {
+        "fusion": float(fusion_lr) if fusion_lr is not None else float(base_lr),
+        "backbone": float(backbone_lr) if backbone_lr is not None else float(base_lr),
+    }
 
     param_groups = []
-    for group_name in ["base", "fusion", "head_rot", "head_y", "head_z", "head_trans"]:
+    for group_name in ["base", "backbone", "fusion", "head_rot", "head_y", "head_z", "head_trans"]:
         params = grouped_params[group_name]
         if not params:
             continue
@@ -606,6 +620,18 @@ class PerHeadEarlyStoppingManager:
     (meters, O(1e-4-1e-3)) live on very different absolute scales, so a single absolute
     threshold can't sanely apply to both (same reasoning as HeadLRDecayManager's switch
     to threshold_mode="rel").
+
+    smoothing_alpha (new, default 1.0 = no smoothing, exact prior behavior): an EMA
+    factor applied to val_abs_rot_x/val_abs_trans before they're compared against
+    the running best, instead of comparing raw per-epoch values directly. Motivated
+    by q2_channelwise_backbone_trainable, where both metrics swing 30-50% epoch to
+    epoch (e.g. val_abs_trans 0.82-1.32mm within a single run) -- with raw tracking,
+    self.best locks onto whatever single epoch happened to be the noisiest low
+    outlier, and subsequent epochs then have to beat that lucky value specifically
+    rather than the genuine trend, causing early stopping to fire on noise rather
+    than a real plateau. Smaller alpha = more smoothing (e.g. 0.3 ~ a 3-4 epoch
+    effective window); 1.0 makes ema[head] == current[head] every epoch, reproducing
+    the previous unsmoothed comparison exactly.
     """
 
     def __init__(self, early_stopping_cfg):
@@ -613,20 +639,25 @@ class PerHeadEarlyStoppingManager:
         self.enabled = bool(early_stopping_cfg.get("enabled", False))
         self.patience = int(early_stopping_cfg.get("patience", 10))
         self.min_delta = float(early_stopping_cfg.get("min_delta", 0.0))
+        self.smoothing_alpha = float(early_stopping_cfg.get("smoothing_alpha", 1.0))
+        if not 0.0 < self.smoothing_alpha <= 1.0:
+            raise ValueError(f"early_stopping.smoothing_alpha must be in (0, 1], got {self.smoothing_alpha}")
         self.best = {"rot": float("inf"), "trans": float("inf")}
         self.bad_epochs = {"rot": 0, "trans": 0}
+        self.ema = {"rot": None, "trans": None}
 
     def state_dict(self):
         """For checkpoint resume -- so a paused/resumed run doesn't lose its
-        per-head patience count and silently get more (or less) patience
-        than the original run would have had."""
-        return {"best": dict(self.best), "bad_epochs": dict(self.bad_epochs)}
+        per-head patience count (or EMA state) and silently get more (or less)
+        patience than the original run would have had."""
+        return {"best": dict(self.best), "bad_epochs": dict(self.bad_epochs), "ema": dict(self.ema)}
 
     def load_state_dict(self, state):
         if not state:
             return
         self.best.update(state.get("best", {}))
         self.bad_epochs.update(state.get("bad_epochs", {}))
+        self.ema.update(state.get("ema", {}))
 
     def update(self, val_abs_rot_x, val_abs_trans):
         """Call once per epoch with val_avg['abs_rot_x'] and val_avg['abs_trans'].
@@ -635,9 +666,14 @@ class PerHeadEarlyStoppingManager:
             return False
         current = {"rot": val_abs_rot_x, "trans": val_abs_trans}
         for head in ("rot", "trans"):
+            if self.ema[head] is None:
+                self.ema[head] = current[head]
+            else:
+                self.ema[head] = self.smoothing_alpha * current[head] + (1.0 - self.smoothing_alpha) * self.ema[head]
+            smoothed = self.ema[head]
             dynamic_threshold = self.best[head] * (1.0 - self.min_delta)
-            if current[head] < dynamic_threshold:
-                self.best[head] = current[head]
+            if smoothed < dynamic_threshold:
+                self.best[head] = smoothed
                 self.bad_epochs[head] = 0
             else:
                 self.bad_epochs[head] += 1
@@ -760,7 +796,10 @@ class TrainingConfigBuilder:
             task_feature_adapter=self._is_task_feature_adapter_enabled(),
             task_feature_adapter_type=self._get_task_feature_adapter_type(),
             dual_fusion=bool(self.cfg["model"].get("dual_fusion", False)),
-            translation_head_mode=self.cfg["model"].get("translation_head_mode", "separate")
+            translation_head_mode=self.cfg["model"].get("translation_head_mode", "separate"),
+            gate_init_prob=self.cfg["model"].get("gate_init_prob", None),
+            backbone_trainable=bool(self.cfg["model"].get("backbone_trainable", False)),
+            pre_head_grid_size=self.cfg["model"].get("pre_head_grid_size", None),
         )
         return model.to(self.device)
 
@@ -784,22 +823,36 @@ class TrainingConfigBuilder:
     
     def build_loss_function(self):
         """Build loss function from config."""
+        from functools import partial
         from losses.original_loss import total_loss
         from losses.se2_losses import total_loss_2D_vector
-        
+
         head_type = self.cfg.get("model", {}).get("head_type", "quaternion")
         if head_type == "2D_unit_vector":
             return total_loss_2D_vector
-        else:
-            return total_loss
+
+        # model.rot_scaling_factor (optional): overrides total_loss's own hardcoded
+        # default (200.0) for the quaternion head type -- see "Unit balancing" in
+        # CLAUDE.md. None (unset, the default) preserves every existing config's
+        # behavior exactly, since total_loss falls back to its own default in that
+        # case; only the quaternion head type is wired here since it's the only one
+        # that routes through this function's returned criterion (see
+        # QuaternionHandler.compute_loss vs. the other rotation handlers, which
+        # compute their own loss directly and are wired via get_rotation_handler
+        # instead -- see rotation_loss_handlers.py).
+        rot_scaling_factor = self.cfg.get("model", {}).get("rot_scaling_factor")
+        if rot_scaling_factor is not None:
+            return partial(total_loss, rot_scaling_factor=float(rot_scaling_factor))
+        return total_loss
     
     def build_optimizer(self, model, param_groups=None):
         """Build optimizer from config."""
 
         if param_groups is None:
             fusion_lr = self.cfg["training"].get("lr_fusion")
+            backbone_lr = self.cfg["training"].get("lr_backbone")
             param_groups = _build_named_param_groups(
-                model, base_lr=float(self.cfg["training"]["lr"]), fusion_lr=fusion_lr
+                model, base_lr=float(self.cfg["training"]["lr"]), fusion_lr=fusion_lr, backbone_lr=backbone_lr
             )
 
         optimizer_name = self.cfg["training"]["optimizer"]
@@ -958,7 +1011,9 @@ class TrainingConfigBuilder:
         """
         model = self.build_model()
         param_groups = _build_named_param_groups(
-            model, base_lr=float(self.cfg["training"]["lr"]), fusion_lr=self.cfg["training"].get("lr_fusion")
+            model, base_lr=float(self.cfg["training"]["lr"]),
+            fusion_lr=self.cfg["training"].get("lr_fusion"),
+            backbone_lr=self.cfg["training"].get("lr_backbone"),
         )
         optimizer = self.build_optimizer(model, param_groups=param_groups)
         base_lr = float(self.cfg["training"]["lr"])

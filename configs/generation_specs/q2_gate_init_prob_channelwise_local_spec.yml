@@ -1,0 +1,30 @@
+# Q2 follow-up: same gate_init_prob experiment as
+# q2_gate_init_prob_gated_concat_spec.yml, run on channelwise_gated_concat_local
+# instead -- the architecture actually in use for the local/hybrid gating-
+# granularity sweep (q2_gating_granularity_local_hybrid[_2nd_sweep]), where the
+# same near-zero-std gate collapse was diagnosed directly (val_fusion_gate_std
+# ~0.01-0.03 across seeds, see that sweep's metrics.csv).
+#
+# Only 0.7 and 0.88 are generated here -- the 0.5 control already exists as
+# the unmodified baseline for seeds 46, 47, 50 (runs/q2_channelwise_local_hybrid,
+# no gate_init_prob override). Seeds 48/49 are NOT included: no 0.5-init
+# channelwise_gated_concat_local control run exists yet for those seeds (that
+# part of the local/hybrid sweep hasn't completed), so this grid is scoped to
+# only the seeds we can directly compare against. Same split_seed=40 as that
+# sweep for direct comparability.
+#
+# Template carries the exact hyperparameters (mlp sizes, lr_schedule,
+# grad_clip, task_weighting, early_stopping, translation_head_mode=joint) the
+# local/hybrid sweep used.
+template_config: configs/generated/q2_gating_granularity_local_hybrid_2nd_sweep/002_seed-46_fusion-channelwise_gated_concat_local_3536e8.yml
+
+fixed_overrides:
+  model.fusion: "channelwise_gated_concat_local"
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 50]
+  model.gate_init_prob:
+    - 0.7
+    - 0.88

@@ -69,6 +69,23 @@ def _quaternion_geodesic_error_deg(pred_quat, target_quat):
     return np.degrees(2.0 * np.arccos(dot))
 
 
+def _is_task_feature_adapter_enabled(config):
+    """Mirror utils/train_utils.py::TrainingConfigBuilder._is_task_feature_adapter_enabled
+    so test-time model construction matches what was actually trained."""
+    task_feature_adapter_cfg = config["model"].get("task_feature_adapter", False)
+    if isinstance(task_feature_adapter_cfg, dict):
+        return bool(task_feature_adapter_cfg.get("enabled", False))
+    return bool(task_feature_adapter_cfg)
+
+
+def _get_task_feature_adapter_type(config):
+    """Mirror utils/train_utils.py::TrainingConfigBuilder._get_task_feature_adapter_type."""
+    task_feature_adapter_cfg = config["model"].get("task_feature_adapter", False)
+    if isinstance(task_feature_adapter_cfg, dict):
+        return task_feature_adapter_cfg.get("type", "channel_attention")
+    return "channel_attention"
+
+
 def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     model = PoseEstimationNet(
         model_name=config["model"]["backbone"],
@@ -82,7 +99,13 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
         dropout_rot=config["training"]["dropout_rot"],
         dropout_trans=config["training"]["dropout_trans"],
         use_batchnorm=config["training"]["use_batchnorm"],
-        translation_head_mode=config["model"].get("translation_head_mode", "separate")
+        translation_head_mode=config["model"].get("translation_head_mode", "separate"),
+        spatial_grid_size=config["model"].get("spatial_grid_size", (10, 10)),
+        task_adapter=config["model"].get("task_adapter", None),
+        task_feature_adapter=_is_task_feature_adapter_enabled(config),
+        task_feature_adapter_type=_get_task_feature_adapter_type(config),
+        dual_fusion=bool(config["model"].get("dual_fusion", False)),
+        gate_init_prob=config["model"].get("gate_init_prob", None),
     )
     
     data_root = resolve_data_root(config, REPO_ROOT)

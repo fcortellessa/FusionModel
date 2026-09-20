@@ -1,0 +1,49 @@
+# Fixed-weighting (no task_weighting, no adaptive uncertainty balance) comparison
+# on split_seed=39, for 5 fusion types: concat, gated, gated_concat,
+# channelwise_gated_concat_local, gated_concat+dual_fusion.
+#
+# Motivated by: the final_ablation gate diagnostics found the learned uncertainty
+# task_weighting swings 4-24x for translation depending on fusion type -- meaning
+# the main fusion comparison is confounded with each fusion type also getting its
+# own adaptively-learned loss balance. This batch isolates the fusion mechanism
+# itself by disabling that adaptive layer entirely.
+#
+# rot_scaling_factor set to 1.0 (not the usual 200.0 default) -- an empirical
+# forward-pass check on a freshly-initialized model found raw rotation loss and
+# raw translation MSE already within ~2x of each other at initialization (given
+# this project's translation representation isn't actually normalized), so 200.0
+# would badly over-weight rotation with no adaptive mechanism left to correct it.
+# See model.rot_scaling_factor's docstring in configs/default.yml.
+template_config: configs/generated/final_ablation/002_gated_split_seed-36_d860b7.yml
+
+fixed_overrides:
+  training.task_weighting.enabled: false
+  model.rot_scaling_factor: 1.0
+  data.split_seed: 39
+  training.seed: 50
+
+variants:
+  - name: concat
+    overrides:
+      model.fusion: "concat"
+      model.dual_fusion: false
+
+  - name: gated
+    overrides:
+      model.fusion: "gated"
+      model.dual_fusion: false
+
+  - name: gated_concat
+    overrides:
+      model.fusion: "gated_concat"
+      model.dual_fusion: false
+
+  - name: channelwise_gated_concat_local
+    overrides:
+      model.fusion: "channelwise_gated_concat_local"
+      model.dual_fusion: false
+
+  - name: gated_concat_dual
+    overrides:
+      model.fusion: "gated_concat"
+      model.dual_fusion: true

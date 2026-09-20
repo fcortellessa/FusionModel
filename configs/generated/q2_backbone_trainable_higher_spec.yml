@@ -1,0 +1,33 @@
+# Q2 follow-up, high-side extension of q2_backbone_trainable_spec.yml: the
+# first backbone_trainable grid tested lr_backbone at 5e-05 (0.1x base) and
+# 1e-05 (0.02x base) -- both improved rotation ~30% over the frozen baseline,
+# and the HIGHER of the two (5e-05) did better, not worse (rot_x ~0.51-0.53
+# vs 1e-05's ~0.65). That's evidence we haven't found the top of the curve,
+# not that we should go more conservative -- this grid pushes further up to
+# find where it stops helping or starts showing signs of catastrophic
+# forgetting of the pretrained backbone's features (watch train/val loss
+# divergence, not just the val accuracy numbers).
+#
+#   0.0001  (0.2x base, 2x the previous high)
+#   0.0002  (0.4x base, 4x the previous high)
+#
+# Same 3 seeds (46, 47, 48) as the first backbone_trainable grid for direct
+# comparability -- not the usual 5, same reasoning as before (backbone_trainable
+# is real new compute, ~1.3-1.5x slower per epoch than frozen, measured).
+#
+# gate_init_prob and pre_head_grid_size left at their defaults so this stays
+# isolated to lr_backbone alone. Same template/split_seed as every other q2
+# comparison this session.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  model.fusion: "gated_concat"
+  model.backbone_trainable: true
+  data.split_seed: 40
+  group_aware_split: true
+
+grid:
+  training.seed: [46, 47, 48]
+  training.lr_backbone:
+    - 0.0001
+    - 0.0002

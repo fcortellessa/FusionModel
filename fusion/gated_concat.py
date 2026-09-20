@@ -5,11 +5,25 @@ output.  This makes the modules suitable for tasks, such as rotation
 estimation, where a weighted sum may discard useful modality-specific detail.
 """
 
+import math
+
 import torch
 import torch.nn as nn
 
 from . import register_fusion
 from .base import BaseFusion
+
+
+def _sigmoid_init_bias(gate_init_prob: float) -> float:
+    """Convert a target initial sigmoid output into the bias/logit that produces it.
+
+    gate_init_prob=0.5 (the default used everywhere below) reproduces the
+    previous zero-bias init exactly, since sigmoid(0) == 0.5 -- so leaving
+    gate_init_prob unset is fully backward compatible with every existing run.
+    """
+    if not 0.0 < gate_init_prob < 1.0:
+        raise ValueError(f"gate_init_prob must be strictly between 0 and 1, got {gate_init_prob}")
+    return math.log(gate_init_prob / (1.0 - gate_init_prob))
 
 
 class _BaseGatedConcatFusion(BaseFusion):
@@ -26,8 +40,10 @@ class _BaseGatedConcatFusion(BaseFusion):
     gating room to actually specialize per channel instead of per shared-latent-mode.
     """
 
-    def __init__(self, dim: int, num_streams: int, gate_outputs: int, gate_hidden_dim: int = 32):
+    def __init__(self, dim: int, num_streams: int, gate_outputs: int, gate_hidden_dim: int = 32,
+                 gate_init_prob: float = 0.5):
         super().__init__(dim, num_streams)
+        self.gate_init_prob = gate_init_prob
         self.gate = nn.Sequential(
             nn.Linear(dim * num_streams, gate_hidden_dim),
             nn.ReLU(),
@@ -37,7 +53,7 @@ class _BaseGatedConcatFusion(BaseFusion):
 
         # Begin with near-neutral gates while retaining gradients for learning.
         nn.init.uniform_(self.gate[3].weight, -1e-3, 1e-3)
-        nn.init.zeros_(self.gate[3].bias)
+        nn.init.constant_(self.gate[3].bias, _sigmoid_init_bias(gate_init_prob))
 
     def _gate_inputs(self, features_list):
         """Validate streams and return their joint representation for gating."""
@@ -70,8 +86,8 @@ class _BaseFloorGatedConcatFusion(_BaseGatedConcatFusion):
 class GatedConcatFusion(_BaseGatedConcatFusion):
     """Apply one independent sigmoid gate to each stream, then concatenate."""
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, gate_outputs=num_streams)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, gate_outputs=num_streams, gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         # Predict one gate for every stream from the combined multimodal input.
@@ -87,12 +103,81 @@ class GatedConcatFusion(_BaseGatedConcatFusion):
         return out, weights
 
 
+@register_fusion("scale_gated_concat")
+class ScaleGatedConcatFusion(_BaseGatedConcatFusion):
+    """gated_concat, but with one independent sigmoid gate per stream PER PYRAMID
+    SCALE (P3/P4/P5) instead of a single scalar per stream -- a middle ground
+    between gated_concat's one-gate-per-stream (structurally cannot distinguish
+    P3 from P5 at all) and channelwise's one-gate-per-channel (can, but
+    empirically doesn't: every channelwise run in the final_ablation gate
+    diagnostics learned P3 ~= P4 ~= P5 gate means almost exactly, despite having
+    the freedom to differ). This gives the gate exactly scale-level resolution,
+    to test directly whether scale-specific trust is a real, useful signal that
+    channelwise's per-channel freedom just happened not to find, or whether P3/P4/P5
+    genuinely don't need to be treated differently for this task.
+
+    Requires `scale_dims` (the {"p3": n, "p4": n, "p5": n} flattened-size dict
+    computed once in PoseEstimationNet.__init__ as `stream_scale_dims`) so it
+    knows where each stream's P3/P4/P5 blocks begin/end within the flattened
+    `dim`-length feature vector it receives. build_fusion() forwards this
+    automatically to any fusion class that declares a `scale_dims` constructor
+    argument (same inspect.signature-based mechanism used for gate_init_prob),
+    so every other fusion type is unaffected.
+    """
+
+    SCALE_ORDER = ("p3", "p4", "p5")
+
+    def __init__(self, dim: int, num_streams: int, scale_dims: dict = None, gate_init_prob: float = 0.5):
+        if not scale_dims:
+            raise ValueError(
+                "scale_gated_concat requires scale_dims (the P3/P4/P5 flattened-size "
+                "dict from PoseEstimationNet.stream_scale_dims) -- it only makes sense "
+                "for the 1D per-stream-vector pipeline, not standalone."
+            )
+        missing = [s for s in self.SCALE_ORDER if s not in scale_dims]
+        if missing:
+            raise ValueError(f"scale_dims is missing required key(s): {missing}")
+        if sum(scale_dims[s] for s in self.SCALE_ORDER) != dim:
+            raise ValueError(
+                f"scale_dims {scale_dims} does not sum to dim={dim}; scale_gated_concat "
+                "needs the exact per-scale split of the flattened per-stream feature vector."
+            )
+        super().__init__(dim, num_streams, gate_outputs=num_streams * len(self.SCALE_ORDER),
+                          gate_init_prob=gate_init_prob)
+        self.scale_dims = {s: int(scale_dims[s]) for s in self.SCALE_ORDER}
+        # Precompute each scale's [start, end) slice within the flattened dim, in
+        # the same P3-then-P4-then-P5 order forward_single_stream() concatenates.
+        self._scale_slices = []
+        offset = 0
+        for s in self.SCALE_ORDER:
+            size = self.scale_dims[s]
+            self._scale_slices.append((offset, offset + size))
+            offset += size
+
+    def forward(self, features_list):
+        combined = self._gate_inputs(features_list)
+        weights = torch.sigmoid(
+            self.gate(combined).reshape(-1, self.num_streams, len(self.SCALE_ORDER))
+        )  # (B, num_streams, 3) -- one gate per stream per P3/P4/P5
+
+        weighted_features = []
+        for stream_idx, feature in enumerate(features_list):
+            parts = [
+                weights[:, stream_idx, scale_idx].unsqueeze(-1) * feature[:, start:end]
+                for scale_idx, (start, end) in enumerate(self._scale_slices)
+            ]
+            weighted_features.append(torch.cat(parts, dim=1))
+
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
 @register_fusion("residual_gated_concat")
 class ResidualGatedConcatFusion(_BaseGatedConcatFusion):
     """Concatenate streams after residual scalar gating for each stream."""
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, gate_outputs=num_streams)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, gate_outputs=num_streams, gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         # Sigmoid gates are added to one, so each original stream is retained.
@@ -111,8 +196,9 @@ class ResidualGatedConcatFusion(_BaseGatedConcatFusion):
 class ChannelWiseGatedConcatFusion(_BaseGatedConcatFusion):
     """Apply an independent sigmoid gate to every channel of every stream, then concatenate."""
 
-    def __init__(self, dim: int, num_streams: int, gate_hidden_dim: int = 32):
-        super().__init__(dim, num_streams, gate_outputs=num_streams * dim, gate_hidden_dim=gate_hidden_dim)
+    def __init__(self, dim: int, num_streams: int, gate_hidden_dim: int = 32, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, gate_outputs=num_streams * dim, gate_hidden_dim=gate_hidden_dim,
+                          gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         # Reshape flat gate logits into one (num_streams, dim) gate map per item.
@@ -137,16 +223,16 @@ class ChannelWiseGatedConcatWideFusion(ChannelWiseGatedConcatFusion):
 
     WIDE_HIDDEN_DIM = 256
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, gate_hidden_dim=self.WIDE_HIDDEN_DIM)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, gate_hidden_dim=self.WIDE_HIDDEN_DIM, gate_init_prob=gate_init_prob)
 
 
 @register_fusion("gated_concat_floor")
 class GatedConcatFloorFusion(_BaseFloorGatedConcatFusion):
     """gated_concat with the per-stream sigmoid gate floored at MIN_GATE."""
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, gate_outputs=num_streams)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, gate_outputs=num_streams, gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         combined = self._gate_inputs(features_list)
@@ -164,8 +250,8 @@ class GatedConcatFloorFusion(_BaseFloorGatedConcatFusion):
 class ChannelWiseGatedConcatFloorFusion(_BaseFloorGatedConcatFusion):
     """channelwise_gated_concat with the per-channel sigmoid gate floored at MIN_GATE."""
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, gate_outputs=num_streams * dim)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, gate_outputs=num_streams * dim, gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         combined = self._gate_inputs(features_list)
@@ -184,8 +270,9 @@ class ChannelWiseGatedConcatFloorFusion(_BaseFloorGatedConcatFusion):
 class ChannelWiseResidualGatedConcatFusion(_BaseGatedConcatFusion):
     """Concatenate streams after independently residual-gating every channel."""
 
-    def __init__(self, dim: int, num_streams: int, gate_hidden_dim: int = 32):
-        super().__init__(dim, num_streams, gate_outputs=num_streams * dim, gate_hidden_dim=gate_hidden_dim)
+    def __init__(self, dim: int, num_streams: int, gate_hidden_dim: int = 32, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, gate_outputs=num_streams * dim, gate_hidden_dim=gate_hidden_dim,
+                          gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         # Reshape flat gate logits into one (num_streams, dim) gate map per item.
@@ -210,8 +297,8 @@ class ChannelWiseResidualGatedConcatWideFusion(ChannelWiseResidualGatedConcatFus
 
     WIDE_HIDDEN_DIM = 256
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, gate_hidden_dim=self.WIDE_HIDDEN_DIM)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, gate_hidden_dim=self.WIDE_HIDDEN_DIM, gate_init_prob=gate_init_prob)
 
 
 class _PerChannelGatedConcatFusion(BaseFusion):
@@ -240,13 +327,17 @@ class _PerChannelGatedConcatFusion(BaseFusion):
             _BaseGatedConcatFusion's bottleneck is, then broadcast to every
             position -- restoring cross-channel context at a parameter cost
             that's still independent of `dim` beyond that one summary layer.
+        gate_init_prob: sigmoid gate's initial output before training (see
+            _BaseGatedConcatFusion docstring); 0.5 (default) matches the
+            previous zero-bias init exactly.
     """
 
     LOCAL_HIDDEN_DIM = 16
 
-    def __init__(self, dim: int, num_streams: int, global_context_dim: int = 0):
+    def __init__(self, dim: int, num_streams: int, global_context_dim: int = 0, gate_init_prob: float = 0.5):
         super().__init__(dim, num_streams)
         self.global_context_dim = global_context_dim
+        self.gate_init_prob = gate_init_prob
 
         if global_context_dim > 0:
             self.global_context = nn.Sequential(
@@ -264,7 +355,7 @@ class _PerChannelGatedConcatFusion(BaseFusion):
         # Begin with near-neutral gates while retaining gradients for learning,
         # matching _BaseGatedConcatFusion's init.
         nn.init.uniform_(self.local_gate[2].weight, -1e-3, 1e-3)
-        nn.init.zeros_(self.local_gate[2].bias)
+        nn.init.constant_(self.local_gate[2].bias, _sigmoid_init_bias(gate_init_prob))
 
     def _gate_logits(self, features_list):
         """Returns per-channel gate logits, shape (B, num_streams, dim)."""
@@ -287,8 +378,8 @@ class ChannelWiseGatedConcatLocalFusion(_PerChannelGatedConcatFusion):
     bottleneck -- each channel's gate depends only on that channel's own
     RGB/tactile values, not on the rest of the feature vector."""
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, global_context_dim=0)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, global_context_dim=0, gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         weights = torch.sigmoid(self._gate_logits(features_list))  # (B, num_streams, dim)
@@ -308,8 +399,8 @@ class ChannelWiseGatedConcatHybridFusion(_PerChannelGatedConcatFusion):
 
     GLOBAL_CONTEXT_DIM = 32
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, global_context_dim=self.GLOBAL_CONTEXT_DIM)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, global_context_dim=self.GLOBAL_CONTEXT_DIM, gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         weights = torch.sigmoid(self._gate_logits(features_list))  # (B, num_streams, dim)
@@ -326,8 +417,8 @@ class ChannelWiseResidualGatedConcatLocalFusion(_PerChannelGatedConcatFusion):
     """channelwise_residual_gated_concat with a purely local, weight-shared
     per-position gate (see _PerChannelGatedConcatFusion)."""
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, global_context_dim=0)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, global_context_dim=0, gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         weights = torch.sigmoid(self._gate_logits(features_list))  # (B, num_streams, dim)
@@ -347,8 +438,8 @@ class ChannelWiseResidualGatedConcatHybridFusion(_PerChannelGatedConcatFusion):
 
     GLOBAL_CONTEXT_DIM = 32
 
-    def __init__(self, dim: int, num_streams: int):
-        super().__init__(dim, num_streams, global_context_dim=self.GLOBAL_CONTEXT_DIM)
+    def __init__(self, dim: int, num_streams: int, gate_init_prob: float = 0.5):
+        super().__init__(dim, num_streams, global_context_dim=self.GLOBAL_CONTEXT_DIM, gate_init_prob=gate_init_prob)
 
     def forward(self, features_list):
         weights = torch.sigmoid(self._gate_logits(features_list))  # (B, num_streams, dim)
