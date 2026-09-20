@@ -56,6 +56,10 @@ _KNOWN_GROUP_COLORS = {
     'gated_Softmax': '#ff7f0e', 'gated_Sigmoid': '#e377c2', 'attention': '#8c564b',
     'spatial_gated_2d': '#17becf', 'residual_gated_concat': '#bcbd22',
     'channelwise_residual_gated_concat': '#7f7f7f',
+    # Without fixed entries these fell back to tab10[0]/[1], which is concat's/gated's
+    # own blue/orange. Same colors as scatter_test_results_by_fusion.py's candidates 5/6.
+    'channelwise_gated_concat_local': '#8172B2',
+    'channelwise_residual_gated_concat_local': '#937860',
     # dual_fusion builds two independent instances of the base fusion module
     # (own params per task branch, see pose_estimation_model.py) -- a
     # genuinely different architecture from the shared-fusion variant, so it
