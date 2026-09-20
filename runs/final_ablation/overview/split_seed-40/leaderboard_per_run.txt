@@ -1,0 +1,180 @@
+====================================================================================================
+PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
+====================================================================================================
+
+#1
+  run_name: 20260919_013711_bs16_gated_concat
+  group: gated_concat (dual_fusion)
+  training_seed: 50
+  split_seed: 40
+  n_samples: 324
+  val_abs_trans_mean: 0.0017837957762345683
+  val_abs_y_mean: 0.0004708184484018519
+  val_abs_z_mean: 0.0002616936871546975
+  val_abs_rot_x_mean: 0.5135198637180864
+  val_abs_rot_z_mean: 0.5085839950771606
+  val_abs_trans_median: 0.0014069769000000002
+  val_abs_y_median: 0.00016151810999999997
+  val_abs_z_median: 9.328872e-05
+  val_abs_rot_x_median: 0.16126759000000002
+  val_abs_rot_z_median: 0.15825874
+  val_abs_trans_std: 0.0011743172899223882
+  val_abs_y_std: 0.0012451176326596337
+  val_abs_z_std: 0.0006630914029905685
+  val_abs_rot_x_std: 1.3664669192204322
+  val_abs_rot_z_std: 1.3680283582254067
+
+#2
+  run_name: 20260917_090808_bs16_gated_concat
+  group: gated_concat
+  training_seed: 50
+  split_seed: 40
+  n_samples: 324
+  val_abs_trans_mean: 0.0017781429854938269
+  val_abs_y_mean: 0.0004459296537864198
+  val_abs_z_mean: 0.00027871789582253084
+  val_abs_rot_x_mean: 0.5347182380657407
+  val_abs_rot_z_mean: 0.5307376384351852
+  val_abs_trans_median: 0.0014135166
+  val_abs_y_median: 0.000147794375
+  val_abs_z_median: 0.00010652095249999999
+  val_abs_rot_x_median: 0.20806121
+  val_abs_rot_z_median: 0.20366262000000002
+  val_abs_trans_std: 0.0011536060419626377
+  val_abs_y_std: 0.001217584484509531
+  val_abs_z_std: 0.0006728620744430014
+  val_abs_rot_x_std: 1.304376905010916
+  val_abs_rot_z_std: 1.3057204217222413
+
+#3
+  run_name: 20260918_162529_bs16_gated_concat
+  group: gated_concat
+  training_seed: 50
+  split_seed: 40
+  n_samples: 324
+  val_abs_trans_mean: 0.0017781429854938269
+  val_abs_y_mean: 0.0004459296537864198
+  val_abs_z_mean: 0.00027871789582253084
+  val_abs_rot_x_mean: 0.5347182380657407
+  val_abs_rot_z_mean: 0.5307376384351852
+  val_abs_trans_median: 0.0014135166
+  val_abs_y_median: 0.000147794375
+  val_abs_z_median: 0.00010652095249999999
+  val_abs_rot_x_median: 0.20806121
+  val_abs_rot_z_median: 0.20366262000000002
+  val_abs_trans_std: 0.0011536060419626377
+  val_abs_y_std: 0.001217584484509531
+  val_abs_z_std: 0.0006728620744430014
+  val_abs_rot_x_std: 1.304376905010916
+  val_abs_rot_z_std: 1.3057204217222413
+
+#4
+  run_name: 20260916_062308_bs16_concat
+  group: concat
+  training_seed: 50
+  split_seed: 40
+  n_samples: 324
+  val_abs_trans_mean: 0.0017921753820987652
+  val_abs_y_mean: 0.0005038935329496914
+  val_abs_z_mean: 0.0003016452654750617
+  val_abs_rot_x_mean: 0.5928840428469135
+  val_abs_rot_z_mean: 0.593453228132716
+  val_abs_trans_median: 0.0014224336499999999
+  val_abs_y_median: 0.000196602895
+  val_abs_z_median: 0.00013897568
+  val_abs_rot_x_median: 0.22734966
+  val_abs_rot_z_median: 0.23069979
+  val_abs_trans_std: 0.0011449998679314904
+  val_abs_y_std: 0.0012101795767280115
+  val_abs_z_std: 0.000657739015740541
+  val_abs_rot_x_std: 1.326999106536058
+  val_abs_rot_z_std: 1.326829330631699
+
+#5
+  run_name: 20260917_124133_bs16_residual_gated_concat
+  group: residual_gated_concat
+  training_seed: 50
+  split_seed: 40
+  n_samples: 324
+  val_abs_trans_mean: 0.0018110732637345679
+  val_abs_y_mean: 0.0005345656022398149
+  val_abs_z_mean: 0.00032192372128777777
+  val_abs_rot_x_mean: 0.5967165314425803
+  val_abs_rot_z_mean: 0.5948734766265432
+  val_abs_trans_median: 0.0014221342500000001
+  val_abs_y_median: 0.000229756115
+  val_abs_z_median: 0.00015269965000000001
+  val_abs_rot_x_median: 0.26274369
+  val_abs_rot_z_median: 0.26392521999999996
+  val_abs_trans_std: 0.0011786612420397668
+  val_abs_y_std: 0.0012336899949737853
+  val_abs_z_std: 0.0006906894915695037
+  val_abs_rot_x_std: 1.349498919809127
+  val_abs_rot_z_std: 1.3501258445873996
+
+#6
+  run_name: 20260916_091204_bs16_gated
+  group: gated
+  training_seed: 50
+  split_seed: 40
+  n_samples: 324
+  val_abs_trans_mean: 0.0017973847962962964
+  val_abs_y_mean: 0.0005267038523753087
+  val_abs_z_mean: 0.0002865055005531173
+  val_abs_rot_x_mean: 0.6220629409398147
+  val_abs_rot_z_mean: 0.6192935306635802
+  val_abs_trans_median: 0.0014289932
+  val_abs_y_median: 0.000218404805
+  val_abs_z_median: 0.000125043095
+  val_abs_rot_x_median: 0.29089774
+  val_abs_rot_z_median: 0.2880353
+  val_abs_trans_std: 0.0011346554086789549
+  val_abs_y_std: 0.0011989151298848126
+  val_abs_z_std: 0.0006635392213825429
+  val_abs_rot_x_std: 1.3737137914046393
+  val_abs_rot_z_std: 1.3747408402930223
+
+#7
+  run_name: 20260918_233548_bs16_channelwise_residual_gated_concat_local
+  group: channelwise_residual_gated_concat_local
+  training_seed: 50
+  split_seed: 40
+  n_samples: 324
+  val_abs_trans_mean: 0.001788218904814815
+  val_abs_y_mean: 0.0004743288428410494
+  val_abs_z_mean: 0.00029309558507796296
+  val_abs_rot_x_mean: 0.6343401663490741
+  val_abs_rot_z_mean: 0.6322711931296296
+  val_abs_trans_median: 0.0014196707
+  val_abs_y_median: 0.000175620195
+  val_abs_z_median: 0.00012397766
+  val_abs_rot_x_median: 0.27981917
+  val_abs_rot_z_median: 0.27835871
+  val_abs_trans_std: 0.0011706017223667294
+  val_abs_y_std: 0.0012340694432831012
+  val_abs_z_std: 0.0006733593598184221
+  val_abs_rot_x_std: 1.3316425137355654
+  val_abs_rot_z_std: 1.332423715253663
+
+#8
+  run_name: 20260918_201049_bs16_channelwise_gated_concat_local
+  group: channelwise_gated_concat_local
+  training_seed: 50
+  split_seed: 40
+  n_samples: 324
+  val_abs_trans_mean: 0.0018031438552469135
+  val_abs_y_mean: 0.00048074975416666666
+  val_abs_z_mean: 0.00035388505584979936
+  val_abs_rot_x_mean: 0.6789271303688271
+  val_abs_rot_z_mean: 0.6773385059135802
+  val_abs_trans_median: 0.0014250549000000001
+  val_abs_y_median: 0.00015933882
+  val_abs_z_median: 0.00018569082
+  val_abs_rot_x_median: 0.34506796
+  val_abs_rot_z_median: 0.34490955
+  val_abs_trans_std: 0.0011503012608473744
+  val_abs_y_std: 0.0012252147035218253
+  val_abs_z_std: 0.0006604830526486983
+  val_abs_rot_x_std: 1.328541493167352
+  val_abs_rot_z_std: 1.329232351264134
+

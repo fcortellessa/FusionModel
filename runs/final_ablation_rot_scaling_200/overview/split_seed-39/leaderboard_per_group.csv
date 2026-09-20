@@ -1,0 +1,3 @@
+group,n_runs,training_seeds,val_abs_trans_mean_of_runs,val_abs_trans_std_across_runs,val_abs_y_mean_of_runs,val_abs_y_std_across_runs,val_abs_z_mean_of_runs,val_abs_z_std_across_runs,val_abs_rot_x_mean_of_runs,val_abs_rot_x_std_across_runs,val_abs_rot_z_mean_of_runs,val_abs_rot_z_std_across_runs
+concat,1,[50],0.001661409189969605,,0.000486528539098693,,0.0002869765266005046,,0.3063443908860182,,0.30202144900911854,
+gated,1,[50],0.0016112662492401215,,0.0003865214010683891,,0.00016999081635127658,,0.3301330438281459,,0.3259097968358663,

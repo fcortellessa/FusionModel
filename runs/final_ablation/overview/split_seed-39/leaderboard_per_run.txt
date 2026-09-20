@@ -1,0 +1,136 @@
+====================================================================================================
+PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
+====================================================================================================
+
+#1
+  run_name: 20260918_221139_bs16_gated_concat
+  group: gated_concat (dual_fusion)
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.0016030681589665652
+  val_abs_y_mean: 0.0003612758998135562
+  val_abs_z_mean: 0.00017198951917976293
+  val_abs_rot_x_mean: 0.3229456948860182
+  val_abs_rot_z_mean: 0.3177019009574468
+  val_abs_trans_median: 0.0014109242
+  val_abs_y_median: 0.00015015667
+  val_abs_z_median: 0.00011688471
+  val_abs_rot_x_median: 0.18177864
+  val_abs_rot_z_median: 0.17693864
+  val_abs_trans_std: 0.0008643895829625402
+  val_abs_y_std: 0.0009784231852174017
+  val_abs_z_std: 0.0002812395218287285
+  val_abs_rot_x_std: 0.7004848916238557
+  val_abs_rot_z_std: 0.7022975142179161
+
+#2
+  run_name: 20260916_074751_bs16_gated_concat
+  group: gated_concat
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.0015916056939209726
+  val_abs_y_mean: 0.00032605426655471124
+  val_abs_z_mean: 0.000151332433661155
+  val_abs_rot_x_mean: 0.37586420797021275
+  val_abs_rot_z_mean: 0.3723381655319149
+  val_abs_trans_median: 0.001410237
+  val_abs_y_median: 0.00012646429
+  val_abs_z_median: 9.0032816e-05
+  val_abs_rot_x_median: 0.2605717
+  val_abs_rot_z_median: 0.259443
+  val_abs_trans_std: 0.0008743827809855963
+  val_abs_y_std: 0.0009858150551580204
+  val_abs_z_std: 0.0002760500437209461
+  val_abs_rot_x_std: 0.704301532764327
+  val_abs_rot_z_std: 0.7056925595061518
+
+#3
+  run_name: 20260916_103922_bs16_residual_gated_concat
+  group: residual_gated_concat
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.0016069116094224924
+  val_abs_y_mean: 0.00035035159066595744
+  val_abs_z_mean: 0.0002422281589887538
+  val_abs_rot_x_mean: 0.43126987115136783
+  val_abs_rot_z_mean: 0.43607070359270517
+  val_abs_trans_median: 0.0014271891
+  val_abs_y_median: 0.00017462578
+  val_abs_z_median: 0.00019744039
+  val_abs_rot_x_median: 0.27128145
+  val_abs_rot_z_median: 0.27976462
+  val_abs_trans_std: 0.0008693906975795033
+  val_abs_y_std: 0.0009787275372927446
+  val_abs_z_std: 0.00027957245286581116
+  val_abs_rot_x_std: 0.6796015724681312
+  val_abs_rot_z_std: 0.6777865221375293
+
+#4
+  run_name: 20260916_120555_bs16_channelwise_gated_concat_local
+  group: channelwise_gated_concat_local
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.0015971216209726446
+  val_abs_y_mean: 0.0003447801732696839
+  val_abs_z_mean: 0.00014553031132446807
+  val_abs_rot_x_mean: 0.4631854989492401
+  val_abs_rot_z_mean: 0.4649712704346505
+  val_abs_trans_median: 0.0014097589
+  val_abs_y_median: 0.00015308335
+  val_abs_z_median: 7.620454e-05
+  val_abs_rot_x_median: 0.34630424
+  val_abs_rot_z_median: 0.3426403
+  val_abs_trans_std: 0.0008906060531824576
+  val_abs_y_std: 0.000997830550045832
+  val_abs_z_std: 0.0002962649013789734
+  val_abs_rot_x_std: 0.7190576231137602
+  val_abs_rot_z_std: 0.7184968480737911
+
+#5
+  run_name: 20260917_103320_bs16_channelwise_residual_gated_concat_local
+  group: channelwise_residual_gated_concat_local
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.0015997729282674772
+  val_abs_y_mean: 0.0003457911269894833
+  val_abs_z_mean: 0.0001607712553123404
+  val_abs_rot_x_mean: 0.4928337048577508
+  val_abs_rot_z_mean: 0.49073344810638303
+  val_abs_trans_median: 0.0014152857
+  val_abs_y_median: 0.0001422516
+  val_abs_z_median: 0.00010198355
+  val_abs_rot_x_median: 0.34974664
+  val_abs_rot_z_median: 0.3494259
+  val_abs_trans_std: 0.0008989247421976188
+  val_abs_y_std: 0.0010036832148164374
+  val_abs_z_std: 0.00030669901851267074
+  val_abs_rot_x_std: 0.7062523427412554
+  val_abs_rot_z_std: 0.7072815679100635
+
+#6
+  run_name: 20260918_180846_bs16_channelwise_residual_gated_concat_local
+  group: channelwise_residual_gated_concat_local
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.0015997729282674772
+  val_abs_y_mean: 0.0003457911269894833
+  val_abs_z_mean: 0.0001607712553123404
+  val_abs_rot_x_mean: 0.4928337048577508
+  val_abs_rot_z_mean: 0.49073344810638303
+  val_abs_trans_median: 0.0014152857
+  val_abs_y_median: 0.0001422516
+  val_abs_z_median: 0.00010198355
+  val_abs_rot_x_median: 0.34974664
+  val_abs_rot_z_median: 0.3494259
+  val_abs_trans_std: 0.0008989247421976188
+  val_abs_y_std: 0.0010036832148164374
+  val_abs_z_std: 0.00030669901851267074
+  val_abs_rot_x_std: 0.7062523427412554
+  val_abs_rot_z_std: 0.7072815679100635
+

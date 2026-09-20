@@ -1,0 +1,109 @@
+====================================================================================================
+PER-GROUP LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean_of_runs)
+====================================================================================================
+
+#1
+  group: gated_concat (dual_fusion)
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0018476888699386505
+  val_abs_y_mean_of_runs: 0.0005380792538487731
+  val_abs_z_mean_of_runs: 0.00034464530110162576
+  val_abs_rot_x_mean_of_runs: 0.5739321351672393
+  val_abs_rot_z_mean_of_runs: 0.5687246835582822
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#2
+  group: residual_gated_concat
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0018832127346625766
+  val_abs_y_mean_of_runs: 0.0005654831202613498
+  val_abs_z_mean_of_runs: 0.0004285025911791411
+  val_abs_rot_x_mean_of_runs: 0.586052910385276
+  val_abs_rot_z_mean_of_runs: 0.5810572864754601
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#3
+  group: concat
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0018931109687116568
+  val_abs_y_mean_of_runs: 0.000607739335981135
+  val_abs_z_mean_of_runs: 0.00039126518339079757
+  val_abs_rot_x_mean_of_runs: 0.6153141500315952
+  val_abs_rot_z_mean_of_runs: 0.6097573328466258
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#4
+  group: gated_concat
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0018460143825153375
+  val_abs_y_mean_of_runs: 0.000481676039328681
+  val_abs_z_mean_of_runs: 0.00035425376163803683
+  val_abs_rot_x_mean_of_runs: 0.617235280732638
+  val_abs_rot_z_mean_of_runs: 0.614688331285276
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#5
+  group: channelwise_gated_concat_local
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0018492045460122702
+  val_abs_y_mean_of_runs: 0.0004754651174239263
+  val_abs_z_mean_of_runs: 0.0003462290765432515
+  val_abs_rot_x_mean_of_runs: 0.6206709841392638
+  val_abs_rot_z_mean_of_runs: 0.6148976015368098
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#6
+  group: channelwise_residual_gated_concat_local
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0018778547361963187
+  val_abs_y_mean_of_runs: 0.0005292967371107362
+  val_abs_z_mean_of_runs: 0.00036912598821708595
+  val_abs_rot_x_mean_of_runs: 0.6339842879196318
+  val_abs_rot_z_mean_of_runs: 0.6310107294815951
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#7
+  group: gated
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0018707710248466259
+  val_abs_y_mean_of_runs: 0.0005329007058861964
+  val_abs_z_mean_of_runs: 0.0003741342869730061
+  val_abs_rot_x_mean_of_runs: 0.6767879393894172
+  val_abs_rot_z_mean_of_runs: 0.6737649555889571
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+

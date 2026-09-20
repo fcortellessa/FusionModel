@@ -1,0 +1,148 @@
+candidate,metric,threshold,fraction_le_threshold,n_samples
+1. Concatenation,abs_roll,0.1,0.20894371626831149,1297
+1. Concatenation,abs_roll,0.25,0.49421742482652276,1297
+1. Concatenation,abs_roll,0.5,0.756360832690825,1297
+1. Concatenation,abs_roll,1.0,0.9082498072474943,1297
+1. Concatenation,abs_roll,2.0,0.9483423284502699,1297
+1. Concatenation,abs_roll,5.0,0.9737856592135697,1297
+2. Gating,abs_roll,0.1,0.17592592592592593,324
+2. Gating,abs_roll,0.25,0.4382716049382716,324
+2. Gating,abs_roll,0.5,0.7253086419753086,324
+2. Gating,abs_roll,1.0,0.9228395061728395,324
+2. Gating,abs_roll,2.0,0.9444444444444444,324
+2. Gating,abs_roll,5.0,0.9722222222222222,324
+3. Softmax gated concatenation (scalar),abs_roll,0.1,0.23282051282051283,1950
+3. Softmax gated concatenation (scalar),abs_roll,0.25,0.5435897435897435,1950
+3. Softmax gated concatenation (scalar),abs_roll,0.5,0.8015384615384615,1950
+3. Softmax gated concatenation (scalar),abs_roll,1.0,0.9251282051282051,1950
+3. Softmax gated concatenation (scalar),abs_roll,2.0,0.9553846153846154,1950
+3. Softmax gated concatenation (scalar),abs_roll,5.0,0.978974358974359,1950
+4. Residual sigmoid gated concatenation (scalar),abs_roll,0.1,0.20367534456355282,653
+4. Residual sigmoid gated concatenation (scalar),abs_roll,0.25,0.4609494640122512,653
+4. Residual sigmoid gated concatenation (scalar),abs_roll,0.5,0.7442572741194488,653
+4. Residual sigmoid gated concatenation (scalar),abs_roll,1.0,0.9326186830015314,653
+4. Residual sigmoid gated concatenation (scalar),abs_roll,2.0,0.9601837672281777,653
+4. Residual sigmoid gated concatenation (scalar),abs_roll,5.0,0.9831546707503829,653
+5. Channelwise local sigmoid gated concatenation,abs_roll,0.1,0.17343173431734318,1626
+5. Channelwise local sigmoid gated concatenation,abs_roll,0.25,0.3917589175891759,1626
+5. Channelwise local sigmoid gated concatenation,abs_roll,0.5,0.6666666666666666,1626
+5. Channelwise local sigmoid gated concatenation,abs_roll,1.0,0.9120541205412054,1626
+5. Channelwise local sigmoid gated concatenation,abs_roll,2.0,0.9532595325953259,1626
+5. Channelwise local sigmoid gated concatenation,abs_roll,5.0,0.9784747847478474,1626
+6. Channelwise local residual sigmoid gated concatenation,abs_roll,0.1,0.12423625254582485,982
+6. Channelwise local residual sigmoid gated concatenation,abs_roll,0.25,0.384928716904277,982
+6. Channelwise local residual sigmoid gated concatenation,abs_roll,0.5,0.6720977596741344,982
+6. Channelwise local residual sigmoid gated concatenation,abs_roll,1.0,0.9256619144602851,982
+6. Channelwise local residual sigmoid gated concatenation,abs_roll,2.0,0.9694501018329938,982
+6. Channelwise local residual sigmoid gated concatenation,abs_roll,5.0,0.9867617107942973,982
+7. Dual Fusion,abs_roll,0.1,0.2933579335793358,1626
+7. Dual Fusion,abs_roll,0.25,0.6076260762607626,1626
+7. Dual Fusion,abs_roll,0.5,0.8468634686346863,1626
+7. Dual Fusion,abs_roll,1.0,0.931119311193112,1626
+7. Dual Fusion,abs_roll,2.0,0.9532595325953259,1626
+7. Dual Fusion,abs_roll,5.0,0.9790897908979089,1626
+1. Concatenation,trans_mm,0.1,0.1040863531225906,1297
+1. Concatenation,trans_mm,0.25,0.40400925212027755,1297
+1. Concatenation,trans_mm,0.5,0.7525057825751735,1297
+1. Concatenation,trans_mm,1.0,0.9005397070161912,1297
+1. Concatenation,trans_mm,2.0,0.9344641480339244,1297
+2. Gating,trans_mm,0.1,0.10802469135802469,324
+2. Gating,trans_mm,0.25,0.4074074074074074,324
+2. Gating,trans_mm,0.5,0.7530864197530864,324
+2. Gating,trans_mm,1.0,0.9012345679012346,324
+2. Gating,trans_mm,2.0,0.9382716049382716,324
+3. Softmax gated concatenation (scalar),trans_mm,0.1,0.1671794871794872,1950
+3. Softmax gated concatenation (scalar),trans_mm,0.25,0.5384615384615384,1950
+3. Softmax gated concatenation (scalar),trans_mm,0.5,0.823076923076923,1950
+3. Softmax gated concatenation (scalar),trans_mm,1.0,0.9220512820512821,1950
+3. Softmax gated concatenation (scalar),trans_mm,2.0,0.9415384615384615,1950
+4. Residual sigmoid gated concatenation (scalar),trans_mm,0.1,0.05819295558958652,653
+4. Residual sigmoid gated concatenation (scalar),trans_mm,0.25,0.39356814701378257,653
+4. Residual sigmoid gated concatenation (scalar),trans_mm,0.5,0.7993874425727412,653
+4. Residual sigmoid gated concatenation (scalar),trans_mm,1.0,0.9264931087289433,653
+4. Residual sigmoid gated concatenation (scalar),trans_mm,2.0,0.9509954058192955,653
+5. Channelwise local sigmoid gated concatenation,trans_mm,0.1,0.16051660516605165,1626
+5. Channelwise local sigmoid gated concatenation,trans_mm,0.25,0.5522755227552275,1626
+5. Channelwise local sigmoid gated concatenation,trans_mm,0.5,0.8321033210332104,1626
+5. Channelwise local sigmoid gated concatenation,trans_mm,1.0,0.9200492004920049,1626
+5. Channelwise local sigmoid gated concatenation,trans_mm,2.0,0.9452644526445264,1626
+6. Channelwise local residual sigmoid gated concatenation,trans_mm,0.1,0.159877800407332,982
+6. Channelwise local residual sigmoid gated concatenation,trans_mm,0.25,0.5519348268839104,982
+6. Channelwise local residual sigmoid gated concatenation,trans_mm,0.5,0.8727087576374746,982
+6. Channelwise local residual sigmoid gated concatenation,trans_mm,1.0,0.9378818737270875,982
+6. Channelwise local residual sigmoid gated concatenation,trans_mm,2.0,0.960285132382892,982
+7. Dual Fusion,trans_mm,0.1,0.12669126691266913,1626
+7. Dual Fusion,trans_mm,0.25,0.5018450184501845,1626
+7. Dual Fusion,trans_mm,0.5,0.7884378843788438,1626
+7. Dual Fusion,trans_mm,1.0,0.9231242312423125,1626
+7. Dual Fusion,trans_mm,2.0,0.9446494464944649,1626
+1. Concatenation,abs_y_mm,0.1,0.22976098689282962,1297
+1. Concatenation,abs_y_mm,0.25,0.5289128758673862,1297
+1. Concatenation,abs_y_mm,0.5,0.8033924441017734,1297
+1. Concatenation,abs_y_mm,1.0,0.9252120277563608,1297
+1. Concatenation,abs_y_mm,2.0,0.9521973785659213,1297
+2. Gating,abs_y_mm,0.1,0.24382716049382716,324
+2. Gating,abs_y_mm,0.25,0.558641975308642,324
+2. Gating,abs_y_mm,0.5,0.8209876543209876,324
+2. Gating,abs_y_mm,1.0,0.9135802469135802,324
+2. Gating,abs_y_mm,2.0,0.9567901234567902,324
+3. Softmax gated concatenation (scalar),abs_y_mm,0.1,0.3261538461538461,1950
+3. Softmax gated concatenation (scalar),abs_y_mm,0.25,0.6343589743589744,1950
+3. Softmax gated concatenation (scalar),abs_y_mm,0.5,0.8656410256410256,1950
+3. Softmax gated concatenation (scalar),abs_y_mm,1.0,0.9374358974358974,1950
+3. Softmax gated concatenation (scalar),abs_y_mm,2.0,0.9553846153846154,1950
+4. Residual sigmoid gated concatenation (scalar),abs_y_mm,0.1,0.26339969372128635,653
+4. Residual sigmoid gated concatenation (scalar),abs_y_mm,0.25,0.6125574272588055,653
+4. Residual sigmoid gated concatenation (scalar),abs_y_mm,0.5,0.8683001531393568,653
+4. Residual sigmoid gated concatenation (scalar),abs_y_mm,1.0,0.9433384379785605,653
+4. Residual sigmoid gated concatenation (scalar),abs_y_mm,2.0,0.9617151607963247,653
+5. Channelwise local sigmoid gated concatenation,abs_y_mm,0.1,0.33210332103321033,1626
+5. Channelwise local sigmoid gated concatenation,abs_y_mm,0.25,0.6715867158671587,1626
+5. Channelwise local sigmoid gated concatenation,abs_y_mm,0.5,0.8739237392373924,1626
+5. Channelwise local sigmoid gated concatenation,abs_y_mm,1.0,0.9360393603936039,1626
+5. Channelwise local sigmoid gated concatenation,abs_y_mm,2.0,0.956949569495695,1626
+6. Channelwise local residual sigmoid gated concatenation,abs_y_mm,0.1,0.35539714867617106,982
+6. Channelwise local residual sigmoid gated concatenation,abs_y_mm,0.25,0.6843177189409368,982
+6. Channelwise local residual sigmoid gated concatenation,abs_y_mm,0.5,0.9063136456211812,982
+6. Channelwise local residual sigmoid gated concatenation,abs_y_mm,1.0,0.9460285132382892,982
+6. Channelwise local residual sigmoid gated concatenation,abs_y_mm,2.0,0.9684317718940937,982
+7. Dual Fusion,abs_y_mm,0.1,0.29704797047970477,1626
+7. Dual Fusion,abs_y_mm,0.25,0.5996309963099631,1626
+7. Dual Fusion,abs_y_mm,0.5,0.8333333333333334,1626
+7. Dual Fusion,abs_y_mm,1.0,0.9378843788437884,1626
+7. Dual Fusion,abs_y_mm,2.0,0.9606396063960639,1626
+1. Concatenation,abs_z_mm,0.1,0.4302235929067078,1297
+1. Concatenation,abs_z_mm,0.25,0.7802621434078643,1297
+1. Concatenation,abs_z_mm,0.5,0.9013107170393215,1297
+1. Concatenation,abs_z_mm,1.0,0.9444872783346183,1297
+1. Concatenation,abs_z_mm,2.0,0.9645335389360061,1297
+2. Gating,abs_z_mm,0.1,0.4104938271604938,324
+2. Gating,abs_z_mm,0.25,0.7839506172839507,324
+2. Gating,abs_z_mm,0.5,0.904320987654321,324
+2. Gating,abs_z_mm,1.0,0.9537037037037037,324
+2. Gating,abs_z_mm,2.0,0.9722222222222222,324
+3. Softmax gated concatenation (scalar),abs_z_mm,0.1,0.4805128205128205,1950
+3. Softmax gated concatenation (scalar),abs_z_mm,0.25,0.8087179487179487,1950
+3. Softmax gated concatenation (scalar),abs_z_mm,0.5,0.9148717948717948,1950
+3. Softmax gated concatenation (scalar),abs_z_mm,1.0,0.9574358974358974,1950
+3. Softmax gated concatenation (scalar),abs_z_mm,2.0,0.9692307692307692,1950
+4. Residual sigmoid gated concatenation (scalar),abs_z_mm,0.1,0.2787136294027565,653
+4. Residual sigmoid gated concatenation (scalar),abs_z_mm,0.25,0.7228177641653905,653
+4. Residual sigmoid gated concatenation (scalar),abs_z_mm,0.5,0.9203675344563553,653
+4. Residual sigmoid gated concatenation (scalar),abs_z_mm,1.0,0.9571209800918836,653
+4. Residual sigmoid gated concatenation (scalar),abs_z_mm,2.0,0.9816232771822359,653
+5. Channelwise local sigmoid gated concatenation,abs_z_mm,0.1,0.5043050430504306,1626
+5. Channelwise local sigmoid gated concatenation,abs_z_mm,0.25,0.8198031980319803,1626
+5. Channelwise local sigmoid gated concatenation,abs_z_mm,0.5,0.9218942189421894,1626
+5. Channelwise local sigmoid gated concatenation,abs_z_mm,1.0,0.95079950799508,1626
+5. Channelwise local sigmoid gated concatenation,abs_z_mm,2.0,0.9692496924969249,1626
+6. Channelwise local residual sigmoid gated concatenation,abs_z_mm,0.1,0.4684317718940937,982
+6. Channelwise local residual sigmoid gated concatenation,abs_z_mm,0.25,0.8360488798370672,982
+6. Channelwise local residual sigmoid gated concatenation,abs_z_mm,0.5,0.9409368635437881,982
+6. Channelwise local residual sigmoid gated concatenation,abs_z_mm,1.0,0.9684317718940937,982
+6. Channelwise local residual sigmoid gated concatenation,abs_z_mm,2.0,0.9857433808553971,982
+7. Dual Fusion,abs_z_mm,0.1,0.45202952029520294,1626
+7. Dual Fusion,abs_z_mm,0.25,0.8062730627306273,1626
+7. Dual Fusion,abs_z_mm,0.5,0.9268142681426814,1626
+7. Dual Fusion,abs_z_mm,1.0,0.9575645756457565,1626
+7. Dual Fusion,abs_z_mm,2.0,0.9704797047970479,1626

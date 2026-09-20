@@ -1,0 +1,48 @@
+====================================================================================================
+PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
+====================================================================================================
+
+#1
+  run_name: 20260915_030826_bs16_concat
+  group: concat
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.001661409189969605
+  val_abs_y_mean: 0.000486528539098693
+  val_abs_z_mean: 0.0002869765266005046
+  val_abs_rot_x_mean: 0.3063443908860182
+  val_abs_rot_z_mean: 0.30202144900911854
+  val_abs_trans_median: 0.0014610656
+  val_abs_y_median: 0.0002728086
+  val_abs_z_median: 0.00020074844
+  val_abs_rot_x_median: 0.18292612
+  val_abs_rot_z_median: 0.18130817
+  val_abs_trans_std: 0.0008478245729975798
+  val_abs_y_std: 0.0009462702811738594
+  val_abs_z_std: 0.00037973869388501717
+  val_abs_rot_x_std: 0.7108277154356242
+  val_abs_rot_z_std: 0.7121619774774854
+
+#2
+  run_name: 20260915_043352_bs16_gated
+  group: gated
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.0016112662492401215
+  val_abs_y_mean: 0.0003865214010683891
+  val_abs_z_mean: 0.00016999081635127658
+  val_abs_rot_x_mean: 0.3301330438281459
+  val_abs_rot_z_mean: 0.3259097968358663
+  val_abs_trans_median: 0.0014184302
+  val_abs_y_median: 0.00019040983
+  val_abs_z_median: 9.588897e-05
+  val_abs_rot_x_median: 0.21485043
+  val_abs_rot_z_median: 0.21306235
+  val_abs_trans_std: 0.0009147696236882807
+  val_abs_y_std: 0.0010121191027451573
+  val_abs_z_std: 0.0003314180374454472
+  val_abs_rot_x_std: 0.6852680066877564
+  val_abs_rot_z_std: 0.6868551395946955
+

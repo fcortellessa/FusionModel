@@ -1,0 +1,64 @@
+====================================================================================================
+PER-GROUP LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean_of_runs)
+====================================================================================================
+
+#1
+  group: gated_concat (dual_fusion)
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0017464775427244582
+  val_abs_y_mean_of_runs: 0.00042353190889024756
+  val_abs_z_mean_of_runs: 0.00030229067709990716
+  val_abs_rot_x_mean_of_runs: 0.43207728223622294
+  val_abs_rot_z_mean_of_runs: 0.4298495592786377
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#2
+  group: gated_concat
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0017517741659442724
+  val_abs_y_mean_of_runs: 0.0004158021747910217
+  val_abs_z_mean_of_runs: 0.0002932029523334984
+  val_abs_rot_x_mean_of_runs: 0.45143496296377716
+  val_abs_rot_z_mean_of_runs: 0.4464353359690403
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#3
+  group: concat
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0017502272151702788
+  val_abs_y_mean_of_runs: 0.0004710069331032817
+  val_abs_z_mean_of_runs: 0.0003152980077237461
+  val_abs_rot_x_mean_of_runs: 0.5252733627923529
+  val_abs_rot_z_mean_of_runs: 0.5223450549133126
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#4
+  group: channelwise_gated_concat_local
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0017445963455108358
+  val_abs_y_mean_of_runs: 0.0004127807007622291
+  val_abs_z_mean_of_runs: 0.00028529251181318887
+  val_abs_rot_x_mean_of_runs: 0.5684687901126936
+  val_abs_rot_z_mean_of_runs: 0.5692514161300308
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+

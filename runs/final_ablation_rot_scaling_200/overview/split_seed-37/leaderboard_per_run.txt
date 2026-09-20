@@ -1,0 +1,158 @@
+====================================================================================================
+PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
+====================================================================================================
+
+#1
+  run_name: 20260914_062926_bs16_gated
+  group: gated
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.001751891492260062
+  val_abs_y_mean: 0.00044643532855944275
+  val_abs_z_mean: 0.0003244944197811146
+  val_abs_rot_x_mean: 0.40242977295863774
+  val_abs_rot_z_mean: 0.39755023260681116
+  val_abs_trans_median: 0.0014432009
+  val_abs_y_median: 0.000215373
+  val_abs_z_median: 0.00013951957
+  val_abs_rot_x_median: 0.14555132
+  val_abs_rot_z_median: 0.1426525
+  val_abs_trans_std: 0.0011167136884299418
+  val_abs_y_std: 0.001054609554771126
+  val_abs_z_std: 0.0007947186320055652
+  val_abs_rot_x_std: 1.0614522822582633
+  val_abs_rot_z_std: 1.062971522576678
+
+#2
+  run_name: 20260914_144105_bs16_gated_concat
+  group: gated_concat (dual_fusion)
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.0017493974315789473
+  val_abs_y_mean: 0.00041644815334368425
+  val_abs_z_mean: 0.0003091270340677709
+  val_abs_rot_x_mean: 0.4189903384421982
+  val_abs_rot_z_mean: 0.4137692862383901
+  val_abs_trans_median: 0.0014398611
+  val_abs_y_median: 0.00017674686
+  val_abs_z_median: 0.00010256469
+  val_abs_rot_x_median: 0.14858393
+  val_abs_rot_z_median: 0.1426525
+  val_abs_trans_std: 0.0011500959661079253
+  val_abs_y_std: 0.0010762485121715993
+  val_abs_z_std: 0.0008295196827407006
+  val_abs_rot_x_std: 1.0989769917537175
+  val_abs_rot_z_std: 1.1006054706253807
+
+#3
+  run_name: 20260914_075604_bs16_gated_concat
+  group: gated_concat
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.0017718504523219815
+  val_abs_y_mean: 0.00046590305814582045
+  val_abs_z_mean: 0.000321486831779969
+  val_abs_rot_x_mean: 0.42328836632648603
+  val_abs_rot_z_mean: 0.4190150043250773
+  val_abs_trans_median: 0.001432675
+  val_abs_y_median: 0.00020073052
+  val_abs_z_median: 0.00010806322
+  val_abs_rot_x_median: 0.16475782
+  val_abs_rot_z_median: 0.16312936
+  val_abs_trans_std: 0.0011500731028550961
+  val_abs_y_std: 0.0010962114917265004
+  val_abs_z_std: 0.0008199995002477146
+  val_abs_rot_x_std: 1.066704852772308
+  val_abs_rot_z_std: 1.0679698880903359
+
+#4
+  run_name: 20260914_125001_bs16_channelwise_residual_gated_concat_local
+  group: channelwise_residual_gated_concat_local
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.0017617077613003098
+  val_abs_y_mean: 0.0004487797419377709
+  val_abs_z_mean: 0.000315551787698452
+  val_abs_rot_x_mean: 0.43100601584198145
+  val_abs_rot_z_mean: 0.4262502069597523
+  val_abs_trans_median: 0.0014277512
+  val_abs_y_median: 0.00019951118
+  val_abs_z_median: 0.00012181699
+  val_abs_rot_x_median: 0.17578174
+  val_abs_rot_z_median: 0.17245845
+  val_abs_trans_std: 0.0011693014038805434
+  val_abs_y_std: 0.001085491912713206
+  val_abs_z_std: 0.0008508445219105003
+  val_abs_rot_x_std: 1.0753053514655835
+  val_abs_rot_z_std: 1.0768329602508666
+
+#5
+  run_name: 20260913_190826_bs16_concat
+  group: concat
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.001756584142105263
+  val_abs_y_mean: 0.00046059065348328174
+  val_abs_z_mean: 0.00035485468435479873
+  val_abs_rot_x_mean: 0.43274718624693503
+  val_abs_rot_z_mean: 0.42814583209907114
+  val_abs_trans_median: 0.001452609
+  val_abs_y_median: 0.0002499905
+  val_abs_z_median: 0.00015990436
+  val_abs_rot_x_median: 0.16180718
+  val_abs_rot_z_median: 0.15825874
+  val_abs_trans_std: 0.0010745818021238654
+  val_abs_y_std: 0.0009648536862435139
+  val_abs_z_std: 0.0008387251004916056
+  val_abs_rot_x_std: 1.1281630196282948
+  val_abs_rot_z_std: 1.129568248793586
+
+#6
+  run_name: 20260914_092021_bs16_residual_gated_concat
+  group: residual_gated_concat
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.0018058910349845198
+  val_abs_y_mean: 0.0005316449402108359
+  val_abs_z_mean: 0.0004041395613245202
+  val_abs_rot_x_mean: 0.4380194165030959
+  val_abs_rot_z_mean: 0.4331636897492259
+  val_abs_trans_median: 0.0014773681
+  val_abs_y_median: 0.00027348404
+  val_abs_z_median: 0.00017425418
+  val_abs_rot_x_median: 0.1847566
+  val_abs_rot_z_median: 0.18130817
+  val_abs_trans_std: 0.0011355586712178706
+  val_abs_y_std: 0.0010511947422790658
+  val_abs_z_std: 0.0008556371368567307
+  val_abs_rot_x_std: 1.1120331334373508
+  val_abs_rot_z_std: 1.1135688009481328
+
+#7
+  run_name: 20260914_104456_bs16_channelwise_gated_concat_local
+  group: channelwise_gated_concat_local
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.0017523878114551084
+  val_abs_y_mean: 0.00041282684325139317
+  val_abs_z_mean: 0.0002999885622406192
+  val_abs_rot_x_mean: 0.48715465189136226
+  val_abs_rot_z_mean: 0.4829361445108359
+  val_abs_trans_median: 0.0014168576
+  val_abs_y_median: 0.00018566148
+  val_abs_z_median: 0.00012230873
+  val_abs_rot_x_median: 0.20056166
+  val_abs_rot_z_median: 0.2017411
+  val_abs_trans_std: 0.001170704508585268
+  val_abs_y_std: 0.0010806852014757732
+  val_abs_z_std: 0.0008634014201048842
+  val_abs_rot_x_std: 1.1475792239956946
+  val_abs_rot_z_std: 1.148987590105711
+
