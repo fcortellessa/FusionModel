@@ -1,0 +1,11 @@
+Run dirs scanned (`--run_dir`): ['runs/final_ablation']
+
+| fusion | n_seeds | run folders used | test rot_x (deg) | test trans (mm) | test y (mm) | test z (mm) | flags |
+|---|---|---|---|---|---|---|---|
+| concat | 4 | 20260916_062308_bs16_concat, 20260919_025906_bs16_concat, 20260919_042143_bs16_concat, 20260919_054549_bs16_concat | 0.609 ± 0.093 | 0.684 ± 0.081 | 0.539 ± 0.075 | 0.322 ± 0.029 | only 4 seed(s) vs 5 for the others |
+| gated | 5 | 20260916_091204_bs16_gated, 20260920_211555_bs16_gated, 20260921_021049_bs16_gated, 20260921_064649_bs16_gated, 20260921_112909_bs16_gated | 0.660 ± 0.109 | 0.670 ± 0.071 | 0.528 ± 0.074 | 0.320 ± 0.013 | - |
+| gated_concat | 5 | 20260916_074751_bs16_gated_concat, 20260918_162529_bs16_gated_concat, 20260919_070842_bs16_gated_concat, 20260919_124351_bs16_gated_concat, 20260919_173034_bs16_gated_concat | 0.588 ± 0.050 | 0.616 ± 0.044 | 0.489 ± 0.050 | 0.289 ± 0.017 | - |
+| residual_gated_concat | 5 | 20260916_103922_bs16_residual_gated_concat, 20260917_124133_bs16_residual_gated_concat, 20260920_224243_bs16_residual_gated_concat, 20260921_033557_bs16_residual_gated_concat, 20260921_081244_bs16_residual_gated_concat | 0.625 ± 0.085 | 0.679 ± 0.037 | 0.542 ± 0.043 | 0.313 ± 0.012 | - |
+| channelwise_gated_concat_local | 5 | 20260916_120555_bs16_channelwise_gated_concat_local, 20260918_201049_bs16_channelwise_gated_concat_local, 20260919_092515_bs16_channelwise_gated_concat_local, 20260919_140226_bs16_channelwise_gated_concat_local, 20260919_185504_bs16_channelwise_gated_concat_local | 0.701 ± 0.057 | 0.614 ± 0.063 | 0.482 ± 0.058 | 0.295 ± 0.029 | - |
+| channelwise_residual_gated_concat_local | 5 | 20260918_180846_bs16_channelwise_residual_gated_concat_local, 20260918_233548_bs16_channelwise_residual_gated_concat_local, 20260921_000529_bs16_channelwise_residual_gated_concat_local, 20260921_050007_bs16_channelwise_residual_gated_concat_local, 20260921_093503_bs16_channelwise_residual_gated_concat_local | 0.698 ± 0.061 | 0.630 ± 0.055 | 0.498 ± 0.062 | 0.297 ± 0.016 | - |
+| dual_fusion (gated_concat) | 5 | 20260918_221139_bs16_gated_concat, 20260919_013711_bs16_gated_concat, 20260919_112652_bs16_gated_concat, 20260919_160703_bs16_gated_concat, 20260920_065132_bs16_gated_concat | 0.545 ± 0.071 | 0.635 ± 0.052 | 0.505 ± 0.052 | 0.296 ± 0.022 | - |
