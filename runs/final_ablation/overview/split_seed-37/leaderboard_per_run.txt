@@ -47,6 +47,28 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_z_std: 1.079133773626993
 
 #3
+  run_name: 20260921_050007_bs16_channelwise_residual_gated_concat_local
+  group: channelwise_residual_gated_concat_local
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.001741383983900929
+  val_abs_y_mean: 0.0003896358398320123
+  val_abs_z_mean: 0.00027629073488417955
+  val_abs_rot_x_mean: 0.5168099819713002
+  val_abs_rot_z_mean: 0.513092957247678
+  val_abs_trans_median: 0.0014201808
+  val_abs_y_median: 0.00015447522
+  val_abs_z_median: 8.5413456e-05
+  val_abs_rot_x_median: 0.22935773
+  val_abs_rot_z_median: 0.22728181
+  val_abs_trans_std: 0.0011893944729676519
+  val_abs_y_std: 0.0011123241456600735
+  val_abs_z_std: 0.0008449793601244895
+  val_abs_rot_x_std: 1.1405296112842276
+  val_abs_rot_z_std: 1.1418593176422502
+
+#4
   run_name: 20260919_042143_bs16_concat
   group: concat
   training_seed: 50
@@ -68,7 +90,29 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_x_std: 1.0209852718650314
   val_abs_rot_z_std: 1.0221666583549962
 
-#4
+#5
+  run_name: 20260921_033557_bs16_residual_gated_concat
+  group: residual_gated_concat
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.0017576309126934983
+  val_abs_y_mean: 0.0004536950670520125
+  val_abs_z_mean: 0.00030013014520764703
+  val_abs_rot_x_mean: 0.5402148582953561
+  val_abs_rot_z_mean: 0.5378203701547988
+  val_abs_trans_median: 0.0014415046
+  val_abs_y_median: 0.00021220744
+  val_abs_z_median: 0.00011342764
+  val_abs_rot_x_median: 0.30985835
+  val_abs_rot_z_median: 0.30901012
+  val_abs_trans_std: 0.0011823304968453954
+  val_abs_y_std: 0.0011111611428051196
+  val_abs_z_std: 0.0008299830435157866
+  val_abs_rot_x_std: 1.1160957053654812
+  val_abs_rot_z_std: 1.1169577242449023
+
+#6
   run_name: 20260919_140226_bs16_channelwise_gated_concat_local
   group: channelwise_gated_concat_local
   training_seed: 50
@@ -89,4 +133,26 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_z_std: 0.0008303344374640863
   val_abs_rot_x_std: 1.1063044048042232
   val_abs_rot_z_std: 1.1060867557193146
+
+#7
+  run_name: 20260921_021049_bs16_gated
+  group: gated
+  training_seed: 50
+  split_seed: 37
+  n_samples: 323
+  val_abs_trans_mean: 0.0017735709123839012
+  val_abs_y_mean: 0.0005001462767569659
+  val_abs_z_mean: 0.00032273991448606814
+  val_abs_rot_x_mean: 0.6716243895294118
+  val_abs_rot_z_mean: 0.6694532775634675
+  val_abs_trans_median: 0.0014457952
+  val_abs_y_median: 0.0002606758
+  val_abs_z_median: 0.00014691055
+  val_abs_rot_x_median: 0.39391065
+  val_abs_rot_z_median: 0.39167053
+  val_abs_trans_std: 0.0011329921296614352
+  val_abs_y_std: 0.0010402936178235938
+  val_abs_z_std: 0.0008514674092469
+  val_abs_rot_x_std: 1.0748423793604984
+  val_abs_rot_z_std: 1.0759148652466448
 

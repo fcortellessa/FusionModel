@@ -25,28 +25,6 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_z_std: 1.3680283582254067
 
 #2
-  run_name: 20260917_090808_bs16_gated_concat
-  group: gated_concat
-  training_seed: 50
-  split_seed: 40
-  n_samples: 324
-  val_abs_trans_mean: 0.0017781429854938269
-  val_abs_y_mean: 0.0004459296537864198
-  val_abs_z_mean: 0.00027871789582253084
-  val_abs_rot_x_mean: 0.5347182380657407
-  val_abs_rot_z_mean: 0.5307376384351852
-  val_abs_trans_median: 0.0014135166
-  val_abs_y_median: 0.000147794375
-  val_abs_z_median: 0.00010652095249999999
-  val_abs_rot_x_median: 0.20806121
-  val_abs_rot_z_median: 0.20366262000000002
-  val_abs_trans_std: 0.0011536060419626377
-  val_abs_y_std: 0.001217584484509531
-  val_abs_z_std: 0.0006728620744430014
-  val_abs_rot_x_std: 1.304376905010916
-  val_abs_rot_z_std: 1.3057204217222413
-
-#3
   run_name: 20260918_162529_bs16_gated_concat
   group: gated_concat
   training_seed: 50
@@ -68,7 +46,7 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_x_std: 1.304376905010916
   val_abs_rot_z_std: 1.3057204217222413
 
-#4
+#3
   run_name: 20260916_062308_bs16_concat
   group: concat
   training_seed: 50
@@ -90,7 +68,7 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_x_std: 1.326999106536058
   val_abs_rot_z_std: 1.326829330631699
 
-#5
+#4
   run_name: 20260917_124133_bs16_residual_gated_concat
   group: residual_gated_concat
   training_seed: 50
@@ -112,7 +90,7 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_x_std: 1.349498919809127
   val_abs_rot_z_std: 1.3501258445873996
 
-#6
+#5
   run_name: 20260916_091204_bs16_gated
   group: gated
   training_seed: 50
@@ -134,7 +112,7 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_x_std: 1.3737137914046393
   val_abs_rot_z_std: 1.3747408402930223
 
-#7
+#6
   run_name: 20260918_233548_bs16_channelwise_residual_gated_concat_local
   group: channelwise_residual_gated_concat_local
   training_seed: 50
@@ -156,7 +134,7 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_x_std: 1.3316425137355654
   val_abs_rot_z_std: 1.332423715253663
 
-#8
+#7
   run_name: 20260918_201049_bs16_channelwise_gated_concat_local
   group: channelwise_gated_concat_local
   training_seed: 50

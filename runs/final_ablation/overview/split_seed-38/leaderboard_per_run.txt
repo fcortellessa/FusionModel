@@ -90,3 +90,69 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_x_std: 1.3084055650308133
   val_abs_rot_z_std: 1.3088868334817494
 
+#5
+  run_name: 20260921_064649_bs16_gated
+  group: gated
+  training_seed: 50
+  split_seed: 38
+  n_samples: 324
+  val_abs_trans_mean: 0.001726900652777778
+  val_abs_y_mean: 0.0005249762387260185
+  val_abs_z_mean: 0.000315500354312963
+  val_abs_rot_x_mean: 0.6209559950854938
+  val_abs_rot_z_mean: 0.6252532456203703
+  val_abs_trans_median: 0.0014472883
+  val_abs_y_median: 0.000268246045
+  val_abs_z_median: 0.000178813935
+  val_abs_rot_x_median: 0.30696235
+  val_abs_rot_z_median: 0.30773846
+  val_abs_trans_std: 0.0009850970724560055
+  val_abs_y_std: 0.001020677234981804
+  val_abs_z_std: 0.0006334144715401473
+  val_abs_rot_x_std: 1.3207267085708478
+  val_abs_rot_z_std: 1.3192087629197082
+
+#6
+  run_name: 20260921_081244_bs16_residual_gated_concat
+  group: residual_gated_concat
+  training_seed: 50
+  split_seed: 38
+  n_samples: 324
+  val_abs_trans_mean: 0.0017155284456790124
+  val_abs_y_mean: 0.0005472621602476543
+  val_abs_z_mean: 0.00028453942059259265
+  val_abs_rot_x_mean: 0.6557341286595679
+  val_abs_rot_z_mean: 0.654112690234568
+  val_abs_trans_median: 0.00143033195
+  val_abs_y_median: 0.00028461311
+  val_abs_z_median: 0.000154279175
+  val_abs_rot_x_median: 0.36973179
+  val_abs_rot_z_median: 0.36903492
+  val_abs_trans_std: 0.0009443331436820466
+  val_abs_y_std: 0.0009713390640640991
+  val_abs_z_std: 0.0006133852086240523
+  val_abs_rot_x_std: 1.2938703837795043
+  val_abs_rot_z_std: 1.2945527538556807
+
+#7
+  run_name: 20260921_093503_bs16_channelwise_residual_gated_concat_local
+  group: channelwise_residual_gated_concat_local
+  training_seed: 50
+  split_seed: 38
+  n_samples: 324
+  val_abs_trans_mean: 0.001716096866975309
+  val_abs_y_mean: 0.000494820960307469
+  val_abs_z_mean: 0.00032527321556672837
+  val_abs_rot_x_mean: 0.7421576081203703
+  val_abs_rot_z_mean: 0.7413394763179012
+  val_abs_trans_median: 0.00144233535
+  val_abs_y_median: 0.000262017365
+  val_abs_z_median: 0.00015023351
+  val_abs_rot_x_median: 0.38092644
+  val_abs_rot_z_median: 0.38154814
+  val_abs_trans_std: 0.0010027764421086363
+  val_abs_y_std: 0.0010124717455512779
+  val_abs_z_std: 0.0006635469689540111
+  val_abs_rot_x_std: 1.3418990284505625
+  val_abs_rot_z_std: 1.3423428810575013
+

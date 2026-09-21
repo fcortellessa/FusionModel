@@ -33,6 +33,21 @@ PER-GROUP LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean_of_
   val_abs_rot_z_std_across_runs: nan
 
 #3
+  group: gated
+  n_runs: 1
+  training_seeds: [50]
+  val_abs_trans_mean_of_runs: 0.0015937775136778112
+  val_abs_y_mean_of_runs: 0.000338131940878845
+  val_abs_z_mean_of_runs: 0.00017322056419714286
+  val_abs_rot_x_mean_of_runs: 0.42117530836534955
+  val_abs_rot_z_mean_of_runs: 0.41845667887234045
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
+
+#4
   group: residual_gated_concat
   n_runs: 1
   training_seeds: [50]
@@ -47,7 +62,7 @@ PER-GROUP LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean_of_
   val_abs_rot_x_std_across_runs: nan
   val_abs_rot_z_std_across_runs: nan
 
-#4
+#5
   group: channelwise_gated_concat_local
   n_runs: 1
   training_seeds: [50]
@@ -62,18 +77,18 @@ PER-GROUP LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean_of_
   val_abs_rot_x_std_across_runs: nan
   val_abs_rot_z_std_across_runs: nan
 
-#5
+#6
   group: channelwise_residual_gated_concat_local
-  n_runs: 2
+  n_runs: 1
   training_seeds: [50]
   val_abs_trans_mean_of_runs: 0.0015997729282674772
   val_abs_y_mean_of_runs: 0.0003457911269894833
   val_abs_z_mean_of_runs: 0.0001607712553123404
   val_abs_rot_x_mean_of_runs: 0.4928337048577508
   val_abs_rot_z_mean_of_runs: 0.49073344810638303
-  val_abs_trans_std_across_runs: 0.0
-  val_abs_y_std_across_runs: 0.0
-  val_abs_z_std_across_runs: 0.0
-  val_abs_rot_x_std_across_runs: 0.0
-  val_abs_rot_z_std_across_runs: 0.0
+  val_abs_trans_std_across_runs: nan
+  val_abs_y_std_across_runs: nan
+  val_abs_z_std_across_runs: nan
+  val_abs_rot_x_std_across_runs: nan
+  val_abs_rot_z_std_across_runs: nan
 

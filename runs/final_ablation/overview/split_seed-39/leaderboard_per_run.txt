@@ -47,6 +47,28 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_z_std: 0.7056925595061518
 
 #3
+  run_name: 20260921_112909_bs16_gated
+  group: gated
+  training_seed: 50
+  split_seed: 39
+  n_samples: 329
+  val_abs_trans_mean: 0.0015937775136778112
+  val_abs_y_mean: 0.000338131940878845
+  val_abs_z_mean: 0.00017322056419714286
+  val_abs_rot_x_mean: 0.42117530836534955
+  val_abs_rot_z_mean: 0.41845667887234045
+  val_abs_trans_median: 0.0014138864
+  val_abs_y_median: 0.00015446823
+  val_abs_z_median: 0.00010803342
+  val_abs_rot_x_median: 0.30999494
+  val_abs_rot_z_median: 0.3115327
+  val_abs_trans_std: 0.000878702496818129
+  val_abs_y_std: 0.000977172455507823
+  val_abs_z_std: 0.0003041531752376417
+  val_abs_rot_x_std: 0.6787886893997581
+  val_abs_rot_z_std: 0.680056936975998
+
+#4
   run_name: 20260916_103922_bs16_residual_gated_concat
   group: residual_gated_concat
   training_seed: 50
@@ -68,7 +90,7 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_rot_x_std: 0.6796015724681312
   val_abs_rot_z_std: 0.6777865221375293
 
-#4
+#5
   run_name: 20260916_120555_bs16_channelwise_gated_concat_local
   group: channelwise_gated_concat_local
   training_seed: 50
@@ -89,28 +111,6 @@ PER-RUN LEADERBOARD (grouped by model.fusion, sorted by val_abs_rot_z_mean)
   val_abs_z_std: 0.0002962649013789734
   val_abs_rot_x_std: 0.7190576231137602
   val_abs_rot_z_std: 0.7184968480737911
-
-#5
-  run_name: 20260917_103320_bs16_channelwise_residual_gated_concat_local
-  group: channelwise_residual_gated_concat_local
-  training_seed: 50
-  split_seed: 39
-  n_samples: 329
-  val_abs_trans_mean: 0.0015997729282674772
-  val_abs_y_mean: 0.0003457911269894833
-  val_abs_z_mean: 0.0001607712553123404
-  val_abs_rot_x_mean: 0.4928337048577508
-  val_abs_rot_z_mean: 0.49073344810638303
-  val_abs_trans_median: 0.0014152857
-  val_abs_y_median: 0.0001422516
-  val_abs_z_median: 0.00010198355
-  val_abs_rot_x_median: 0.34974664
-  val_abs_rot_z_median: 0.3494259
-  val_abs_trans_std: 0.0008989247421976188
-  val_abs_y_std: 0.0010036832148164374
-  val_abs_z_std: 0.00030669901851267074
-  val_abs_rot_x_std: 0.7062523427412554
-  val_abs_rot_z_std: 0.7072815679100635
 
 #6
   run_name: 20260918_180846_bs16_channelwise_residual_gated_concat_local
