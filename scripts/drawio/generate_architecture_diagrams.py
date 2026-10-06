@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """
-Generate draw.io block diagrams of the 7 final-ablation fusion candidates.
+Generate draw.io block diagrams of the 9 final-ablation fusion candidates.
 
-The candidates are the same 7 used by scripts/evaluate/final_ablation_candidate_analysis.py
-and configs/final_ablation_spec.yml:
+Candidates 1-7 are the original final_ablation_spec.yml grid; 8-9 were added afterwards
+(se_channel_gated_concat_vs_gated_concat_spec.yml / se_channel_gated_concat_renorm_vs_se_channel_spec.yml)
+and are appended as candidates 8/9 in scripts/evaluate/final_ablation_candidate_analysis.py (not a
+renumbering/override of 1-7 -- see that script's "Candidates 8/9" comment):
 
     1 concat | 2 gated | 3 gated_concat | 4 residual_gated_concat |
     5 channelwise_gated_concat_local | 6 channelwise_residual_gated_concat_local |
-    7 gated_concat + dual_fusion
+    7 gated_concat + dual_fusion | 8 se_channel_gated_concat | 9 se_channel_gated_concat_renorm
 
 Each diagram starts at the per-stream feature vectors (flattened P3|P4|P5 = 22,400-d per
 stream) and shows fusion -> rotation / translation heads -> outputs. Dimensions were read off
 a constructed PoseEstimationNet (yolo26n.pt, 640x640) and the head widths come from
-configs/final_ablation_spec.yml; parameter counts are recomputed and asserted against the
-measured totals so the head/fusion sizes below cannot silently drift from the code.
+configs/final_ablation_spec.yml (candidates 1-7) / configs/generation_specs/se_channel_gated_concat_vs_gated_concat_spec.yml
+(candidates 8-9); parameter counts are recomputed and asserted against the measured totals so
+the head/fusion sizes below cannot silently drift from the code.
 
 Output (default docs/architecture_diagrams/):
-    01_concat.drawio ... 07_dual_gated_concat.drawio   one page each
-    all_candidates.drawio                              the 7 pages in one file
+    01_concat.drawio ... 09_se_channel_gated_concat_renorm.drawio   one page each
+    all_candidates.drawio                                          all 9 pages in one file
 
 Run from the repository root:
     python scripts/drawio/generate_architecture_diagrams.py
@@ -34,6 +37,17 @@ FEAT = 22400                                     # per-stream flattened P3|P4|P5
 BACKBONES_AND_NECK_PARAMS = 4_525_248 + 430_752  # both YOLO26n backbones + shared 1x1/stride-2 neck
 GATE_MLP_PARAMS = 44800 * 32 + 32 + 32 * 2 + 2   # Linear 44800->32, Linear 32->2
 LOCAL_GATE_PARAMS = (2 * 16 + 16) + (16 * 2 + 2)  # Conv1d 2->16, Conv1d 16->2
+
+# se_channel_gated_concat[_renorm] (fusion/gated_concat.py::_BaseSEChannelGatedConcat): one gate
+# per (scale, channel) and stream -- NUM_CHANNELS = 224 (P3:32 + P4:64 + P5:128) -- computed from
+# a squeeze descriptor (mean + mean|x| per channel, both streams: DESC_DIM = 2 streams * 2 stats *
+# 224 channels = 896) through LayerNorm(896) -> Linear(896->64) -> ReLU -> Dropout -> Linear(64->448).
+SE_NUM_CHANNELS = 224
+SE_DESC_DIM = 2 * 2 * SE_NUM_CHANNELS   # 896
+SE_HIDDEN_DIM = 64
+SE_GATE_OUT = 2 * SE_NUM_CHANNELS       # 448
+SE_CHANNEL_GATE_PARAMS = (2 * SE_DESC_DIM) + (SE_DESC_DIM * SE_HIDDEN_DIM + SE_HIDDEN_DIM) + \
+    (SE_HIDDEN_DIM * SE_GATE_OUT + SE_GATE_OUT)  # LayerNorm affine + 2 Linears = 88,320
 
 
 def mlp_params(in_dim, hidden, out_dim):
@@ -69,6 +83,12 @@ CANDIDATES = [
     dict(file="07_dual_gated_concat", title="7. Dual Fusion (Gated Concat)", kind="dual", dual=True,
          rot=[256, 1024], trans=[1024, 1024, 16], fused=2 * FEAT, fusion_params=2 * GATE_MLP_PARAMS,
          total=66_501_978),
+    dict(file="08_se_channel_gated_concat", title="8. SE-Channel Gated Concat", kind="se_channel", dual=False,
+         rot=[256, 1024], trans=[1024, 1024, 16], fused=2 * FEAT, fusion_params=SE_CHANNEL_GATE_PARAMS,
+         total=63_722_902),
+    dict(file="09_se_channel_gated_concat_renorm", title="9. SE-Channel Gated Concat (Renorm)",
+         kind="se_channel_renorm", dual=False, rot=[256, 1024], trans=[1024, 1024, 16], fused=2 * FEAT,
+         fusion_params=SE_CHANNEL_GATE_PARAMS, total=63_722_902),
 ]
 
 # ---------------------------------------------------------------------------
@@ -79,6 +99,7 @@ STYLE = {
     "tac":    ("#f3e5f5", "#000000", 1.5),
     "stack":  ("#fff8e1", "#ff9800", 1.5),
     "gate":   ("#ffe0b2", "#ff9800", 2),
+    "renorm": ("#fce4ec", "#c2185b", 1.5),
     "gated":  ("#e8f5e9", "#1aa53b", 1.5),
     "fused":  ("#e8f5e9", "#1aa53b", 2),
     "rot":    ("#e3f2fd", "#0066cc", 2),
@@ -269,6 +290,35 @@ def fusion_dual(p, rgb, tac):
     return fr, ft, 425
 
 
+def fusion_se_channel(p, rgb, tac, renorm):
+    sq = p.box(f"Squeeze: per-channel pooling<br>{SE_NUM_CHANNELS} channels/stream (P3:32, P4:64, P5:128)<br>"
+               "mean + mean|x| over each channel's grid cells<br>"
+               f"→ {fmt(SE_DESC_DIM)}-dim descriptor (both streams)", CM, 205, 640, 110, "stack")
+    p.edge(rgb, sq)
+    p.edge(tac, sq)
+    ex = p.box(f"Excite (Gate MLP)<br>LayerNorm({SE_DESC_DIM}) → Linear {SE_DESC_DIM}→{SE_HIDDEN_DIM} → ReLU → "
+               f"Dropout 0.3<br>→ Linear {SE_HIDDEN_DIM}→{SE_GATE_OUT} → Sigmoid<br>"
+               f"→ {SE_NUM_CHANNELS} gates/stream, [g_rgb, g_tac] ∈ (0,1)^(2×{SE_NUM_CHANNELS})", CM, 335, 640, 130,
+               "gate")
+    p.edge(sq, ex)
+    y = 485
+    if renorm:
+        rn = p.box("Renormalise (per sample)<br>rescale gates so their cell-weighted mean over both streams = 1.0<br>"
+                   "→ gates redistribute trust between channels/streams; cannot change overall feature scale", CM, y,
+                   640, 90, "renorm")
+        p.edge(ex, rn)
+        ex = rn
+        y += 90 + 40
+    exp = p.box(f"Expand to per-element<br>broadcast each channel's gate to its grid cells<br>"
+               f"(B, 2, {fmt(FEAT)})", CM, y, 460, 80, "gated")
+    p.edge(ex, exp)
+    y += 80 + 40
+    side_feed(p, rgb, tac, exp, exp)
+    f = p.box(f"[g_rgb⊙RGB | g_tac⊙Tactile]<br>{fmt(2 * FEAT)}-dim", CM, y, 420, 80, "fused")
+    p.edge(exp, f)
+    return f, f, y + 80 + 40
+
+
 def build_page(cand):
     kind = cand["kind"]
     # sanity: recompute the parameter total from the layer sizes above
@@ -287,6 +337,8 @@ def build_page(cand):
         sr, st, y = fusion_scalar_concat(p, rgb, tac, residual=kind.startswith("residual"))
     elif kind in ("cw_local", "cw_res_local"):
         sr, st, y = fusion_channelwise_local(p, rgb, tac, residual=kind == "cw_res_local")
+    elif kind in ("se_channel", "se_channel_renorm"):
+        sr, st, y = fusion_se_channel(p, rgb, tac, renorm=kind == "se_channel_renorm")
     else:
         sr, st, y = fusion_dual(p, rgb, tac)
     height = heads(p, cand, sr, st, y)
