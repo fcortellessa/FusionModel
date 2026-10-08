@@ -11,13 +11,32 @@ import torch.nn as nn
 
 
 class MLPHead(nn.Module):
-    def __init__(self, in_dim, out_dim, hidden_dims=[512], dropout=0.0, bn=False, activation=nn.GELU()):
+    def __init__(self, in_dim, out_dim, hidden_dims=[512], dropout=0.0, bn=False, activation=nn.GELU(),
+                 bottleneck_rank=None):
+        """
+        bottleneck_rank: optional low-rank factorization of ONLY the first Linear layer (the one
+        consuming `in_dim` -- by far the largest layer for this project's ~44800-dim fused vector,
+        see CLAUDE.md's "Gate granularity / naming" note: the head's first layer alone holds ~90%
+        of the whole model's parameters). Replaces nn.Linear(in_dim, hidden_dims[0])
+        (in_dim * hidden_dims[0] params) with nn.Linear(in_dim, bottleneck_rank, bias=False) ->
+        nn.Linear(bottleneck_rank, hidden_dims[0]) (in_dim*bottleneck_rank + bottleneck_rank*hidden_dims[0]
+        params). Every one of the in_dim inputs still reaches the layer -- unlike spatial pooling
+        (model.pre_head_grid_size), no information is structurally discarded -- only the RANK of the
+        linear map is constrained, not what it can see. Later layers (hidden-to-hidden, and the final
+        output layer) are left untouched: they're already small relative to the first layer, so
+        factoring them would save little. None (default) is the original single dense layer,
+        unchanged -- fully backward compatible with every existing config/checkpoint.
+        """
         super().__init__()
         layers = []
         prev = in_dim
 
-        for h in hidden_dims:
-            layers.append(nn.Linear(prev, h))
+        for idx, h in enumerate(hidden_dims):
+            if idx == 0 and bottleneck_rank is not None and 0 < bottleneck_rank < prev:
+                layers.append(nn.Linear(prev, bottleneck_rank, bias=False))
+                layers.append(nn.Linear(bottleneck_rank, h))
+            else:
+                layers.append(nn.Linear(prev, h))
             if bn:
                 layers.append(nn.BatchNorm1d(h))
             layers.append(activation)

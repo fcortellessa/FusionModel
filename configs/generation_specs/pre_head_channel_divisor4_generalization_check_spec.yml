@@ -1,0 +1,75 @@
+# Generalization check for model.pre_head_channel_divisor=4 (base_model/pose_estimation_model.py),
+# which beat the full-head se_channel_gated_concat baseline on all 3 tested seeds (0.514 +- 0.080 deg
+# mean test rot_x vs baseline's 0.635 +- 0.078, ~19% better) -- see
+# pre_head_channel_divisor_vs_se_channel_spec.yml.
+#
+# That result is only known to hold for se_channel_gated_concat. Before committing to redoing the
+# entire 9-candidate final_ablation comparison under this head architecture, this tests whether the
+# improvement generalizes across THREE deliberately different fusion mechanisms:
+#   concat         -- no gate at all (cleanest possible control)
+#   gated_concat   -- the simplest scalar-gate baseline
+#   dual_gated_concat -- structurally different (two independent fusion module instances, one per
+#                        task branch, rather than one shared fused vector)
+# If divisor=4 helps all three by a similar margin, that's strong evidence it's a generic
+# architecture fix worth applying across the whole comparison. If it helps some much more than
+# others, the benefit is interacting with specific fusion mechanisms rather than being universal.
+#
+# Same template, fixed_overrides and split-seed grid (36-38) as every other se_channel/head-reduction
+# pilot in this series, so results are directly comparable. Compared against each candidate's existing
+# 5-seed (or 4-seed for concat) full-head runs already in runs/final_ablation -- not regenerated here.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: 4
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  # Corrected from the rest of this series' min_delta=0.01/smoothing_alpha=0.3, which replaying
+  # against real runs showed never actually fires (see
+  # pre_head_channel_divisor4_bottleneck_rank64_vs_se_channel_spec.yml's comment for the full
+  # diagnosis). Doesn't bias the accuracy comparison -- checkpoint_best.pth is still whatever
+  # epoch had the lowest val_loss regardless of when training stops -- just lets these 9 runs
+  # actually stop once plateaued instead of always burning the full 80-epoch budget.
+  training.early_stopping.min_delta: 0.03
+  training.early_stopping.smoothing_alpha: 0.2
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: concat_divisor4
+    overrides:
+      model.fusion: concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: gated_concat_divisor4
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+
+  - name: dual_gated_concat_divisor4
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

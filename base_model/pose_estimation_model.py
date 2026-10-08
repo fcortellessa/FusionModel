@@ -39,7 +39,8 @@ class PoseEstimationNet(nn.Module):
     def __init__(self, model_name='yolo26n.pt', streams=("mono_cam", "tactile"), fusion="concat", freeze_backbone=False, rotation_parametrisation="quaternion", activation=nn.GELU(),
                  rotation_layers = [256, 1024, 16], translation_layers = [1024, 1024, 0], dropout_rot = 0.0, dropout_trans = 0.0, use_batchnorm = True, task_adapter=None,
                  task_feature_adapter=False, task_feature_adapter_type="channel_attention", dual_fusion=False, translation_head_mode="separate",
-                 spatial_grid_size=(10, 10), gate_init_prob=None, backbone_trainable=False, pre_head_grid_size=None):
+                 spatial_grid_size=(10, 10), gate_init_prob=None, backbone_trainable=False, pre_head_grid_size=None,
+                 pre_head_layernorm=False, head_bottleneck_rank=None, pre_head_channel_divisor=None):
         super().__init__()
 
         # Optional additional AdaptiveAvgPool2d applied to P3/P4/P5 (all three, same
@@ -74,6 +75,22 @@ class PoseEstimationNet(nn.Module):
                 pre_head_grid_size = tuple(pre_head_grid_size)
             self.pre_head_pool = nn.AdaptiveAvgPool2d(pre_head_grid_size)
 
+        # Optional low-rank factorization of the head's first Linear layer -- see
+        # MLPHead's bottleneck_rank docstring. None (default) is unchanged/backward
+        # compatible; stored here and threaded into every MLPHead(...) construction
+        # below (rot_head, trans_head/y_head/z_head).
+        self.head_bottleneck_rank = head_bottleneck_rank
+
+        # Optional channel reduction (1x1 conv) applied to P3/P4/P5 right before flatten,
+        # on top of the existing conv_p3/p4/p5 halving -- unlike pre_head_grid_size (which
+        # shrinks the head's input by discarding SPATIAL resolution, and empirically hurt
+        # accuracy -- see final_ablation's paired-comparison results), this shrinks it via
+        # the CHANNEL axis instead, leaving every spatial position intact. Each scale's
+        # post-stride-conv channel count c (P3:32, P4:64, P5:128 by default) becomes
+        # max(1, c // pre_head_channel_divisor). None (default, divisor unset) skips this
+        # entirely -- identical to every existing run/config.
+        self.pre_head_channel_divisor = pre_head_channel_divisor
+
         # New, explicitly-named opt-in for actually training the backbone (see the
         # extended comment at the freeze/unfreeze site below for why this exists
         # separately from freeze_backbone, which stays pinned to its historical --
@@ -104,6 +121,14 @@ class PoseEstimationNet(nn.Module):
                 "head consumes a single joint feature vector, but dual_fusion produces two "
                 "independent (rotation/translation) fused vectors with no shared 'fused' tensor."
             )
+
+        if pre_head_layernorm and rotation_parametrisation == "se3_direct":
+            raise ValueError(
+                "pre_head_layernorm is incompatible with head_type 'se3_direct': that head is "
+                "consumed on a separate return path (forward()'s se3_direct branch) that never "
+                "reaches the rotation/translation-adapter site where pre_head_layernorm is applied."
+            )
+        self.pre_head_layernorm = bool(pre_head_layernorm)
 
         if translation_head_mode not in ("separate", "joint"):
             raise ValueError(
@@ -179,19 +204,43 @@ class PoseEstimationNet(nn.Module):
         self.stride_p5_1 = nn.Conv2d(c5//2, c5//2, kernel_size=3, stride=2, padding=1)
         self.stride_p5_2 = nn.Conv2d(c5//2, c5//2, kernel_size=3, stride=2, padding=1)
 
+        # Optional additional 1x1-conv channel reduction, applied after the stride convs
+        # above (i.e. at the final 20x20/10x10/5x5 resolution) -- see
+        # pre_head_channel_divisor's docstring at its __init__ argument. None (divisor
+        # unset, default) leaves these as plain pass-throughs (nn.Identity()), so
+        # forward_single_stream's behavior and every existing checkpoint are unaffected.
+        def _channel_reduce(channels):
+            if self.pre_head_channel_divisor is None:
+                return nn.Identity()
+            return nn.Conv2d(channels, max(1, channels // self.pre_head_channel_divisor), 1)
+
+        self.pre_head_channel_conv_p3 = _channel_reduce(c3 // 2)
+        self.pre_head_channel_conv_p4 = _channel_reduce(c4 // 2)
+        self.pre_head_channel_conv_p5 = _channel_reduce(c5 // 2)
+
         # Per-scale flattened sizes within the 1D per-stream feature vector, i.e. the
         # boundaries of the [P3 | P4 | P5] blocks that forward_single_stream() later
         # concatenates (torch.cat([p.flatten(1) for p in [p3, p4, p5]], dim=1)).
         # Lets fusion-gate diagnostics (see scripts/train.py) break a channel-wise gate
         # down by which pyramid scale each channel came from, not just its raw index.
+        # Includes pre_head_channel_conv_p3/p4/p5 so these dims reflect the reduced
+        # channel counts when pre_head_channel_divisor is set (forward_single_stream
+        # applies them at the same point, before flatten).
         with torch.no_grad():
-            p3_d = self.stride_p3_2(self.stride_p3_1(self.conv_p3(feats[0])))
-            p4_d = self.stride_p4_2(self.stride_p4_1(self.conv_p4(feats[1])))
-            p5_d = self.stride_p5_2(self.stride_p5_1(self.conv_p5(feats[2])))
+            p3_d = self.pre_head_channel_conv_p3(self.stride_p3_2(self.stride_p3_1(self.conv_p3(feats[0]))))
+            p4_d = self.pre_head_channel_conv_p4(self.stride_p4_2(self.stride_p4_1(self.conv_p4(feats[1]))))
+            p5_d = self.pre_head_channel_conv_p5(self.stride_p5_2(self.stride_p5_1(self.conv_p5(feats[2]))))
         self.stream_scale_dims = {
             "p3": p3_d.shape[1] * p3_d.shape[2] * p3_d.shape[3],
             "p4": p4_d.shape[1] * p4_d.shape[2] * p4_d.shape[3],
             "p5": p5_d.shape[1] * p5_d.shape[2] * p5_d.shape[3],
+        }
+        # Channel count of each scale's block (the block is channel-major: C x H x W flattened),
+        # so per-scale size // channels = grid cells per channel. Used by se_channel_* fusions.
+        self.stream_scale_channels = {
+            "p3": p3_d.shape[1],
+            "p4": p4_d.shape[1],
+            "p5": p5_d.shape[1],
         }
 
         # 2. Fusion module
@@ -238,6 +287,8 @@ class PoseEstimationNet(nn.Module):
                 "concat",
                 "gated_concat",
                 "scale_gated_concat",
+                "se_channel_gated_concat",
+                "se_channel_gated_concat_renorm",
                 "channelwise_gated_concat",
                 "channelwise_gated_concat_wide",
                 "channelwise_gated_concat_local",
@@ -254,12 +305,12 @@ class PoseEstimationNet(nn.Module):
             if self.dual_fusion:
                 # Independent fusion module per task branch (own parameters), fed
                 # from the same shared per-stream backbone features.
-                self.fusion_rotation = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims)
-                self.fusion_translation = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims)
+                self.fusion_rotation = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims, scale_channels=self.stream_scale_channels)
+                self.fusion_translation = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims, scale_channels=self.stream_scale_channels)
                 fusion_for_aux_check = self.fusion_rotation
             else:
                 # build_fusion returns a single fusion module instance as specified by the config
-                self.fusion = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims)
+                self.fusion = build_fusion(fusion, feat_dim, len(streams), gate_init_prob=self.gate_init_prob, scale_dims=self.stream_scale_dims, scale_channels=self.stream_scale_channels)
                 fusion_for_aux_check = self.fusion
 
             fused_dim = feat_dim * len(streams) if fusion in concat_output_fusions else feat_dim
@@ -307,6 +358,20 @@ class PoseEstimationNet(nn.Module):
                 raise ValueError(f"Unknown task_feature_adapter_type: {task_feature_adapter_type}")
         self.task_feature_adapter_type = task_feature_adapter_type
 
+        # Optional LayerNorm on the fused vector, applied right before the rotation/translation
+        # heads (after any adapters above). Independent per-branch instances (own learned
+        # gain/bias each), same pattern as rotation_adapter/translation_adapter. Targets a
+        # different failure mode than pre_head_grid_size: pre_head_grid_size shrinks the
+        # bottleneck's *dimensionality*; this normalizes its *magnitude* every forward pass,
+        # decoupling the scale the fusion/backbone happens to produce from the scale of the
+        # gradient the head's (by far the model's largest) first Linear layer receives --
+        # see CLAUDE.md's "Gate granularity / naming" note and the mean-gate ablation
+        # (scripts/evaluate/gate_ablation_test.py) for the diagnosis this targets. Default
+        # False is a no-op / fully backward compatible (identity passthrough not even
+        # constructed, so no new state_dict keys for any existing config/checkpoint).
+        self.pre_head_norm_rot = nn.LayerNorm(fused_dim) if self.pre_head_layernorm else None
+        self.pre_head_norm_trans = nn.LayerNorm(fused_dim) if self.pre_head_layernorm else None
+
 
         # 3. Prediction Heads
         # Helper to process config values into a list
@@ -326,7 +391,8 @@ class PoseEstimationNet(nn.Module):
                 hidden_dims=rot_hidden,
                 dropout=dropout_rot,
                 bn=use_batchnorm,
-                activation=self.activation
+                activation=self.activation,
+            bottleneck_rank=self.head_bottleneck_rank
             )
         elif rotation_parametrisation == "2D_unit_vector":
             self.rot_head = MLPHead(
@@ -335,7 +401,8 @@ class PoseEstimationNet(nn.Module):
                 hidden_dims=rot_hidden,
                 dropout=dropout_rot,
                 bn=use_batchnorm,
-                activation=self.activation
+                activation=self.activation,
+            bottleneck_rank=self.head_bottleneck_rank
             )
         elif rotation_parametrisation == "angle":
             self.rot_head = MLPHead(
@@ -344,7 +411,8 @@ class PoseEstimationNet(nn.Module):
                 hidden_dims=rot_hidden,
                 dropout=dropout_rot,
                 bn=use_batchnorm,
-                activation=self.activation
+                activation=self.activation,
+            bottleneck_rank=self.head_bottleneck_rank
             )
         elif rotation_parametrisation == "lie_algebra":
             self.rot_head = MLPHead(
@@ -353,7 +421,8 @@ class PoseEstimationNet(nn.Module):
                 hidden_dims=rot_hidden,
                 dropout=dropout_rot,
                 bn=use_batchnorm,
-                activation=self.activation
+                activation=self.activation,
+            bottleneck_rank=self.head_bottleneck_rank
             )
         elif rotation_parametrisation == "se3_direct":
             # SE(3) direct head outputs complete 6D SE(3) Lie algebra element
@@ -372,7 +441,8 @@ class PoseEstimationNet(nn.Module):
                     hidden_dims=trans_hidden,
                     dropout=dropout_trans,
                     bn=use_batchnorm,
-                    activation=self.activation
+                    activation=self.activation,
+                bottleneck_rank=self.head_bottleneck_rank
                 )
             else:
                 self.y_head = MLPHead(
@@ -381,7 +451,8 @@ class PoseEstimationNet(nn.Module):
                     hidden_dims=trans_hidden,
                     dropout=dropout_trans,
                     bn=use_batchnorm,
-                    activation=self.activation
+                    activation=self.activation,
+                bottleneck_rank=self.head_bottleneck_rank
                 )
                 self.z_head = MLPHead(
                     in_dim=fused_dim,
@@ -389,7 +460,8 @@ class PoseEstimationNet(nn.Module):
                     hidden_dims=trans_hidden,
                     dropout=dropout_trans,
                     bn=use_batchnorm,
-                    activation=self.activation
+                    activation=self.activation,
+                bottleneck_rank=self.head_bottleneck_rank
                 )
 
 
@@ -401,6 +473,12 @@ class PoseEstimationNet(nn.Module):
         p3 = self.stride_p3_2(self.stride_p3_1(self.conv_p3(p3)))  # 80×80 -> 40×40 -> 20×20
         p4 = self.stride_p4_2(self.stride_p4_1(self.conv_p4(p4)))  # 40×40 -> 20×20 -> 10×10
         p5 = self.stride_p5_2(self.stride_p5_1(self.conv_p5(p5)))  # 20×20 -> 10×10 -> 5×5
+
+        # Optional additional channel reduction (see pre_head_channel_divisor in
+        # __init__). nn.Identity() when unset -- no-op, identical to every existing run.
+        p3 = self.pre_head_channel_conv_p3(p3)
+        p4 = self.pre_head_channel_conv_p4(p4)
+        p5 = self.pre_head_channel_conv_p5(p5)
 
         # Optional additional shrink of the pre-flatten bottleneck (see
         # pre_head_grid_size in __init__). None (default) skips this entirely,
@@ -564,6 +642,14 @@ class PoseEstimationNet(nn.Module):
                 rotation_features, self.rotation_attention = self.rotation_adapter(fused_rot)
             if self.translation_adapter is not None:
                 translation_features, self.translation_attention = self.translation_adapter(fused_trans)
+
+            # Optional LayerNorm right before the heads (see its construction site for why).
+            # Applied last, after every adapter above, so it normalizes exactly what the
+            # heads' first Linear layer actually receives, whatever produced it.
+            if self.pre_head_norm_rot is not None:
+                rotation_features = self.pre_head_norm_rot(rotation_features)
+            if self.pre_head_norm_trans is not None:
+                translation_features = self.pre_head_norm_trans(translation_features)
 
             # Run through separate heads
             rotation = self.rot_head(rotation_features)

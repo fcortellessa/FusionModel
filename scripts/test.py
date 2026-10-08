@@ -106,6 +106,9 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
         task_feature_adapter_type=_get_task_feature_adapter_type(config),
         dual_fusion=bool(config["model"].get("dual_fusion", False)),
         gate_init_prob=config["model"].get("gate_init_prob", None),
+        pre_head_layernorm=bool(config["model"].get("pre_head_layernorm", False)),
+        head_bottleneck_rank=config["model"].get("head_bottleneck_rank", None),
+        pre_head_channel_divisor=config["model"].get("pre_head_channel_divisor", None),
     )
     
     data_root = resolve_data_root(config, REPO_ROOT)

@@ -1,0 +1,34 @@
+# dual_gated_concat_divisor4 (pre_head_channel_divisor4_generalization_check_spec.yml's third
+# candidate) already has seeds 36-38 (that spec) and 41-45 (seeds41_45_divisor4_sweep_spec.yml) --
+# this fills in the two seeds (39, 40) missing from the final_ablation standard 36-40 set, so the
+# candidate ends up with the same 5-seed coverage (36-40) as every other candidate in this series.
+#
+# Same template, fixed_overrides and variant overrides as the two specs above.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: 4
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.03
+  training.early_stopping.smoothing_alpha: 0.2
+
+grid:
+  data.split_seed: [39, 40]
+
+variants:
+  - name: dual_gated_concat_divisor4
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

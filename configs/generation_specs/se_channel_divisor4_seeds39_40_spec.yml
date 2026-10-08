@@ -1,0 +1,32 @@
+# Extends pre_head_channel_divisor4_vs_se_channel's seeds 36-38 (non-dual se_channel_gated_concat
+# +divisor4, 0.514 +- 0.080 deg mean test rot_x) to the remaining 2 seeds (39, 40) of the standard
+# final_ablation 5-seed set -- same reason as dual_se_channel_divisor4_seeds39_40_spec.yml, so both
+# the dual and non-dual se_channel +divisor4 candidates reach full 5-seed coverage together.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: 4
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.03
+  training.early_stopping.smoothing_alpha: 0.2
+
+grid:
+  data.split_seed: [39, 40]
+
+variants:
+  - name: se_channel_gated_concat_divisor4
+    overrides:
+      model.fusion: se_channel_gated_concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

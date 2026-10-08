@@ -1,0 +1,40 @@
+# Follow-up to pre_head_channel_divisor_vs_se_channel_spec.yml (divisor=4), which beat the
+# full-head se_channel_gated_concat baseline on all 3 tested seeds (0.514 +- 0.080 deg mean test
+# rot_x vs baseline's 0.635 +- 0.078, ~19% better) and trained ~12% faster per epoch. This tests
+# whether pushing the channel reduction further (divisor=8: P3 32->4, P4 64->8, P5 128->16
+# channels, fused_dim 44800->5600) continues to help or has passed the sweet spot --
+# divisor=16 was deliberately NOT tried first since it would shrink P3 to only 2 channels, too
+# close to the kind of aggressive-compression failure already seen with
+# model.pre_head_grid_size=3 (spatial pooling, made accuracy 16-21% WORSE).
+#
+# Compared against se_channel_gated_concat (plain, no reduction) and
+# pre_head_channel_divisor=4 -- both already have 5 and 3 seeds respectively in
+# runs/final_ablation / runs/pre_head_channel_divisor_vs_se_channel -- not regenerated here.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: se_channel_gated_concat_pre_head_channel_divisor8
+    overrides:
+      model.fusion: se_channel_gated_concat
+      model.dual_fusion: false
+      model.pre_head_channel_divisor: 8
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

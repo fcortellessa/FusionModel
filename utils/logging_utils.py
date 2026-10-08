@@ -115,6 +115,22 @@ METRICS_FIELDNAMES = [
     "val_translation_fusion_gate_mean", "val_translation_fusion_gate_std",
     "val_translation_fusion_gate_fraction_lt_0_1", "val_translation_fusion_gate_fraction_gt_0_9",
     "val_translation_fusion_gate_fraction_mid_0_4_0_6",
+    # split of the pooled std above into across-SAMPLE vs. across-CHANNEL variation --
+    # the pooled std can't tell a per-sample-selective gate apart from a static
+    # per-channel pattern that's identical for every sample (see
+    # scripts/train.py::_compute_between_gate_stds). 0 for a scalar gate by construction.
+    "train_fusion_gate_between_sample_std", "train_fusion_gate_between_channel_std",
+    "val_fusion_gate_between_sample_std", "val_fusion_gate_between_channel_std",
+    "train_rotation_fusion_gate_between_sample_std", "train_rotation_fusion_gate_between_channel_std",
+    "val_rotation_fusion_gate_between_sample_std", "val_rotation_fusion_gate_between_channel_std",
+    "train_translation_fusion_gate_between_sample_std", "train_translation_fusion_gate_between_channel_std",
+    "val_translation_fusion_gate_between_sample_std", "val_translation_fusion_gate_between_channel_std",
+    # fusion module's own gradient/parameter norm -- train-only (see
+    # scripts/train.py::_accumulate_fusion_grad_norm), lets a vanishing/cold-start
+    # gate signal be diagnosed directly instead of inferred from a whole-model norm.
+    "train_fusion_grad_norm", "train_fusion_param_norm",
+    "train_rotation_fusion_grad_norm", "train_rotation_fusion_param_norm",
+    "train_translation_fusion_grad_norm", "train_translation_fusion_param_norm",
     "train_fusion_gate_p25", "train_fusion_gate_p50", "train_fusion_gate_p75", "train_fusion_gate_p90",
     "val_fusion_gate_p25", "val_fusion_gate_p50", "val_fusion_gate_p75", "val_fusion_gate_p90",
     # per-scale (P3/P4/P5) mean + specialization gate value -- channel-wise, 1D-pipeline
@@ -174,8 +190,21 @@ def start_tensorboard(logdir, logger, port=6006):
 
 
 def format_fusion_weights(fusion_weights) -> str:
+    """Format a per-stream gate-weight tensor as "[0.1234,0.5678]".
+
+    Expects shape (num_streams,). Gate types with a per-channel/per-element weight
+    (e.g. se_channel_*, channelwise_*) produce (num_streams, dim) instead -- usually
+    already reduced to flat before reaching here (see _summarize_fusion_gate_stats'
+    `mean`), but dual_fusion runs fall back to the less-reduced per-batch
+    `fusion_weights` (only averaged over the batch dim, see train_loop's fw_str site),
+    which keeps the per-channel axis for these gate types. Average over every
+    dimension past the first here too, so this never depends on the caller having
+    already done it -- a no-op for the already-flat (num_streams,) case.
+    """
     if fusion_weights is None:
         return ""
+    if fusion_weights.dim() > 1:
+        fusion_weights = fusion_weights.mean(dim=tuple(range(1, fusion_weights.dim())))
     return "[" + ",".join(f"{w:.4f}" for w in fusion_weights.tolist()) + "]"
 
 

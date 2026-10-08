@@ -1,5 +1,6 @@
 # scripts/train.py
 
+import json
 import os
 import sys
 import time
@@ -26,6 +27,7 @@ from utils.train_utils import (
     HeadLRDecayManager,
     GlobalPlateauLRManager,
     PerHeadEarlyStoppingManager,
+    PerHeadCheckpointSelector,
     EpochMetricsAggregator,
     build_epoch_metrics_row,
     _apply_metric_accumulation
@@ -43,6 +45,7 @@ from utils.logging_utils import (
     init_metrics_csv,
     init_tensorboard_writer,
     log_train_step_to_tensorboard,
+    compute_model_norms,
     log_epoch_to_tensorboard,
     log_hparams_to_tensorboard,
     configure_run_logging,
@@ -199,6 +202,18 @@ def _init_fusion_gate_stats():
         "raw_weights": [],  # List of tensors to concatenate later
         "raw_rotation_weights": [],
         "raw_translation_weights": [],
+        # Per-(stream, channel) sums, kept separate from the pooled "sum"/"sum_sq" above
+        # so the pooled std (which mixes across-sample and across-channel variation
+        # into one number, see _compute_between_gate_stds) can be split into the two.
+        # "n" is the number of SAMPLES accumulated (not samples*channels like "count").
+        "csum": None, "csumsq": None, "n": None,
+        "rotation_csum": None, "rotation_csumsq": None, "rotation_n": None,
+        "translation_csum": None, "translation_csumsq": None, "translation_n": None,
+        # Fusion module's own parameter/gradient norm (train-only: accumulated once per
+        # training step right after backward(), see _accumulate_fusion_grad_norm).
+        "grad_norm_sum": 0.0, "param_norm_sum": 0.0, "grad_norm_count": 0,
+        "rotation_grad_norm_sum": 0.0, "rotation_param_norm_sum": 0.0, "rotation_grad_norm_count": 0,
+        "translation_grad_norm_sum": 0.0, "translation_param_norm_sum": 0.0, "translation_grad_norm_count": 0,
         # Per-scale (P3/P4/P5) mean gate value per stream, keyed by (task_name, scale).
         # Only populated when scale_dims is passed to _accumulate_fusion_gate_stats
         # (channel-wise, 1D-pipeline gates only -- see PoseEstimationNet.stream_scale_dims).
@@ -266,7 +281,8 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None, scale_dims=None)
 
     # Gate shapes are (B, streams) or (B, streams, channels) or (B, streams, H, W).
     # Reshape to (num_streams, -1) so each row is all gate values for one stream.
-    by_stream = gates.detach().float().cpu().movedim(1, 0).reshape(gates.shape[1], -1)
+    gates_bsd = gates.detach().float().cpu().reshape(gates.shape[0], gates.shape[1], -1)  # (B, streams, D)
+    by_stream = gates_bsd.movedim(1, 0).reshape(gates.shape[1], -1)
     gate_sum = by_stream.sum(dim=1)
     gate_sum_sq = by_stream.square().sum(dim=1)
     gate_count = torch.full_like(gate_sum, by_stream.shape[1])
@@ -278,6 +294,13 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None, scale_dims=None)
     # can't tell apart.
     mid_count = ((by_stream >= 0.4) & (by_stream <= 0.6)).sum(dim=1)
 
+    # Per-(stream, channel) sums over the SAMPLE dimension only (not pooled over
+    # channels like gate_sum above) -- lets _summarize_fusion_gate_stats later split
+    # the pooled std into across-sample vs. across-channel variation.
+    csum_batch = gates_bsd.sum(dim=0)              # (streams, D)
+    csumsq_batch = gates_bsd.square().sum(dim=0)   # (streams, D)
+    n_batch = gates_bsd.shape[0]                   # number of samples in this batch
+
     # Determine which stats dict keys to update
     if task_name:
         # GAP 1: Per-task accumulation (dual_fusion)
@@ -287,12 +310,14 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None, scale_dims=None)
         lt_key = f"{task_name}_lt_0_1"
         gt_key = f"{task_name}_gt_0_9"
         mid_key = f"{task_name}_mid_0_4_0_6"
+        csum_key, csumsq_key, n_key = f"{task_name}_csum", f"{task_name}_csumsq", f"{task_name}_n"
     else:
         # Standard accumulation (non-dual or averaged)
         sum_key, sum_sq_key = "sum", "sum_sq"
         count_key = "count"
         lt_key, gt_key = "lt_0_1", "gt_0_9"
         mid_key = "mid_0_4_0_6"
+        csum_key, csumsq_key, n_key = "csum", "csumsq", "n"
 
     if stats[sum_key] is None:
         stats.update({
@@ -302,8 +327,15 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None, scale_dims=None)
             lt_key: low_count,
             gt_key: high_count,
             mid_key: mid_count,
+            csum_key: csum_batch,
+            csumsq_key: csumsq_batch,
+            n_key: n_batch,
         })
         return
+
+    stats[csum_key] += csum_batch
+    stats[csumsq_key] += csumsq_batch
+    stats[n_key] += n_batch
 
     for key, value in {
         sum_key: gate_sum,
@@ -314,6 +346,54 @@ def _accumulate_fusion_gate_stats(stats, gates, task_name=None, scale_dims=None)
         mid_key: mid_count,
     }.items():
         stats[key] += value
+
+
+def _compute_between_gate_stds(csum, csumsq, n):
+    """Split a pooled gate std into variation ACROSS SAMPLES vs. ACROSS CHANNELS.
+
+    The existing pooled `*_fusion_gate_std` (see _accumulate_fusion_gate_stats) flattens
+    every (sample, channel) gate value together, so it can't tell a gate that varies
+    per-sample (real per-sample trust) apart from a static per-channel pattern (channel 5
+    always ~0.3, channel 6 always ~0.7, identical for every sample) -- both inflate that
+    one pooled number identically. This computes, from the per-(stream, channel) sums
+    accumulated over the sample dimension:
+      between_sample_std: for each channel, the std of its gate value across samples,
+        averaged over channels -- 0 only if every channel is a per-sample constant.
+      between_channel_std: the std, across channels, of each channel's own across-sample
+        mean -- 0 only if every channel behaves identically on average (a scalar gate,
+        D=1, is always exactly 0 here by construction).
+    Both are (streams,) tensors, matching the pooled std's shape.
+    """
+    cmean = csum / n                                          # (streams, D)
+    cvar = (csumsq / n - cmean.square()).clamp_min(0.0)        # (streams, D)
+    between_sample_std = cvar.sqrt().mean(dim=1)
+    between_channel_std = cmean.std(dim=1, unbiased=False)
+    return between_sample_std, between_channel_std
+
+
+def _accumulate_fusion_grad_norm(stats, model):
+    """Accumulate the fusion module's OWN parameter/gradient norm for one training step.
+
+    scripts/train.py has no per-module gradient visibility: log_train_step_to_tensorboard's
+    compute_model_norms(model) sums over the WHOLE model, which can't show whether the
+    fusion module specifically is receiving a healthy gradient or a vanishing one (the
+    hypothesized cause of gated_concat's near-constant gate: a cold-start, +/-1e-3
+    initialized last layer that starts with little gradient reaching its hidden units).
+
+    Call once per training step, after loss.backward() (+ grad clipping) so .grad is
+    populated, and never during validation (there is no backward pass to measure).
+    """
+    if model.dual_fusion:
+        for task_name, module in (("rotation", model.fusion_rotation), ("translation", model.fusion_translation)):
+            param_norm, grad_norm = compute_model_norms(module)
+            stats[f"{task_name}_grad_norm_sum"] += grad_norm
+            stats[f"{task_name}_param_norm_sum"] += param_norm
+            stats[f"{task_name}_grad_norm_count"] += 1
+    else:
+        param_norm, grad_norm = compute_model_norms(model.fusion)
+        stats["grad_norm_sum"] += grad_norm
+        stats["param_norm_sum"] += param_norm
+        stats["grad_norm_count"] += 1
 
 
 def _summarize_fusion_gate_stats(stats, prefix):
@@ -358,6 +438,23 @@ def _summarize_fusion_gate_stats(stats, prefix):
             f"{prefix}_fusion_gate_fraction_gt_0_9": format_fusion_weights(stats["gt_0_9"] / stats["count"]),
             f"{prefix}_fusion_gate_fraction_mid_0_4_0_6": format_fusion_weights(stats["mid_0_4_0_6"] / stats["count"]),
         })
+        if stats.get("csum") is not None:
+            between_sample_std, between_channel_std = _compute_between_gate_stds(
+                stats["csum"], stats["csumsq"], stats["n"]
+            )
+            summary[f"{prefix}_fusion_gate_between_sample_std"] = format_fusion_weights(between_sample_std)
+            summary[f"{prefix}_fusion_gate_between_channel_std"] = format_fusion_weights(between_channel_std)
+
+    # Fusion module's own gradient/parameter norm (train-only, see
+    # _accumulate_fusion_grad_norm -- val never calls it, so grad_norm_count stays 0).
+    if stats.get("grad_norm_count"):
+        summary[f"{prefix}_fusion_grad_norm"] = stats["grad_norm_sum"] / stats["grad_norm_count"]
+        summary[f"{prefix}_fusion_param_norm"] = stats["param_norm_sum"] / stats["grad_norm_count"]
+    for task_name in ("rotation", "translation"):
+        count = stats.get(f"{task_name}_grad_norm_count")
+        if count:
+            summary[f"{prefix}_{task_name}_fusion_grad_norm"] = stats[f"{task_name}_grad_norm_sum"] / count
+            summary[f"{prefix}_{task_name}_fusion_param_norm"] = stats[f"{task_name}_param_norm_sum"] / count
 
     # GAP 2: Option A - Compute and add percentiles to CSV
     from utils.logging_utils import compute_gate_statistics
@@ -384,6 +481,12 @@ def _summarize_fusion_gate_stats(stats, prefix):
             f"{prefix}_rotation_fusion_gate_fraction_gt_0_9": rotation_stats["fraction_gt_0_9"],
             f"{prefix}_rotation_fusion_gate_fraction_mid_0_4_0_6": rotation_stats["fraction_mid_0_4_0_6"],
         })
+        if stats.get("rotation_csum") is not None:
+            between_sample_std, between_channel_std = _compute_between_gate_stds(
+                stats["rotation_csum"], stats["rotation_csumsq"], stats["rotation_n"]
+            )
+            summary[f"{prefix}_rotation_fusion_gate_between_sample_std"] = format_fusion_weights(between_sample_std)
+            summary[f"{prefix}_rotation_fusion_gate_between_channel_std"] = format_fusion_weights(between_channel_std)
 
     if raw_translation_weights is not None:
         translation_stats = compute_gate_statistics(raw_translation_weights)
@@ -394,6 +497,12 @@ def _summarize_fusion_gate_stats(stats, prefix):
             f"{prefix}_translation_fusion_gate_fraction_gt_0_9": translation_stats["fraction_gt_0_9"],
             f"{prefix}_translation_fusion_gate_fraction_mid_0_4_0_6": translation_stats["fraction_mid_0_4_0_6"],
         })
+        if stats.get("translation_csum") is not None:
+            between_sample_std, between_channel_std = _compute_between_gate_stds(
+                stats["translation_csum"], stats["translation_csumsq"], stats["translation_n"]
+            )
+            summary[f"{prefix}_translation_fusion_gate_between_sample_std"] = format_fusion_weights(between_sample_std)
+            summary[f"{prefix}_translation_fusion_gate_between_channel_std"] = format_fusion_weights(between_channel_std)
 
     # Per-scale (P3/P4/P5) mean + specialization gate value per stream -- only present
     # for channel-wise gates from the 1D pipeline (see PoseEstimationNet.stream_scale_dims
@@ -457,6 +566,7 @@ def _train_single_epoch(
     normalize_translation=True,
     trans_norm_stats=None,
     grad_clip_max_norm=None,
+    grad_clip_per_parameter_group=False,
 ):
     model.train()
     stats = canonicalize_translation_norm_stats(trans_norm_stats)
@@ -549,7 +659,26 @@ def _train_single_epoch(
             loss.backward()
 
         if grad_clip_max_norm is not None:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm)
+            if grad_clip_per_parameter_group:
+                # Clip each optimizer param group's own gradient norm independently to
+                # max_norm, instead of one norm over every parameter together. Motivation:
+                # the head's first Linear layer alone holds ~90% of this model's parameters
+                # (see CLAUDE.md's "Gate granularity / naming" note), so under a single
+                # global clip it can dominate the total norm and throttle every other
+                # group's (backbone/gate/other head) update by the same factor whenever its
+                # own gradient is large -- see the gate/feature-shrinkage discussion this
+                # targets. Note: unlike the global clip below (torch.nn.utils.clip_grad_norm_
+                # over model.parameters()), this also clips the "uncertainty" param group
+                # when task_weighting.type=uncertainty (its log_var params live on the
+                # separate uncertainty_module, added via optimizer.add_param_group, and were
+                # never part of model.parameters()) -- a deliberate side effect, not an
+                # oversight: those two scalars should arguably be clipped too.
+                for group in optimizer.param_groups:
+                    torch.nn.utils.clip_grad_norm_(group["params"], max_norm=grad_clip_max_norm)
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm)
+
+        _accumulate_fusion_grad_norm(fusion_gate_stats, model)
 
         log_train_step_to_tensorboard(
             tb_writer=tb_writer,
@@ -755,12 +884,15 @@ def train_loop(
     head_lr_decay_cfg=None,
     lr_schedule_cfg=None,
     early_stopping_cfg=None,
+    checkpoint_selection_cfg=None,
     rotation_loss_type="geodesic",
     normalize_translation=True,
     trans_norm_stats=None,
     grad_clip_max_norm=None,
+    grad_clip_per_parameter_group=False,
     resume_state=None,
     rot_scaling_factor=None,
+    checkpoint_diagnostic=False,
 ):
     # resume_state is the raw checkpoint dict from load_checkpoint_for_resume()
     # (model/optimizer/uncertainty weights are already restored by that point --
@@ -774,6 +906,21 @@ def train_loop(
     tb_writer = None
     metadata = run_metadata or {}
     global_batch_step = 0
+
+    # Diagnostic only, opt-in (training.checkpoint_diagnostic) -- does NOT change which
+    # checkpoint is kept (that's still decided by val_fixed_loss a few lines below,
+    # unchanged). Tracks, in parallel, which epoch would have been "best" by the raw,
+    # unweighted per-head metrics alone (val_abs_rot_x / val_abs_trans), so a run's
+    # manifest.json records whether checkpoint_best.pth's selection (by val_fixed_loss)
+    # agrees with what the interpretable accuracy metrics alone would have picked --
+    # see the "Fixed-scale, non-learned composite ... used for checkpoint selection"
+    # comment below for why val_fixed_loss is used instead of these metrics directly
+    # (not to replace that choice, just to make any divergence from it visible/traceable
+    # per run instead of requiring a manual replay against metrics.csv after the fact).
+    checkpoint_diagnostic = bool(checkpoint_diagnostic)
+    diag_best = {
+        "rot": (None, float("inf")), "trans": (None, float("inf")), "checkpoint": (None, None, None),
+    } if checkpoint_diagnostic else None
 
     lr_scale_fn = _build_epoch_lr_scale_fn(num_epochs, lr_schedule_cfg)
 
@@ -802,10 +949,35 @@ def train_loop(
     # see PerHeadEarlyStoppingManager docstring for why.
     early_stopper = PerHeadEarlyStoppingManager(early_stopping_cfg)
 
+    # Checkpoint-save criterion. Default ("combined_loss", the only behavior that
+    # ever existed before) keeps comparing val_fixed_loss below, unchanged. Opt-in
+    # ("per_head_pareto") switches checkpoint_best.pth itself to PerHeadCheckpointSelector
+    # -- see its docstring. "both" keeps checkpoint_best.pth on the original combined_loss
+    # criterion (so resume/test.py behavior is untouched) and additionally writes a
+    # second file, checkpoint_best_per_head.pth, whenever the pareto criterion fires --
+    # for A/B comparing the two selection strategies on one run before committing to
+    # switching the primary checkpoint over.
+    checkpoint_selection_cfg = checkpoint_selection_cfg or {}
+    checkpoint_selection_type = checkpoint_selection_cfg.get("type", "combined_loss")
+    use_pareto_for_primary = checkpoint_selection_type == "per_head_pareto"
+    save_dual_checkpoints = checkpoint_selection_type == "both"
+    checkpoint_selector = (
+        PerHeadCheckpointSelector(checkpoint_selection_cfg)
+        if use_pareto_for_primary or save_dual_checkpoints
+        else None
+    )
+    secondary_checkpoint_path = (
+        os.path.join(os.path.dirname(checkpoint_path), "checkpoint_best_per_head.pth")
+        if save_dual_checkpoints and checkpoint_path is not None
+        else None
+    )
+
     if resume_state is not None:
         head_lr_manager.load_state_dict(resume_state.get("head_lr_manager_state"))
         global_plateau_manager.load_state_dict(resume_state.get("global_plateau_manager_state"))
         early_stopper.load_state_dict(resume_state.get("early_stopper_state"))
+        if checkpoint_selector is not None:
+            checkpoint_selector.load_state_dict(resume_state.get("checkpoint_selector_state"))
         logger.info(
             f"Resumed from checkpoint at epoch={resume_state['epoch']} "
             f"(continuing from epoch={last_epoch}), best_val_loss={best_val_loss:.6f}"
@@ -851,6 +1023,7 @@ def train_loop(
                 normalize_translation=normalize_translation,
                 trans_norm_stats=trans_norm_stats,
                 grad_clip_max_norm=grad_clip_max_norm,
+                grad_clip_per_parameter_group=grad_clip_per_parameter_group,
             )
             global_batch_step = train_epoch["global_batch_step"]
             train_avg = train_epoch["train_avg"]
@@ -905,6 +1078,12 @@ def train_loop(
             # "best" checkpoint and mistime the global LR decay.
             val_fixed_loss = val_avg["loss_q"] + val_avg["loss_y"] + val_avg["loss_z"]
 
+            if diag_best is not None:
+                if val_avg["abs_rot_x"] < diag_best["rot"][1]:
+                    diag_best["rot"] = (epoch, val_avg["abs_rot_x"])
+                if val_avg["abs_trans"] < diag_best["trans"][1]:
+                    diag_best["trans"] = (epoch, val_avg["abs_trans"])
+
             global_plateau_manager.update(val_fixed_loss, logger=logger)
 
             if uncertainty_module is not None and hasattr(uncertainty_module, "update_epoch"):
@@ -916,8 +1095,21 @@ def train_loop(
                 except Exception as exc:
                     logger.debug(f"Task-weighting epoch update skipped: {exc}")
 
-            if val_fixed_loss < best_val_loss:
+            # checkpoint_selector.update() is side-effecting (advances its EMA + best
+            # state) -- call it at most once per epoch regardless of which mode is
+            # active, so "both" and "per_head_pareto" see the exact same pareto
+            # trajectory as each other.
+            pareto_is_best = (
+                checkpoint_selector.update(val_avg["abs_rot_x"], val_avg["abs_trans"])
+                if checkpoint_selector is not None
+                else False
+            )
+            is_new_best = pareto_is_best if use_pareto_for_primary else val_fixed_loss < best_val_loss
+
+            if is_new_best:
                 best_val_loss = val_fixed_loss
+                if diag_best is not None:
+                    diag_best["checkpoint"] = (epoch, val_avg["abs_rot_x"], val_avg["abs_trans"])
                 save_checkpoint(
                     model, optimizer, epoch, val_fixed_loss, checkpoint_path,
                     uncertainty_module=uncertainty_module,
@@ -925,9 +1117,28 @@ def train_loop(
                     head_lr_manager=head_lr_manager,
                     global_plateau_manager=global_plateau_manager,
                     best_val_loss=best_val_loss,
+                    checkpoint_selector=checkpoint_selector,
                 )
                 _save_raw_gate_weights(
                     checkpoint_path, epoch, val_raw_weights, val_raw_rot_weights, val_raw_trans_weights
+                )
+
+            # "both" mode only: write the second, pareto-selected checkpoint alongside
+            # the primary combined_loss-selected one, without disturbing the primary's
+            # resume/test.py behavior.
+            if save_dual_checkpoints and pareto_is_best:
+                save_checkpoint(
+                    model, optimizer, epoch, val_fixed_loss, secondary_checkpoint_path,
+                    uncertainty_module=uncertainty_module,
+                    early_stopper=early_stopper,
+                    head_lr_manager=head_lr_manager,
+                    global_plateau_manager=global_plateau_manager,
+                    best_val_loss=val_fixed_loss,
+                    checkpoint_selector=checkpoint_selector,
+                )
+                logger.info(
+                    f"checkpoint_best_per_head.pth updated at epoch {epoch} "
+                    f"(val_abs_rot_x={val_avg['abs_rot_x']:.6f} deg, val_abs_trans={val_avg['abs_trans']:.6f} m)"
                 )
 
             should_stop = early_stopper.update(val_avg["abs_rot_x"], val_avg["abs_trans"])
@@ -1025,16 +1236,38 @@ def train_loop(
                 )
                 break
 
-        # Training genuinely concluded (early stopping above, or the for loop ran out
-        # of epochs) -- there's nothing left to resume, so drop the optimizer state
-        # (by far the largest part of a resumable checkpoint) to shrink
-        # checkpoint_best.pth back down to just what inference needs. Deliberately
-        # inside `try`, not `finally`: an exception here means training was
-        # interrupted (crash/kill), not concluded, and that checkpoint should stay
-        # fully resumable via --resume_from.
         if checkpoint_path is not None:
             strip_optimizer_state(checkpoint_path)
             logger.info("Training complete -- stripped optimizer state from checkpoint_best.pth")
+        if secondary_checkpoint_path is not None and os.path.exists(secondary_checkpoint_path):
+            strip_optimizer_state(secondary_checkpoint_path)
+            logger.info("Training complete -- stripped optimizer state from checkpoint_best_per_head.pth")
+
+        if diag_best is not None and checkpoint_path is not None:
+            ckpt_epoch, ckpt_rot, ckpt_trans = diag_best["checkpoint"]
+            rot_epoch, rot_val = diag_best["rot"]
+            trans_epoch, trans_val = diag_best["trans"]
+            diagnostic = {
+                "checkpoint_selection_metric": "val_fixed_loss (val_loss_q + val_loss_y + val_loss_z)",
+                "checkpoint_epoch": ckpt_epoch,
+                "checkpoint_val_abs_rot_x": ckpt_rot,
+                "checkpoint_val_abs_trans": ckpt_trans,
+                "best_val_abs_rot_x_epoch": rot_epoch,
+                "best_val_abs_rot_x": rot_val,
+                "best_val_abs_trans_epoch": trans_epoch,
+                "best_val_abs_trans": trans_val,
+                "rot_x_gap_epochs": None if (ckpt_epoch is None or rot_epoch is None) else ckpt_epoch - rot_epoch,
+                "trans_gap_epochs": None if (ckpt_epoch is None or trans_epoch is None) else ckpt_epoch - trans_epoch,
+            }
+            diag_path = os.path.join(os.path.dirname(checkpoint_path), "checkpoint_diagnostic.json")
+            with open(diag_path, "w") as f:
+                json.dump(diagnostic, f, indent=2)
+            logger.info(
+                f"checkpoint_diagnostic.json: checkpoint kept from epoch {ckpt_epoch} "
+                f"(rot_x={ckpt_rot:.4f}, trans={ckpt_trans:.5f}); best raw val_abs_rot_x was "
+                f"epoch {rot_epoch} ({rot_val:.4f}), best raw val_abs_trans was epoch {trans_epoch} "
+                f"({trans_val:.5f})"
+            )
     finally:
         close_run_writers(csv_file, tb_writer)
 
@@ -1194,10 +1427,21 @@ def main(
     head_lr_cfg = cfg.get("training", {}).get("head_lr_decay", {})
     lr_schedule_cfg = cfg.get("training", {}).get("lr_schedule", {})
     early_stopping_cfg = cfg.get("training", {}).get("early_stopping", {})
+    checkpoint_selection_cfg = cfg.get("training", {}).get("checkpoint_selection", {})
     task_weighting_cfg = cfg.get("training", {}).get("task_weighting", cfg.get("training", {}).get("uncertainty_weighting", {}))
     grad_clip_cfg = cfg.get("training", {}).get("grad_clip", {})
     grad_clip_max_norm = float(grad_clip_cfg["max_norm"]) if grad_clip_cfg.get("enabled", False) else None
-    
+    # per_parameter_group: clip each optimizer param group's own norm to max_norm independently,
+    # instead of one norm over the whole model (see _train_single_epoch's clipping site for why).
+    # Default False -- identical to every existing run's behavior.
+    grad_clip_per_parameter_group = bool(grad_clip_cfg.get("per_parameter_group", False))
+    # Diagnostic-only (see train_loop's diag_best comment) -- writes
+    # <run_dir>/checkpoint_diagnostic.json comparing the epoch checkpoint_best.pth was
+    # actually saved from (by val_fixed_loss) against the epoch that would have been
+    # picked by the raw val_abs_rot_x/val_abs_trans metrics alone. Does NOT change which
+    # checkpoint is kept. Default False -- identical to every existing run's behavior.
+    checkpoint_diagnostic = bool(cfg.get("training", {}).get("checkpoint_diagnostic", False))
+
     resolved_head_lr_cfg = {
         "enabled": bool(head_lr_cfg.get("enabled", True)),
         "patience": int(head_lr_cfg.get("patience", 3)),
@@ -1230,7 +1474,13 @@ def main(
         "lr_schedule": lr_schedule_cfg if lr_schedule_cfg else {"enabled": False},
         "task_weighting": task_weighting_cfg if uncertainty_module is not None else {"enabled": False},
         "early_stopping": early_stopping_cfg if early_stopping_cfg else {"enabled": False},
-        "grad_clip": {"enabled": grad_clip_max_norm is not None, "max_norm": grad_clip_max_norm},
+        "checkpoint_selection": checkpoint_selection_cfg if checkpoint_selection_cfg else {"type": "combined_loss"},
+        "grad_clip": {
+            "enabled": grad_clip_max_norm is not None,
+            "max_norm": grad_clip_max_norm,
+            "per_parameter_group": grad_clip_per_parameter_group,
+        },
+        "checkpoint_diagnostic": checkpoint_diagnostic,
     }
     
     # Save manifest
@@ -1256,12 +1506,15 @@ def main(
         head_lr_decay_cfg=resolved_head_lr_cfg,
         lr_schedule_cfg=lr_schedule_cfg,
         early_stopping_cfg=early_stopping_cfg,
+        checkpoint_selection_cfg=checkpoint_selection_cfg,
         rotation_loss_type=rotation_loss_type,
         normalize_translation=cfg.get("data", {}).get("normalize_translation", True),
         trans_norm_stats=trans_norm_stats,
         grad_clip_max_norm=grad_clip_max_norm,
+        grad_clip_per_parameter_group=grad_clip_per_parameter_group,
         resume_state=resume_checkpoint,
         rot_scaling_factor=cfg.get("model", {}).get("rot_scaling_factor"),
+        checkpoint_diagnostic=checkpoint_diagnostic,
     )
 
 

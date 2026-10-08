@@ -140,7 +140,8 @@ def setup_logger(log_dir="logs"):
 
 def save_checkpoint(model, optimizer, epoch, loss, checkpoint_path="checkpoints", interval=1,
                      uncertainty_module=None, early_stopper=None, head_lr_manager=None,
-                     global_plateau_manager=None, best_val_loss=None, save_rng_state=True):
+                     global_plateau_manager=None, best_val_loss=None, save_rng_state=True,
+                     checkpoint_selector=None):
     """Save checkpoint_best.pth.
 
     Beyond the model weights, this also captures everything needed to resume
@@ -173,6 +174,8 @@ def save_checkpoint(model, optimizer, epoch, loss, checkpoint_path="checkpoints"
             payload['uncertainty_state_dict'] = uncertainty_module.state_dict()
         if early_stopper is not None and hasattr(early_stopper, "state_dict"):
             payload['early_stopper_state'] = early_stopper.state_dict()
+        if checkpoint_selector is not None and hasattr(checkpoint_selector, "state_dict"):
+            payload['checkpoint_selector_state'] = checkpoint_selector.state_dict()
         if head_lr_manager is not None and hasattr(head_lr_manager, "state_dict"):
             payload['head_lr_manager_state'] = head_lr_manager.state_dict()
         if global_plateau_manager is not None and hasattr(global_plateau_manager, "state_dict"):

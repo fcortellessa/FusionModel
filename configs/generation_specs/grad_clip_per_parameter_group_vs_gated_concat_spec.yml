@@ -1,0 +1,50 @@
+# Tests whether clipping each optimizer param group's gradient norm to max_norm INDEPENDENTLY
+# (training.grad_clip.per_parameter_group, see scripts/train.py's _train_single_epoch clipping
+# site) changes accuracy, instead of one norm over every parameter combined (the current
+# behavior everywhere else). See pre_head_layernorm_vs_gated_concat_spec.yml for the shared
+# motivation: the head's first Linear layer alone holds ~90% of the model's parameters, so a
+# single global clip lets that one layer's gradient dominate the total norm and throttle every
+# other group's (backbone/gate/other head) update by the same factor. Per-group clipping
+# addresses the same mechanism from the optimizer side rather than the feature-scale side
+# (pre_head_layernorm); the two are independent, not expected to be redundant, hence separate
+# pilots rather than one combined run.
+#
+# Side effect worth tracking: this also newly clips the "uncertainty" param group (the
+# log_var_rot/log_var_trans scalars), which the current global clip never touches since they
+# live on a separate module not included in model.parameters(). Given the uncertainty-weight
+# blowup seen throughout this ablation (rot_weight reaching 400+ by epoch 50-80), this could
+# matter on its own, independent of the head-gradient-dominance question above.
+#
+# Compared against gated_concat (plain, global clip) -- the existing final_ablation runs for
+# these seeds -- not regenerated here.
+#
+# Same template, fixed_overrides, gated_concat head sizes and split-seed grid (36-38, 3 seeds)
+# as pre_head_layernorm_vs_gated_concat_spec.yml.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+  training.grad_clip.per_parameter_group: true
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: gated_concat_grad_clip_per_group
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

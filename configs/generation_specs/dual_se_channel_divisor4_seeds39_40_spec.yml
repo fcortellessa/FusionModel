@@ -1,0 +1,39 @@
+# Extends dual_se_channel_divisor4_spec.yml (seeds 36-38) to the remaining 2 seeds (39, 40) of
+# the standard final_ablation 5-seed set, so dual_se_channel_gated_concat +divisor4 has the same
+# seed coverage as every other candidate in the main comparison.
+#
+# Result on seeds 36-38: rot_x tied with the non-dual se_channel +divisor4 (0.478 vs 0.476 deg),
+# trans_y a small, inconclusive edge to dual (0.438 vs 0.448mm), trans_z a consistent win for
+# dual on all 3 seeds (0.254 vs 0.294mm, ~14% lower, gap bigger than its own seed spread) -- see
+# dual_se_channel_divisor4_spec.yml for the full motivation.
+#
+# Same template, fixed_overrides (incl. the corrected early-stopping min_delta=0.03/
+# smoothing_alpha=0.2) and variant as the seeds 36-38 spec.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: 4
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.03
+  training.early_stopping.smoothing_alpha: 0.2
+
+grid:
+  data.split_seed: [39, 40]
+
+variants:
+  - name: dual_se_channel_gated_concat_divisor4
+    overrides:
+      model.fusion: se_channel_gated_concat
+      model.dual_fusion: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

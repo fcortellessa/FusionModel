@@ -1,0 +1,47 @@
+# Same as pre_head_layernorm_vs_gated_concat_spec.yml (see that file for the full motivation),
+# but applied to se_channel_gated_concat -- the current best-performing candidate in this
+# ablation (0.608 +- 0.069 deg mean rot_x over 5 seeds, vs gated_concat's 0.638 +- 0.079 and
+# channelwise_gated_concat_local's 0.757 +- 0.090) -- rather than gated_concat.
+#
+# Run in addition to, not instead of, the gated_concat version: that one isolates the
+# LayerNorm effect on its own (repo convention: vary one factor per grid); this one tests
+# whether it also helps -- or interacts differently with -- the architecture actually being
+# used. se_channel_gated_concat is also where the underlying feature-shrinkage mechanism is
+# most directly implicated: se_channel_gated_concat_renorm proved the shrinkage isn't
+# eliminated by constraining the gate, it just reroutes through the (trainable) backbone
+# instead, and got worse doing so.
+#
+# Compared against se_channel_gated_concat (plain) -- runs/se_channel_gated_concat_vs_gated_concat/,
+# same seeds -- not regenerated here.
+#
+# Same template, fixed_overrides, gated_concat head sizes (se_channel_gated_concat uses these,
+# not the larger channelwise head -- see se_channel_gated_concat_vs_gated_concat_spec.yml) and
+# split-seed grid (36-38) as the gated_concat version of this pilot.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: se_channel_gated_concat_pre_head_layernorm
+    overrides:
+      model.fusion: se_channel_gated_concat
+      model.dual_fusion: false
+      model.pre_head_layernorm: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

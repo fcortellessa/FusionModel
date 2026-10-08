@@ -3,6 +3,25 @@
 Each module learns gates from all input streams but retains every stream in the
 output.  This makes the modules suitable for tasks, such as rotation
 estimation, where a weighted sum may discard useful modality-specific detail.
+
+Gate granularity / naming.  Each stream's feature vector is the flattened
+[P3 | P4 | P5] block of (channels x grid) feature maps, laid out channel-major within
+each scale (P3: 32 ch x 20x20, P4: 64 ch x 10x10, P5: 128 ch x 5x5 => dim 22400).
+The names below refer to how many gates multiply that vector:
+
+    gated_concat / residual_gated_concat   1 gate per stream
+    scale_gated_concat                     1 gate per stream and pyramid scale (P3/P4/P5)
+    se_channel_gated_concat[_renorm]       1 gate per (scale, channel), shared over the grid
+                                           cells of that channel (224 per stream); a
+                                           Squeeze-and-Excitation style channel gate
+    channelwise_*                          LEGACY NAME: one gate per *element* of the
+                                           flattened vector (22400 per stream), i.e. per
+                                           (scale, channel, grid cell). "channel" there means
+                                           "entry of the flattened 1D vector", not a feature
+                                           channel. The keys are kept unchanged so existing
+                                           configs, checkpoints and results stay valid; read
+                                           them as "element-wise".  Use se_channel_* for true
+                                           channel-wise gating.
 """
 
 import math
@@ -449,3 +468,149 @@ class ChannelWiseResidualGatedConcatHybridFusion(_PerChannelGatedConcatFusion):
         ]
         out = torch.cat(weighted_features, dim=1)
         return out, weights
+
+
+class _BaseSEChannelGatedConcat(BaseFusion):
+    """Squeeze-and-Excitation style channel gate, concatenation-preserving.
+
+    One gate per (scale, channel) and stream -- 224 per stream for the default backbone
+    (P3: 32, P4: 64, P5: 128 channels) -- shared over every grid cell of that channel,
+    instead of one gate per flattened element (see the "Gate granularity / naming" note
+    in this module's docstring).
+
+      squeeze   for every stream and channel, pool over the channel's grid cells: mean and
+                mean-|x| (the features are signed conv outputs, so a plain mean can cancel
+                and does not measure how strongly the detector fires) -> descriptor of
+                num_streams * 2 * 224 numbers describing *both* modalities.
+      excite    LayerNorm -> Linear -> ReLU -> Dropout -> Linear -> sigmoid, giving one gate
+                per stream and channel. The gate input is layer-normalised because the
+                feature magnitude changes several-fold during training (RMS ~0.15 at init vs
+                ~0.04 after), which would otherwise drift the MLP's input scale.
+      scale     every grid cell of channel c is multiplied by that channel's gate.
+
+    Unlike the per-element `channelwise_*_local` gates (one tiny function of only that
+    element's own two values, shared weights, no context), each output here has its own
+    parameters (so it knows which channel it gates) and sees a summary of the whole sample
+    (so it can judge sample-level reliability, e.g. "no tactile contact").
+
+    Needs `scale_dims` and `scale_channels` ({"p3","p4","p5"} dicts, forwarded by
+    build_fusion from PoseEstimationNet.stream_scale_dims / stream_scale_channels).
+
+    The returned gate weights are expanded to per-element shape (B, num_streams, dim) so the
+    existing gate diagnostics (train.py, per-scale breakdown, metrics.csv) work unchanged and
+    are directly comparable with the channelwise_* runs.
+    """
+
+    SCALE_ORDER = ("p3", "p4", "p5")
+    GATE_HIDDEN_DIM = 64
+
+    def __init__(self, dim: int, num_streams: int, scale_dims: dict = None, scale_channels: dict = None,
+                 gate_init_prob: float = 0.5):
+        if not scale_dims or not scale_channels:
+            raise ValueError(
+                f"{type(self).__name__} requires scale_dims and scale_channels (the P3/P4/P5 dicts "
+                "from PoseEstimationNet.stream_scale_dims / stream_scale_channels) -- it only makes "
+                "sense for the 1D per-stream-vector pipeline, not standalone."
+            )
+        for name, d in (("scale_dims", scale_dims), ("scale_channels", scale_channels)):
+            missing = [s for s in self.SCALE_ORDER if s not in d]
+            if missing:
+                raise ValueError(f"{name} is missing required key(s): {missing}")
+        if sum(scale_dims[s] for s in self.SCALE_ORDER) != dim:
+            raise ValueError(
+                f"scale_dims {scale_dims} does not sum to dim={dim}; {type(self).__name__} needs the "
+                "exact per-scale split of the flattened feature vector (model.pre_head_grid_size "
+                "changes it and is not supported here)."
+            )
+        for s in self.SCALE_ORDER:
+            if scale_dims[s] % scale_channels[s] != 0:
+                raise ValueError(f"scale_dims[{s!r}]={scale_dims[s]} is not a multiple of "
+                                 f"scale_channels[{s!r}]={scale_channels[s]}")
+        super().__init__(dim, num_streams)
+        self.gate_init_prob = gate_init_prob
+
+        # (start, end, channels, cells-per-channel) of each scale's block within the flat vector,
+        # which is channel-major inside a block (p.flatten(1) of a (B, C, H, W) map).
+        self._layout = []
+        offset = 0
+        cells_per_channel = []
+        for s in self.SCALE_ORDER:
+            channels, size = int(scale_channels[s]), int(scale_dims[s])
+            cells = size // channels
+            self._layout.append((offset, offset + size, channels, cells))
+            cells_per_channel += [cells] * channels
+            offset += size
+        self.num_channels = sum(c for _, _, c, _ in self._layout)  # 224
+
+        cells_t = torch.tensor(cells_per_channel, dtype=torch.long)
+        # Non-persistent: derived from the layout, so state_dicts stay free of extra keys.
+        self.register_buffer("_cells_per_channel", cells_t.float(), persistent=False)
+        self.register_buffer("_expand_idx", torch.repeat_interleave(torch.arange(self.num_channels), cells_t),
+                             persistent=False)
+
+        desc_dim = num_streams * 2 * self.num_channels
+        self.gate = nn.Sequential(
+            nn.LayerNorm(desc_dim),
+            nn.Linear(desc_dim, self.GATE_HIDDEN_DIM),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(self.GATE_HIDDEN_DIM, num_streams * self.num_channels),
+        )
+        # Near-neutral gates at init while retaining gradients, as in _BaseGatedConcatFusion.
+        nn.init.uniform_(self.gate[4].weight, -1e-3, 1e-3)
+        nn.init.constant_(self.gate[4].bias, _sigmoid_init_bias(gate_init_prob))
+
+    def _descriptor(self, features_list):
+        """Squeeze: (B, num_streams * 2 * num_channels) pooled per-channel statistics."""
+        self._validate(features_list)
+        parts = []
+        for feature in features_list:
+            means, abs_means = [], []
+            for start, end, channels, cells in self._layout:
+                block = feature[:, start:end].reshape(feature.shape[0], channels, cells)
+                means.append(block.mean(dim=-1))
+                abs_means.append(block.abs().mean(dim=-1))
+            parts += [torch.cat(means, dim=1), torch.cat(abs_means, dim=1)]
+        return torch.cat(parts, dim=1)
+
+    def _channel_gates(self, features_list):
+        logits = self.gate(self._descriptor(features_list)).reshape(-1, self.num_streams, self.num_channels)
+        return torch.sigmoid(logits)  # (B, num_streams, num_channels)
+
+    def _finalize(self, gates):
+        return gates
+
+    def forward(self, features_list):
+        gates = self._finalize(self._channel_gates(features_list))
+        weights = gates.index_select(2, self._expand_idx)  # (B, num_streams, dim), constant within a channel
+        weighted_features = [
+            weights[:, stream_idx, :] * feature
+            for stream_idx, feature in enumerate(features_list)
+        ]
+        out = torch.cat(weighted_features, dim=1)
+        return out, weights
+
+
+@register_fusion("se_channel_gated_concat")
+class SEChannelGatedConcatFusion(_BaseSEChannelGatedConcat):
+    """SE-style channel gate with a plain sigmoid (0, 1), init 0.5 -- the same gate range as
+    gated_concat, so it isolates the effect of the gate *granularity* (224 vs 1 gate/stream)."""
+
+
+@register_fusion("se_channel_gated_concat_renorm")
+class SEChannelGatedConcatRenormFusion(_BaseSEChannelGatedConcat):
+    """se_channel_gated_concat with the gates rescaled per sample so that their element-weighted
+    mean over both streams is exactly 1.
+
+    The gate can then only *redistribute* trust between streams/channels, not change the overall
+    feature scale. This targets the failure seen in the final ablation, where the gates were used as
+    a global scale knob (the network shrinks the fused features ~3-5x during training; the plain
+    gate settles at ~0.23 and a residual gate is pinned at its lower bound and collapses to
+    concat). Gate values are ~1 at init (identity) and unbounded above only through the
+    normalisation; the overall scale is left to the backbone/heads.
+    """
+
+    def _finalize(self, gates):
+        n = self._cells_per_channel  # (num_channels,) grid cells each channel gate covers
+        mean = (gates * n).sum(dim=(1, 2)) / (self.num_streams * n.sum())  # (B,)
+        return gates / mean.clamp_min(1e-6).view(-1, 1, 1)

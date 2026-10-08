@@ -228,6 +228,28 @@ def build_epoch_metrics_row(
         "val_translation_fusion_gate_fraction_lt_0_1": metadata.get("val_translation_fusion_gate_fraction_lt_0_1", ""),
         "val_translation_fusion_gate_fraction_gt_0_9": metadata.get("val_translation_fusion_gate_fraction_gt_0_9", ""),
         "val_translation_fusion_gate_fraction_mid_0_4_0_6": metadata.get("val_translation_fusion_gate_fraction_mid_0_4_0_6", ""),
+        # Split of the pooled std above into across-sample vs. across-channel variation
+        # (see scripts/train.py::_compute_between_gate_stds)
+        "train_fusion_gate_between_sample_std": metadata.get("train_fusion_gate_between_sample_std", ""),
+        "train_fusion_gate_between_channel_std": metadata.get("train_fusion_gate_between_channel_std", ""),
+        "val_fusion_gate_between_sample_std": metadata.get("val_fusion_gate_between_sample_std", ""),
+        "val_fusion_gate_between_channel_std": metadata.get("val_fusion_gate_between_channel_std", ""),
+        "train_rotation_fusion_gate_between_sample_std": metadata.get("train_rotation_fusion_gate_between_sample_std", ""),
+        "train_rotation_fusion_gate_between_channel_std": metadata.get("train_rotation_fusion_gate_between_channel_std", ""),
+        "val_rotation_fusion_gate_between_sample_std": metadata.get("val_rotation_fusion_gate_between_sample_std", ""),
+        "val_rotation_fusion_gate_between_channel_std": metadata.get("val_rotation_fusion_gate_between_channel_std", ""),
+        "train_translation_fusion_gate_between_sample_std": metadata.get("train_translation_fusion_gate_between_sample_std", ""),
+        "train_translation_fusion_gate_between_channel_std": metadata.get("train_translation_fusion_gate_between_channel_std", ""),
+        "val_translation_fusion_gate_between_sample_std": metadata.get("val_translation_fusion_gate_between_sample_std", ""),
+        "val_translation_fusion_gate_between_channel_std": metadata.get("val_translation_fusion_gate_between_channel_std", ""),
+        # Fusion module's own gradient/parameter norm -- train-only (see
+        # scripts/train.py::_accumulate_fusion_grad_norm)
+        "train_fusion_grad_norm": metadata.get("train_fusion_grad_norm", ""),
+        "train_fusion_param_norm": metadata.get("train_fusion_param_norm", ""),
+        "train_rotation_fusion_grad_norm": metadata.get("train_rotation_fusion_grad_norm", ""),
+        "train_rotation_fusion_param_norm": metadata.get("train_rotation_fusion_param_norm", ""),
+        "train_translation_fusion_grad_norm": metadata.get("train_translation_fusion_grad_norm", ""),
+        "train_translation_fusion_param_norm": metadata.get("train_translation_fusion_param_norm", ""),
         # GAP 2: Fusion gate percentiles (for distribution analysis)
         "train_fusion_gate_p25": metadata.get("train_fusion_gate_p25", ""),
         "train_fusion_gate_p50": metadata.get("train_fusion_gate_p50", ""),
@@ -680,6 +702,75 @@ class PerHeadEarlyStoppingManager:
         return all(self.bad_epochs[head] >= self.patience for head in ("rot", "trans"))
 
 
+class PerHeadCheckpointSelector:
+    """Decides whether the current epoch becomes the new checkpoint_best.pth,
+    comparing val_abs_rot_x (degrees) and val_abs_trans (meters) against the
+    values recorded at the *last-saved* checkpoint, instead of the default
+    val_fixed_loss (val_loss_q*rot_scaling_factor + val_loss_y + val_loss_z --
+    see train_loop's val_fixed_loss comment). Opt-in via
+    training.checkpoint_selection.type == "per_head_pareto"; default
+    "combined_loss" reproduces the exact prior behavior unchanged.
+
+    Pareto-with-slack, not a strict "both improve" AND: updates when neither
+    head regresses by more than min_delta (relative) from the last-saved
+    checkpoint, and at least one head improves by more than min_delta. A
+    strict AND would stall on the very common case where rotation and
+    translation trade off against each other past the early epochs (one head
+    improves, the other sits flat or wobbles slightly) -- Pareto-with-slack
+    still accepts that as a genuine improvement, as long as it isn't paid for
+    by a real regression on the other head.
+
+    Compares EMA-smoothed metrics on both sides of the comparison (the
+    incoming epoch's value and the stored reference), same
+    smoothing_alpha convention as PerHeadEarlyStoppingManager, so a single
+    noisy epoch can't anchor the reference or trigger a spurious update.
+    """
+
+    def __init__(self, checkpoint_selection_cfg):
+        checkpoint_selection_cfg = checkpoint_selection_cfg or {}
+        self.min_delta = float(checkpoint_selection_cfg.get("min_delta", 0.02))
+        self.smoothing_alpha = float(checkpoint_selection_cfg.get("smoothing_alpha", 1.0))
+        if not 0.0 < self.smoothing_alpha <= 1.0:
+            raise ValueError(f"checkpoint_selection.smoothing_alpha must be in (0, 1], got {self.smoothing_alpha}")
+        self.best = {"rot": float("inf"), "trans": float("inf")}
+        self.ema = {"rot": None, "trans": None}
+
+    def state_dict(self):
+        return {"best": dict(self.best), "ema": dict(self.ema)}
+
+    def load_state_dict(self, state):
+        if not state:
+            return
+        self.best.update(state.get("best", {}))
+        self.ema.update(state.get("ema", {}))
+
+    def update(self, val_abs_rot_x, val_abs_trans):
+        """Call once per epoch with val_avg['abs_rot_x'] and val_avg['abs_trans'].
+        Returns True if this epoch should become the new best checkpoint."""
+        current = {"rot": val_abs_rot_x, "trans": val_abs_trans}
+        for head in ("rot", "trans"):
+            if self.ema[head] is None:
+                self.ema[head] = current[head]
+            else:
+                self.ema[head] = self.smoothing_alpha * current[head] + (1.0 - self.smoothing_alpha) * self.ema[head]
+        smoothed = dict(self.ema)
+
+        if self.best["rot"] == float("inf"):
+            is_new_best = True
+        else:
+            regressed = any(
+                smoothed[head] > self.best[head] * (1.0 + self.min_delta) for head in ("rot", "trans")
+            )
+            improved = any(
+                smoothed[head] < self.best[head] * (1.0 - self.min_delta) for head in ("rot", "trans")
+            )
+            is_new_best = improved and not regressed
+
+        if is_new_best:
+            self.best = dict(smoothed)
+        return is_new_best
+
+
 class EpochMetricsAggregator:
     """Aggregates and provides easy access to epoch metrics."""
     
@@ -800,6 +891,9 @@ class TrainingConfigBuilder:
             gate_init_prob=self.cfg["model"].get("gate_init_prob", None),
             backbone_trainable=bool(self.cfg["model"].get("backbone_trainable", False)),
             pre_head_grid_size=self.cfg["model"].get("pre_head_grid_size", None),
+            pre_head_layernorm=bool(self.cfg["model"].get("pre_head_layernorm", False)),
+            head_bottleneck_rank=self.cfg["model"].get("head_bottleneck_rank", None),
+            pre_head_channel_divisor=self.cfg["model"].get("pre_head_channel_divisor", None),
         )
         return model.to(self.device)
 

@@ -891,4 +891,343 @@
    </root>
   </mxGraphModel>
  </diagram>
+ <diagram id="page-10_gated_cross_attention" name="10_gated_cross_attention">
+  <mxGraphModel dx="1000" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="1241" math="0" shadow="0">
+   <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="n2" value="&lt;b&gt;10. Gated Cross-Attention&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=22;" vertex="1" parent="1">
+     <mxGeometry x="40" y="14" width="820" height="36" as="geometry" />
+    </mxCell>
+    <mxCell id="n3" value="RGB Features&lt;br&gt;22,400-dim" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="70" y="74" width="340" height="80" as="geometry" />
+    </mxCell>
+    <mxCell id="n4" value="Tactile Features&lt;br&gt;22,400-dim" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="490" y="74" width="340" height="80" as="geometry" />
+    </mxCell>
+    <mxCell id="n5" value="Visual: Tokenize + Project (Q)&lt;br&gt;reshape 22,400 → 100×224&lt;br&gt;Linear 224→256 → LayerNorm&lt;br&gt;vis_tokens (B,100,256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="50" y="205" width="380" height="120" as="geometry" />
+    </mxCell>
+    <mxCell id="n6" value="Tactile: Tokenize + Project (K,V)&lt;br&gt;reshape 22,400 → 100×224&lt;br&gt;Linear 224→256 → LayerNorm&lt;br&gt;tac_tokens (B,100,256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="470" y="205" width="380" height="120" as="geometry" />
+    </mxCell>
+    <mxCell id="e7" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n3" target="n5">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e8" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n4" target="n6">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="n9" value="Cross-Attention (MultiheadAttention)&lt;br&gt;Q = vis_tokens, K = V = tac_tokens&lt;br&gt;embed_dim 256, heads 4, dropout 0.1 → LayerNorm&lt;br&gt;attn_out T_attn (B,100,256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#ede7f6;strokeColor=#5e35b1;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="140" y="365" width="620" height="110" as="geometry" />
+    </mxCell>
+    <mxCell id="e10" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.9;exitY=1;exitPerimeter=0;entryX=0.1;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n5" target="n9">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="392" y="345" />
+       <mxPoint x="202" y="345" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e11" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.1;exitY=1;exitPerimeter=0;entryX=0.9;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n6" target="n9">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="508" y="345" />
+       <mxPoint x="698" y="345" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n12" value="Gate&lt;br&gt;Linear 512→256 (Sigmoid) on [vis_tokens ‖ attn_out]&lt;br&gt;→ g ∈ (0,1)^(100×256), per-token per-channel" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#ffe0b2;strokeColor=#ff9800;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="150" y="515" width="600" height="90" as="geometry" />
+    </mxCell>
+    <mxCell id="e13" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n9" target="n12">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e14" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0;exitY=0.85;exitPerimeter=0;entryX=0;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n5" target="n12">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="20" y="560" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n15" value="Fuse (per token, per channel)&lt;br&gt;T_fused = g ⊙ attn_out + (1 − g) ⊙ vis_tokens&lt;br&gt;(B,100,256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="200" y="645" width="500" height="90" as="geometry" />
+    </mxCell>
+    <mxCell id="e16" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n12" target="n15">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e17" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=1;exitY=0.7;exitPerimeter=0;entryX=1;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n9" target="n15">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="880" y="690" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e18" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0;exitY=0.95;exitPerimeter=0;entryX=0;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n5" target="n15">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="20" y="690" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n19" value="Global Average Pool (over 100 tokens)&lt;br&gt;v_gca (B, 256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="240" y="775" width="420" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="e20" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n15" target="n19">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="n21" value="Output Projection&lt;br&gt;Linear 256→22,400&lt;br&gt;fused (B, 22,400)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="240" y="885" width="420" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="e22" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n19" target="n21">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="n23" value="Rotation Head (MLP)&lt;br&gt;22,400 → 256 → 1024 → 4&lt;br&gt;&lt;font style='font-size:11px'&gt;GELU · Dropout 0.1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#0066cc;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="40" y="995" width="400" height="96" as="geometry" />
+    </mxCell>
+    <mxCell id="n24" value="Translation Head (MLP)&lt;br&gt;22,400 → 1024 → 1024 → 16 → 2&lt;br&gt;&lt;font style='font-size:11px'&gt;GELU · Dropout 0.1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#0066cc;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="460" y="995" width="400" height="96" as="geometry" />
+    </mxCell>
+    <mxCell id="e25" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n21" target="n23">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="450" y="965" />
+       <mxPoint x="240" y="965" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e26" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n21" target="n24">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="450" y="965" />
+       <mxPoint x="660" y="965" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n27" value="Quaternion &lt;i&gt;&lt;b&gt;q&lt;/b&gt;&lt;/i&gt;&lt;br&gt;&lt;font style='font-size:11px'&gt;L2-normalised, ℝ⁴&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="90" y="1147" width="300" height="64" as="geometry" />
+    </mxCell>
+    <mxCell id="n28" value="Translation Vector [&lt;i&gt;y&lt;/i&gt;, &lt;i&gt;z&lt;/i&gt;]&lt;br&gt;&lt;font style='font-size:11px'&gt;x fixed to 0&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="510" y="1147" width="300" height="64" as="geometry" />
+    </mxCell>
+    <mxCell id="e29" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n23" target="n27">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e30" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n24" target="n28">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+   </root>
+  </mxGraphModel>
+ </diagram>
+ <diagram id="page-11_se_gated_cross_attention" name="11_se_gated_cross_attention">
+  <mxGraphModel dx="1000" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="1731" math="0" shadow="0">
+   <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="n2" value="&lt;b&gt;11. SE-Gated Cross-Attention&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=22;" vertex="1" parent="1">
+     <mxGeometry x="40" y="14" width="820" height="36" as="geometry" />
+    </mxCell>
+    <mxCell id="n3" value="RGB Features&lt;br&gt;22,400-dim" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="70" y="74" width="340" height="80" as="geometry" />
+    </mxCell>
+    <mxCell id="n4" value="Tactile Features&lt;br&gt;22,400-dim" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="490" y="74" width="340" height="80" as="geometry" />
+    </mxCell>
+    <mxCell id="n5" value="Visual: Tokenize + Project&lt;br&gt;reshape 22,400 → 100×224&lt;br&gt;Linear 224→256 → LayerNorm" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="60" y="205" width="360" height="90" as="geometry" />
+    </mxCell>
+    <mxCell id="n6" value="Tactile: Tokenize + Project&lt;br&gt;reshape 22,400 → 100×224&lt;br&gt;Linear 224→256 → LayerNorm" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="480" y="205" width="360" height="90" as="geometry" />
+    </mxCell>
+    <mxCell id="e7" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n3" target="n5">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e8" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n4" target="n6">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="n9" value="Scale-Aware Positional Encoding&lt;br&gt;(independent of RGB/Tactile -- built from fixed per-token coordinates)&lt;br&gt;2D Fourier (x,y) per token + scale Embedding(3) for P3/P4/P5&lt;br&gt;→ pos_emb (B,100,256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e0f2f1;strokeColor=#00695c;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="220" y="325" width="460" height="90" as="geometry" />
+    </mxCell>
+    <mxCell id="n10" value="+ pos_emb → LayerNorm&lt;br&gt;vis_tokens (B,100,256) [Q]" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="70" y="445" width="340" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="n11" value="+ pos_emb → LayerNorm&lt;br&gt;tac_tokens (B,100,256) [K,V]" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#000000;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="490" y="445" width="340" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="e12" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n5" target="n10">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e13" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n6" target="n11">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e14" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.2;exitY=1;exitPerimeter=0;entryX=0.8;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n9" target="n10">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="312" y="430" />
+       <mxPoint x="342" y="430" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e15" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.8;exitY=1;exitPerimeter=0;entryX=0.2;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n9" target="n11">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="588" y="430" />
+       <mxPoint x="558" y="430" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n16" value="Cross-Attention (MultiheadAttention)&lt;br&gt;Q = vis_tokens, K = V = tac_tokens&lt;br&gt;embed_dim 256, heads 4, dropout 0.1 → LayerNorm&lt;br&gt;attn_out T_attn (B,100,256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#ede7f6;strokeColor=#5e35b1;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="140" y="555" width="620" height="110" as="geometry" />
+    </mxCell>
+    <mxCell id="e17" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.9;exitY=1;exitPerimeter=0;entryX=0.1;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n10" target="n16">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="376" y="535" />
+       <mxPoint x="202" y="535" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e18" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.1;exitY=1;exitPerimeter=0;entryX=0.9;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n11" target="n16">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="524" y="535" />
+       <mxPoint x="698" y="535" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n19" value="Spatial Gate (per token)&lt;br&gt;Linear 512→256 (Sigmoid)&lt;br&gt;on [vis_tokens ‖ attn_out]&lt;br&gt;→ g_spatial (B,100,256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#ffe0b2;strokeColor=#ff9800;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="70" y="705" width="340" height="110" as="geometry" />
+    </mxCell>
+    <mxCell id="e20" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.15;exitY=1;exitPerimeter=0;entryX=0.9;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n16" target="n19">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="233" y="685" />
+       <mxPoint x="376" y="685" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e21" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0;exitY=0.9;exitPerimeter=0;entryX=0;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n10" target="n19">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="20" y="760" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n22" value="Squeeze (SE descriptor)&lt;br&gt;mean + mean|x| over the 100 tokens, for vis_tokens, tac_tokens, attn_out&lt;br&gt;→ concat → 1,536-dim descriptor" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#fff8e1;strokeColor=#ff9800;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="490" y="705" width="340" height="110" as="geometry" />
+    </mxCell>
+    <mxCell id="e23" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.85;exitY=1;exitPerimeter=0;entryX=0.1;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n16" target="n22">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="667" y="685" />
+       <mxPoint x="524" y="685" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e24" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.9;exitY=1;exitPerimeter=0;entryX=1;entryY=0.3;entryPerimeter=0;" edge="1" parent="1" source="n10" target="n22">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="880" y="535" />
+       <mxPoint x="880" y="738" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e25" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.9;exitY=1;exitPerimeter=0;entryX=0.9;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n11" target="n22">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="n26" value="Excite (SE block)&lt;br&gt;LayerNorm(1536) → Linear 1536→384 → ReLU → Dropout 0.1&lt;br&gt;→ Linear 384→256 → Sigmoid&lt;br&gt;→ se_channel_weights (B,1,256), per-channel, shared over all tokens" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#ffe0b2;strokeColor=#ff9800;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="490" y="855" width="340" height="130" as="geometry" />
+    </mxCell>
+    <mxCell id="e27" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n22" target="n26">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="n28" value="g_hybrid = g_spatial ⊙ se_channel_weights&lt;br&gt;(se weights broadcast over the 100 tokens)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="220" y="1025" width="460" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="e29" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.9;exitY=1;exitPerimeter=0;entryX=0.1;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n19" target="n28">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="376" y="1005" />
+       <mxPoint x="266" y="1005" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e30" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.1;exitY=1;exitPerimeter=0;entryX=0.9;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n26" target="n28">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="524" y="1005" />
+       <mxPoint x="634" y="1005" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n31" value="Fuse (per token, per channel)&lt;br&gt;T_fused = g_hybrid ⊙ attn_out + (1 − g_hybrid) ⊙ vis_tokens&lt;br&gt;(B,100,256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=1.5;" vertex="1" parent="1">
+     <mxGeometry x="200" y="1135" width="500" height="90" as="geometry" />
+    </mxCell>
+    <mxCell id="e32" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n28" target="n31">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e33" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=1;exitY=0.8;exitPerimeter=0;entryX=1;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n16" target="n31">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="880" y="643" />
+       <mxPoint x="880" y="1180" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e34" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0;exitY=0.9;exitPerimeter=0;entryX=0;entryY=0.5;entryPerimeter=0;" edge="1" parent="1" source="n10" target="n31">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="20" y="508" />
+       <mxPoint x="20" y="1180" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n35" value="Global Average Pool (over 100 tokens)&lt;br&gt;v_gca (B, 256)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="240" y="1265" width="420" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="e36" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n31" target="n35">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="n37" value="Output Projection&lt;br&gt;Linear 256→22,400&lt;br&gt;fused (B, 22,400)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="240" y="1375" width="420" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="e38" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n35" target="n37">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="n39" value="Rotation Head (MLP)&lt;br&gt;22,400 → 256 → 1024 → 4&lt;br&gt;&lt;font style='font-size:11px'&gt;GELU · Dropout 0.1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e3f2fd;strokeColor=#0066cc;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="40" y="1485" width="400" height="96" as="geometry" />
+    </mxCell>
+    <mxCell id="n40" value="Translation Head (MLP)&lt;br&gt;22,400 → 1024 → 1024 → 16 → 2&lt;br&gt;&lt;font style='font-size:11px'&gt;GELU · Dropout 0.1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#f3e5f5;strokeColor=#0066cc;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="460" y="1485" width="400" height="96" as="geometry" />
+    </mxCell>
+    <mxCell id="e41" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n37" target="n39">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="450" y="1455" />
+       <mxPoint x="240" y="1455" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="e42" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n37" target="n40">
+     <mxGeometry relative="1" as="geometry">
+      <Array as="points">
+       <mxPoint x="450" y="1455" />
+       <mxPoint x="660" y="1455" />
+      </Array>
+     </mxGeometry>
+    </mxCell>
+    <mxCell id="n43" value="Quaternion &lt;i&gt;&lt;b&gt;q&lt;/b&gt;&lt;/i&gt;&lt;br&gt;&lt;font style='font-size:11px'&gt;L2-normalised, ℝ⁴&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="90" y="1637" width="300" height="64" as="geometry" />
+    </mxCell>
+    <mxCell id="n44" value="Translation Vector [&lt;i&gt;y&lt;/i&gt;, &lt;i&gt;z&lt;/i&gt;]&lt;br&gt;&lt;font style='font-size:11px'&gt;x fixed to 0&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fontSize=14;fillColor=#e8f5e9;strokeColor=#1aa53b;strokeWidth=2;" vertex="1" parent="1">
+     <mxGeometry x="510" y="1637" width="300" height="64" as="geometry" />
+    </mxCell>
+    <mxCell id="e45" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n39" target="n43">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e46" value="" style="rounded=0;html=1;endArrow=open;endSize=10;strokeWidth=1.5;strokeColor=#000000;labelBackgroundColor=#ffffff;fontSize=11;exitX=0.5;exitY=1;exitPerimeter=0;entryX=0.5;entryY=0;entryPerimeter=0;" edge="1" parent="1" source="n40" target="n44">
+     <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+   </root>
+  </mxGraphModel>
+ </diagram>
 </mxfile>

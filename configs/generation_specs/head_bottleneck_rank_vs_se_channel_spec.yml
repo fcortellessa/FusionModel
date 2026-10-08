@@ -1,0 +1,42 @@
+# Tests model.head_bottleneck_rank (base_model/mlp_head.py::MLPHead) on se_channel_gated_concat --
+# the current best-performing candidate in the final_ablation comparison (0.497 +- 0.120 deg mean
+# test rot_x over 5 seeds).
+#
+# Motivation: the head's first Linear layer alone holds ~90% of the whole model's parameters (the
+# 44800-dim fused vector feeds straight into it, no pooling). head_bottleneck_rank factors that one
+# layer into Linear(44800, rank, bias=False) -> Linear(rank, hidden), so every one of the 44800
+# inputs still reaches the layer (no information is structurally discarded, unlike
+# model.pre_head_grid_size's spatial pooling, which was already tried and made accuracy WORSE --
+# see the paired-comparison results). Only the RANK of the linear map is constrained.
+# rank=64 (tested): cuts the model from 63.72M to ~12-17M parameters depending on translation_head_mode.
+#
+# Compared against se_channel_gated_concat (plain, full-rank head) -- runs/final_ablation's existing
+# 5-seed runs -- not regenerated here.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: se_channel_gated_concat_head_bottleneck_rank64
+    overrides:
+      model.fusion: se_channel_gated_concat
+      model.dual_fusion: false
+      model.head_bottleneck_rank: 64
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

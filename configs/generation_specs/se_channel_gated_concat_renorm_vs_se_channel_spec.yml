@@ -1,0 +1,50 @@
+# se_channel_gated_concat_renorm vs se_channel_gated_concat (see
+# se_channel_gated_concat_vs_gated_concat_spec.yml for the original motivation).
+#
+# se_channel_gated_concat's gate mean settled low on every seed (RGB ~0.13-0.18, tactile
+# ~0.06-0.10 -- same "gate used as a global scale knob" pattern seen in every other gate in
+# this project) alongside a between-sample gate std (0.16-0.22) far above gated_concat's
+# (~0.025) and channelwise_gated_concat_local's (~0.001). That spread is the first sign of a
+# gate doing real per-sample work anywhere in this ablation, but it's confounded with the
+# scale-knob effect: some of it could just be the gate mean drifting/wandering rather than
+# genuine per-sample channel selection.
+#
+# se_channel_gated_concat_renorm (fusion/gated_concat.py::SEChannelGatedConcatRenormFusion)
+# is the identical gate network, but its 224-per-stream gate values are rescaled per sample
+# so their (cell-weighted) mean is exactly 1.0 -- the gate can then only redistribute trust
+# between channels/streams, not also act as a global scale knob. If its between-sample gate
+# std stays comparably high despite that constraint, that's stronger evidence the granularity
+# itself is doing useful work; if it collapses back toward gated_concat's ~0.025, the plain
+# variant's apparent activity was mostly the scale-knob effect.
+#
+# Same template, fixed_overrides and split-seed grid (36-40) as
+# se_channel_gated_concat_vs_gated_concat_spec.yml / final_ablation_remaining_spec.yml /
+# final_ablation_spec.yml, so all three (gated_concat, se_channel_gated_concat,
+# se_channel_gated_concat_renorm) are directly comparable seed-for-seed.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+
+grid:
+  data.split_seed: [36, 37, 38, 39, 40]
+
+variants:
+  - name: se_channel_gated_concat_renorm
+    overrides:
+      model.fusion: se_channel_gated_concat_renorm
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

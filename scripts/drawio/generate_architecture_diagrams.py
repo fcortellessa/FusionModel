@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
 """
-Generate draw.io block diagrams of the 9 final-ablation fusion candidates.
+Generate draw.io block diagrams of the 11 fusion candidates.
 
-Candidates 1-7 are the original final_ablation_spec.yml grid; 8-9 were added afterwards
-(se_channel_gated_concat_vs_gated_concat_spec.yml / se_channel_gated_concat_renorm_vs_se_channel_spec.yml)
-and are appended as candidates 8/9 in scripts/evaluate/final_ablation_candidate_analysis.py (not a
-renumbering/override of 1-7 -- see that script's "Candidates 8/9" comment):
+Candidates 1-7 are the original final_ablation_spec.yml grid; 8-9 (SE-channel gated concat)
+and 10-11 (gated / SE-gated cross-attention) were added afterwards as new fusion/gated_concat.py
+and fusion/gated_cross_attention.py strategies, appended rather than renumbering 1-7 (see
+scripts/evaluate/final_ablation_candidate_analysis.py's "Candidates 8/9" comment for that
+convention):
 
     1 concat | 2 gated | 3 gated_concat | 4 residual_gated_concat |
     5 channelwise_gated_concat_local | 6 channelwise_residual_gated_concat_local |
-    7 gated_concat + dual_fusion | 8 se_channel_gated_concat | 9 se_channel_gated_concat_renorm
+    7 gated_concat + dual_fusion | 8 se_channel_gated_concat | 9 se_channel_gated_concat_renorm |
+    10 gated_cross_attention | 11 se_gated_cross_attention
 
 Each diagram starts at the per-stream feature vectors (flattened P3|P4|P5 = 22,400-d per
 stream) and shows fusion -> rotation / translation heads -> outputs. Dimensions were read off
 a constructed PoseEstimationNet (yolo26n.pt, 640x640) and the head widths come from
 configs/final_ablation_spec.yml (candidates 1-7) / configs/generation_specs/se_channel_gated_concat_vs_gated_concat_spec.yml
-(candidates 8-9); parameter counts are recomputed and asserted against the measured totals so
-the head/fusion sizes below cannot silently drift from the code.
+(candidates 8-9) / configs/generation_specs/gated_cross_attention_seeds36_40_spec.yml
+and se_gated_cross_attention_seeds36_40_spec.yml (candidates 10-11); parameter counts are
+recomputed and asserted against the measured totals so the head/fusion sizes below cannot
+silently drift from the code.
 
 Output (default docs/architecture_diagrams/):
-    01_concat.drawio ... 09_se_channel_gated_concat_renorm.drawio   one page each
-    all_candidates.drawio                                          all 9 pages in one file
+    01_concat.drawio ... 11_se_gated_cross_attention.drawio   one page each
+    all_candidates.drawio                                     all 11 pages in one file
 
 Run from the repository root:
     python scripts/drawio/generate_architecture_diagrams.py
@@ -48,6 +52,62 @@ SE_HIDDEN_DIM = 64
 SE_GATE_OUT = 2 * SE_NUM_CHANNELS       # 448
 SE_CHANNEL_GATE_PARAMS = (2 * SE_DESC_DIM) + (SE_DESC_DIM * SE_HIDDEN_DIM + SE_HIDDEN_DIM) + \
     (SE_HIDDEN_DIM * SE_GATE_OUT + SE_GATE_OUT)  # LayerNorm affine + 2 Linears = 88,320
+
+# gated_cross_attention / se_gated_cross_attention (fusion/gated_cross_attention.py): each
+# stream's flattened FEAT-dim vector is split into NUM_TOKENS tokens of TOKEN_DIM each and
+# projected into a shared EMBED_DIM space; visual tokens attend (as Q) to tactile tokens
+# (K, V) via nn.MultiheadAttention, then a gate blends the attended output back into the
+# raw visual tokens before pooling and projecting back to FEAT (weighted-sum-style output,
+# like `gated` -- not concat-preserving, so fused_dim = FEAT, not 2*FEAT).
+EMBED_DIM = 256
+NUM_HEADS = 4
+NUM_TOKENS = 100
+TOKEN_DIM = FEAT // NUM_TOKENS  # 224
+
+
+def linear_params(in_dim, out_dim):
+    return in_dim * out_dim + out_dim
+
+
+def layernorm_params(dim):
+    return 2 * dim
+
+
+def mha_params(embed_dim):
+    # nn.MultiheadAttention(embed_dim, ...): in_proj (packed Q/K/V) + out_proj.
+    return (3 * embed_dim * embed_dim + 3 * embed_dim) + (embed_dim * embed_dim + embed_dim)
+
+
+# Shared tokenize+project+attend backbone common to both cross-attention variants.
+_GCA_SHARED_PARAMS = (
+    2 * linear_params(TOKEN_DIM, EMBED_DIM)      # visual_proj, tactile_proj
+    + 3 * layernorm_params(EMBED_DIM)            # vis_norm, tac_norm, attn_norm
+    + mha_params(EMBED_DIM)                      # cross_attn
+)
+GCA_GATE_PARAMS = linear_params(2 * EMBED_DIM, EMBED_DIM)       # gate: [vis||attn] -> g
+GCA_OUTPUT_PROJ_PARAMS = linear_params(EMBED_DIM, FEAT)          # output_proj: embed_dim -> FEAT
+GCA_PARAMS = _GCA_SHARED_PARAMS + GCA_GATE_PARAMS + GCA_OUTPUT_PROJ_PARAMS  # 6,268,032
+
+# se_gated_cross_attention additionally has a ScaleAwarePositionalEncoding, two extra
+# post-pos-encoding LayerNorms, a Squeeze-and-Excitation block over [vis||tac||attn]
+# descriptors, and renames `gate` to `spatial_gate` (same shape/params).
+POS_ENC_PARAMS = (
+    3 * (EMBED_DIM // 2)                                    # scale_embed: Embedding(3, embed_dim//2)
+    + linear_params(EMBED_DIM // 2, EMBED_DIM // 2)          # spatial_proj
+    + linear_params(EMBED_DIM, EMBED_DIM) + layernorm_params(EMBED_DIM)  # out_proj Sequential
+)  # 83,200
+SE_REDUCTION = 4
+SE_GCA_DESC_DIM = 3 * 2 * EMBED_DIM  # [vis||tac||attn], each (mean, mean|x|) -> 1,536
+SE_GCA_HIDDEN_DIM = max(16, SE_GCA_DESC_DIM // SE_REDUCTION)  # 384
+SE_BLOCK_PARAMS = (
+    layernorm_params(SE_GCA_DESC_DIM)
+    + linear_params(SE_GCA_DESC_DIM, SE_GCA_HIDDEN_DIM)
+    + linear_params(SE_GCA_HIDDEN_DIM, EMBED_DIM)
+)  # 691,840
+SE_GCA_PARAMS = (
+    _GCA_SHARED_PARAMS + POS_ENC_PARAMS + 2 * layernorm_params(EMBED_DIM)  # vis_pos_norm, tac_pos_norm
+    + GCA_GATE_PARAMS + SE_BLOCK_PARAMS + GCA_OUTPUT_PROJ_PARAMS
+)  # 7,044,096
 
 
 def mlp_params(in_dim, hidden, out_dim):
@@ -89,6 +149,10 @@ CANDIDATES = [
     dict(file="09_se_channel_gated_concat_renorm", title="9. SE-Channel Gated Concat (Renorm)",
          kind="se_channel_renorm", dual=False, rot=[256, 1024], trans=[1024, 1024, 16], fused=2 * FEAT,
          fusion_params=SE_CHANNEL_GATE_PARAMS, total=63_722_902),
+    dict(file="10_gated_cross_attention", title="10. Gated Cross-Attention", kind="gca", dual=False,
+         rot=[256, 1024], trans=[1024, 1024, 16], fused=FEAT, fusion_params=GCA_PARAMS, total=41_230_614),
+    dict(file="11_se_gated_cross_attention", title="11. SE-Gated Cross-Attention", kind="se_gca", dual=False,
+         rot=[256, 1024], trans=[1024, 1024, 16], fused=FEAT, fusion_params=SE_GCA_PARAMS, total=42_006_678),
 ]
 
 # ---------------------------------------------------------------------------
@@ -100,6 +164,8 @@ STYLE = {
     "stack":  ("#fff8e1", "#ff9800", 1.5),
     "gate":   ("#ffe0b2", "#ff9800", 2),
     "renorm": ("#fce4ec", "#c2185b", 1.5),
+    "attn":   ("#ede7f6", "#5e35b1", 2),
+    "pos":    ("#e0f2f1", "#00695c", 1.5),
     "gated":  ("#e8f5e9", "#1aa53b", 1.5),
     "fused":  ("#e8f5e9", "#1aa53b", 2),
     "rot":    ("#e3f2fd", "#0066cc", 2),
@@ -319,6 +385,125 @@ def fusion_se_channel(p, rgb, tac, renorm):
     return f, f, y + 80 + 40
 
 
+def fusion_gated_cross_attention(p, rgb, tac):
+    vis = p.box(f"Visual: Tokenize + Project (Q)<br>reshape {fmt(FEAT)} → {NUM_TOKENS}×{TOKEN_DIM}<br>"
+               f"Linear {TOKEN_DIM}→{EMBED_DIM} → LayerNorm<br>vis_tokens (B,{NUM_TOKENS},{EMBED_DIM})", CL, 205, 380,
+               120, "rgb")
+    tacb = p.box(f"Tactile: Tokenize + Project (K,V)<br>reshape {fmt(FEAT)} → {NUM_TOKENS}×{TOKEN_DIM}<br>"
+                f"Linear {TOKEN_DIM}→{EMBED_DIM} → LayerNorm<br>tac_tokens (B,{NUM_TOKENS},{EMBED_DIM})", CR, 205,
+                380, 120, "tac")
+    p.edge(rgb, vis)
+    p.edge(tac, tacb)
+
+    attn = p.box(f"Cross-Attention (MultiheadAttention)<br>Q = vis_tokens, K = V = tac_tokens<br>"
+                f"embed_dim {EMBED_DIM}, heads {NUM_HEADS}, dropout 0.1 → LayerNorm<br>"
+                f"attn_out T_attn (B,{NUM_TOKENS},{EMBED_DIM})", CM, 365, 620, 110, "attn")
+    p.edge(vis, attn, fa=0.9, fb=0.1, midy=345)
+    p.edge(tacb, attn, fa=0.1, fb=0.9, midy=345)
+
+    gate = p.box(f"Gate<br>Linear {2*EMBED_DIM}→{EMBED_DIM} (Sigmoid) on [vis_tokens ‖ attn_out]<br>"
+                f"→ g ∈ (0,1)^({NUM_TOKENS}×{EMBED_DIM}), per-token per-channel", CM, 515, 600, 90, "gate")
+    p.edge(attn, gate)
+    # vis_tokens is needed again here (gate reads [vis_tokens || attn_out]); route it down the
+    # left margin, outside every box's footprint, then in through the gate's left side.
+    p.edge(vis, gate, sa="l", fa=0.85, ta="l", fb=0.5, via=[(20, 560)])
+
+    fuse = p.box(f"Fuse (per token, per channel)<br>T_fused = g ⊙ attn_out + (1 − g) ⊙ vis_tokens<br>"
+               f"(B,{NUM_TOKENS},{EMBED_DIM})", CM, 645, 500, 90, "gated")
+    p.edge(gate, fuse)
+    p.edge(attn, fuse, sa="r", fa=0.7, ta="r", fb=0.5, via=[(880, 690)])
+    p.edge(vis, fuse, sa="l", fa=0.95, ta="l", fb=0.5, via=[(20, 690)])
+
+    pool = p.box(f"Global Average Pool (over {NUM_TOKENS} tokens)<br>v_gca (B, {EMBED_DIM})", CM, 775, 420, 70,
+                "fused")
+    p.edge(fuse, pool)
+    out = p.box(f"Output Projection<br>Linear {EMBED_DIM}→{fmt(FEAT)}<br>fused (B, {fmt(FEAT)})", CM, 885, 420, 70,
+               "fused")
+    p.edge(pool, out)
+    return out, out, 995
+
+
+def fusion_se_gated_cross_attention(p, rgb, tac):
+    # Row 1 (y=205): tokenize + project each stream. The positional encoder is independent of
+    # RGB/Tactile (built only from fixed per-token coordinates), so it gets its own row below
+    # rather than sharing row 1 -- sharing it would overlap the vis/tac boxes' footprint.
+    vis = p.box(f"Visual: Tokenize + Project<br>reshape {fmt(FEAT)} → {NUM_TOKENS}×{TOKEN_DIM}<br>"
+               f"Linear {TOKEN_DIM}→{EMBED_DIM} → LayerNorm", CL, 205, 360, 90, "rgb")
+    tacb = p.box(f"Tactile: Tokenize + Project<br>reshape {fmt(FEAT)} → {NUM_TOKENS}×{TOKEN_DIM}<br>"
+                f"Linear {TOKEN_DIM}→{EMBED_DIM} → LayerNorm", CR, 205, 360, 90, "tac")
+    p.edge(rgb, vis)
+    p.edge(tac, tacb)
+
+    # Row 2 (y=325): positional encoding, independent of both streams.
+    pos = p.box(f"Scale-Aware Positional Encoding<br>(independent of RGB/Tactile -- built from fixed "
+               f"per-token coordinates)<br>2D Fourier (x,y) per token + scale Embedding(3) for P3/P4/P5"
+               f"<br>→ pos_emb (B,{NUM_TOKENS},{EMBED_DIM})", CM, 325, 460, 90, "pos")
+
+    # Row 3 (y=445): add pos_emb to each stream's tokens, then LayerNorm.
+    vis2 = p.box(f"+ pos_emb → LayerNorm<br>vis_tokens (B,{NUM_TOKENS},{EMBED_DIM}) [Q]", CL, 445, 340, 70, "rgb")
+    tac2 = p.box(f"+ pos_emb → LayerNorm<br>tac_tokens (B,{NUM_TOKENS},{EMBED_DIM}) [K,V]", CR, 445, 340, 70, "tac")
+    p.edge(vis, vis2)
+    p.edge(tacb, tac2)
+    p.edge(pos, vis2, fa=0.2, fb=0.8)
+    p.edge(pos, tac2, fa=0.8, fb=0.2)
+
+    # Row 4 (y=555): cross-attention.
+    attn = p.box(f"Cross-Attention (MultiheadAttention)<br>Q = vis_tokens, K = V = tac_tokens<br>"
+                f"embed_dim {EMBED_DIM}, heads {NUM_HEADS}, dropout 0.1 → LayerNorm<br>"
+                f"attn_out T_attn (B,{NUM_TOKENS},{EMBED_DIM})", CM, 555, 620, 110, "attn")
+    p.edge(vis2, attn, fa=0.9, fb=0.1, midy=535)
+    p.edge(tac2, attn, fa=0.1, fb=0.9, midy=535)
+
+    # Row 5 (y=705): the two independent gate paths -- spatial (CL) and SE squeeze (CR) -- run
+    # in parallel, each only reading attn_out / vis_tokens / tac_tokens, not each other.
+    sgate = p.box(f"Spatial Gate (per token)<br>Linear {2*EMBED_DIM}→{EMBED_DIM} (Sigmoid)<br>"
+                 f"on [vis_tokens ‖ attn_out]<br>→ g_spatial (B,{NUM_TOKENS},{EMBED_DIM})", CL, 705, 340, 110, "gate")
+    p.edge(attn, sgate, fa=0.15, fb=0.9)
+    p.edge(vis2, sgate, sa="l", fa=0.9, ta="l", fb=0.5, via=[(20, 760)])
+
+    se_sq = p.box(f"Squeeze (SE descriptor)<br>mean + mean|x| over the {NUM_TOKENS} tokens, for vis_tokens, "
+                 f"tac_tokens, attn_out<br>→ concat → {fmt(SE_GCA_DESC_DIM)}-dim descriptor", CR, 705, 340, 110,
+                 "stack")
+    p.edge(attn, se_sq, fa=0.85, fb=0.1)
+    # vis_tokens is needed again here; route right along the row-3/4 gap (y=535, above attn's
+    # top at y=555) then down the right margin (x=880, clear of se_sq/se_ex which end at x=830).
+    p.edge(vis2, se_sq, fa=0.9, ta="r", fb=0.3, via=[(880, 535), (880, 738)])
+    p.edge(tac2, se_sq, fa=0.9, fb=0.9)
+
+    # Row 6 (y=855): SE excite, below its own squeeze (CR column only -- spatial gate has no
+    # counterpart here, so nothing else occupies this row's CL/CM space).
+    se_ex = p.box(f"Excite (SE block)<br>LayerNorm({SE_GCA_DESC_DIM}) → Linear {SE_GCA_DESC_DIM}→"
+                 f"{SE_GCA_HIDDEN_DIM} → ReLU → Dropout 0.1<br>→ Linear {SE_GCA_HIDDEN_DIM}→{EMBED_DIM} → Sigmoid<br>"
+                 f"→ se_channel_weights (B,1,{EMBED_DIM}), per-channel, shared over all tokens", CR, 855, 340, 130,
+                 "gate")
+    p.edge(se_sq, se_ex)
+
+    # Row 7 (y=1025): combine the two gates (below both row-5/6 branches, so no overlap).
+    hybrid = p.box(f"g_hybrid = g_spatial ⊙ se_channel_weights<br>(se weights broadcast over the {NUM_TOKENS} "
+                  "tokens)", CM, 1025, 460, 70, "gated")
+    p.edge(sgate, hybrid, fa=0.9, fb=0.1, midy=1005)
+    p.edge(se_ex, hybrid, fa=0.1, fb=0.9, midy=1005)
+
+    # Row 8 (y=1135): fuse -- needs g_hybrid (straight above), attn_out and vis_tokens (routed
+    # down the outer margins, clear of every box between rows 4 and 8).
+    fuse = p.box(f"Fuse (per token, per channel)<br>T_fused = g_hybrid ⊙ attn_out + (1 − g_hybrid) ⊙ vis_tokens<br>"
+               f"(B,{NUM_TOKENS},{EMBED_DIM})", CM, 1135, 500, 90, "gated")
+    p.edge(hybrid, fuse)
+    # attn_out / vis_tokens routed down the outer margins (x=880 / x=20), clear of every box
+    # between rows 4 and 8 (se_sq/se_ex max out at x=830 on the right, sgate starts at x=70 on
+    # the left) -- see the row-5/6/7 comments above for the exact box extents.
+    p.edge(attn, fuse, sa="r", fa=0.8, ta="r", fb=0.5, via=[(880, 643), (880, 1180)])
+    p.edge(vis2, fuse, sa="l", fa=0.9, ta="l", fb=0.5, via=[(20, 508), (20, 1180)])
+
+    pool = p.box(f"Global Average Pool (over {NUM_TOKENS} tokens)<br>v_gca (B, {EMBED_DIM})", CM, 1265, 420, 70,
+                "fused")
+    p.edge(fuse, pool)
+    out = p.box(f"Output Projection<br>Linear {EMBED_DIM}→{fmt(FEAT)}<br>fused (B, {fmt(FEAT)})", CM, 1375, 420, 70,
+               "fused")
+    p.edge(pool, out)
+    return out, out, 1485
+
+
 def build_page(cand):
     kind = cand["kind"]
     # sanity: recompute the parameter total from the layer sizes above
@@ -339,6 +524,10 @@ def build_page(cand):
         sr, st, y = fusion_channelwise_local(p, rgb, tac, residual=kind == "cw_res_local")
     elif kind in ("se_channel", "se_channel_renorm"):
         sr, st, y = fusion_se_channel(p, rgb, tac, renorm=kind == "se_channel_renorm")
+    elif kind == "gca":
+        sr, st, y = fusion_gated_cross_attention(p, rgb, tac)
+    elif kind == "se_gca":
+        sr, st, y = fusion_se_gated_cross_attention(p, rgb, tac)
     else:
         sr, st, y = fusion_dual(p, rgb, tac)
     height = heads(p, cand, sr, st, y)

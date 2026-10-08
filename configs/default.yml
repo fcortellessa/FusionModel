@@ -187,6 +187,26 @@ training:
     # to epoch within a single run and one lucky low epoch set an unrealistically
     # strict bar for every subsequent epoch to clear).
     # smoothing_alpha: 0.3
+  checkpoint_selection:
+    # Which criterion decides whether the current epoch overwrites checkpoint_best.pth.
+    # "combined_loss" (default): val_fixed_loss = val_loss_q*rot_scaling_factor + val_loss_y
+    # + val_loss_z improves vs. the running best -- the only behavior that ever existed
+    # before this key was added, so omitting this block entirely is identical to
+    # "combined_loss".
+    # "per_head_pareto": utils/train_utils.py's PerHeadCheckpointSelector instead --
+    # compares EMA-smoothed val_abs_rot_x (degrees) and val_abs_trans (meters) against
+    # the values at the last-saved checkpoint, and saves when neither head regresses by
+    # more than min_delta (relative) and at least one improves by more than min_delta.
+    # Unlike early_stopping's AND-gated per-head check, this does not require both heads
+    # to improve together -- see PerHeadCheckpointSelector's docstring for why a strict
+    # AND would stall too early once rotation/translation start trading off.
+    # "both": checkpoint_best.pth keeps using combined_loss (so resume/test.py behavior
+    # is untouched), and a second file, checkpoint_best_per_head.pth, is written
+    # alongside it whenever the per_head_pareto criterion fires -- use this to A/B
+    # compare the two selection strategies on one run before switching the primary over.
+    type: combined_loss
+    min_delta: 0.02
+    # smoothing_alpha: 0.3   # same convention as early_stopping.smoothing_alpha above
 
 data:
   root: ""

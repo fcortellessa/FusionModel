@@ -1,0 +1,50 @@
+# Tests whether se_channel_gated_concat's per-channel gate granularity and dual_fusion's
+# per-task-branch separation (two independent fusion module instances) are complementary when
+# combined, on top of pre_head_channel_divisor=4.
+#
+# Motivation: se_channel_gated_concat +divisor4 (0.514 +- 0.080 deg mean test rot_x, 3 seeds)
+# currently beats dual_gated_concat both at full head (0.579 +- 0.061, 5 seeds) and +divisor4
+# (0.585, 2 seeds so far) -- i.e. fine-grained per-channel gating (shared across both tasks)
+# outperforms task-separated but coarse scalar gating. dual_fusion's own gain from divisor4 was
+# weak/mixed (its "separation" benefit seems to overlap with divisor4's "head-shrinking" benefit),
+# whereas se_channel's gain was large and consistent -- suggesting granularity and separation are
+# different mechanisms, not redundant ones. This combines them: se_channel's fine granularity
+# AND dual_fusion's task separation (so each task branch gets its OWN 224-gate-per-channel
+# se_channel module, not a shared one) together with the already-validated divisor4 head reduction.
+#
+# NOTE: this is the full 3-way combination tested directly, not staged (no standalone
+# "dual_se_channel_gated_concat, full head" data point exists to isolate dual_fusion's
+# contribution in isolation at this granularity) -- a deliberate choice to get the best candidate
+# number faster, at the cost of clean per-mechanism attribution if this result is surprising.
+#
+# Compared against se_channel_gated_concat +divisor4 (non-dual) and dual_gated_concat +divisor4 --
+# both already have seeds in runs/pre_head_channel_divisor_vs_se_channel and
+# runs/pre_head_channel_divisor4_generalization_check -- not regenerated here.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: 4
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.03
+  training.early_stopping.smoothing_alpha: 0.2
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: dual_se_channel_gated_concat_divisor4
+    overrides:
+      model.fusion: se_channel_gated_concat
+      model.dual_fusion: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

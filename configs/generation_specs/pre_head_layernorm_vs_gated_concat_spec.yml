@@ -1,0 +1,53 @@
+# Tests whether normalizing the fused vector right before the heads (model.pre_head_layernorm,
+# see base_model/pose_estimation_model.py) changes accuracy, as a check on the hypothesis from
+# the gate-collapse investigation: the head's first Linear layer alone holds ~90% of the model's
+# parameters (57.3M of 63.7M), so under training.grad_clip's single GLOBAL norm clip
+# (max_norm=1.0), that one layer's gradient -- proportional to the magnitude of its input, the
+# fused vector -- can dominate the total norm and throttle every other parameter group's update
+# whenever the fused vector is large. Measured directly: the fused vector's RMS shrinks 13-44%
+# from init to trained across every gate variant tried so far (plain, element-wise, SE-channel,
+# SE-channel-renorm), including se_channel_gated_concat_renorm where the *gate itself* is
+# constitutionally pinned to mean 1.0 -- so the shrinkage isn't specific to any one gating
+# mechanism, and forcing it out of one path (the gate) just routes it through another
+# (the backbone). LayerNorm here decouples "feature scale the fusion/backbone happens to
+# produce" from "gradient scale the head's dominant layer receives", targeting the mechanism
+# directly rather than any one place it can express itself.
+#
+# Compared against gated_concat (plain, no LayerNorm) -- the existing final_ablation runs for
+# these seeds, e.g. runs/final_ablation/20260919_070842_bs16_gated_concat for split seed 36 --
+# not regenerated here. gated_concat, not se_channel_gated_concat, so this pilot isolates the
+# LayerNorm effect from the gate-granularity question already being tested separately
+# (se_channel_gated_concat_renorm_vs_se_channel_spec.yml).
+#
+# Same template, fixed_overrides and gated_concat head sizes as
+# se_channel_gated_concat_vs_gated_concat_spec.yml / final_ablation_spec.yml; split-seed grid
+# narrowed to 36-38 (3 seeds) per instruction, matching final_ablation_candidates_rescale_spec.yml's
+# convention for a first-look pilot before committing to all 5.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: gated_concat_pre_head_layernorm
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: false
+      model.pre_head_layernorm: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

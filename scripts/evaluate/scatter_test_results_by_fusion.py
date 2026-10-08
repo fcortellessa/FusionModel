@@ -118,6 +118,24 @@ CANDIDATE_COLORS = {
 }
 FALLBACK_COLORS = ["#64B5CD", "#8C8C8C", "#DA8BC3", "#CCCCCC"]
 
+# Which per-sample results the plots are built from. Default = test split (results/results_*.csv written
+# by scripts/test.py). "val" reads <run>/results_val/results_val*.csv (per-sample validation errors of
+# checkpoint_best.pth) and relabels titles / axes / file names accordingly. Set via set_split().
+SPLIT_LABEL = "Test"
+SPLIT_KEY = "test"
+RESULTS_SUBDIR = "results"
+RESULTS_GLOB = "results_*.csv"
+
+
+def set_split(split: str):
+    global SPLIT_LABEL, SPLIT_KEY, RESULTS_SUBDIR, RESULTS_GLOB
+    if split == "val":
+        SPLIT_LABEL, SPLIT_KEY, RESULTS_SUBDIR, RESULTS_GLOB = "Validation", "val", "results_val", "results_val*.csv"
+    elif split == "test":
+        SPLIT_LABEL, SPLIT_KEY, RESULTS_SUBDIR, RESULTS_GLOB = "Test", "test", "results", "results_*.csv"
+    else:
+        raise ValueError(f"unknown split: {split}")
+
 
 def has_task_adapter(model_cfg: dict) -> bool:
     """True if either the legacy or current task-specific feature-adapter
@@ -152,7 +170,7 @@ def find_run_config(run_folder: Path):
 
 def latest_results_csv(results_dir: Path):
     """Picks the most recent results_*.csv by the timestamp embedded in the filename."""
-    candidates = sorted(results_dir.glob("results_*.csv"))
+    candidates = sorted(results_dir.glob(RESULTS_GLOB))
     return candidates[-1] if candidates else None
 
 
@@ -165,12 +183,12 @@ def discover_run_folders(run_dirs):
         if not run_dir.is_absolute():
             run_dir = (REPO_ROOT / run_dir) if (REPO_ROOT / run_dir).exists() else run_dir.resolve()
 
-        results_dir = run_dir / "results"
+        results_dir = run_dir / RESULTS_SUBDIR
         if results_dir.is_dir() and latest_results_csv(results_dir) is not None:
             found[str(run_dir)] = run_dir
             continue
 
-        for csv_path in run_dir.rglob("results/results_*.csv"):
+        for csv_path in run_dir.rglob(f"{RESULTS_SUBDIR}/{RESULTS_GLOB}"):
             candidate = csv_path.parent.parent
             found[str(candidate)] = candidate
 
@@ -233,7 +251,7 @@ def collect_runs(run_folders):
         else:
             seen_run_names[run_name] = (str(run_folder), flat_cfg)
 
-        results_dir = run_folder / "results"
+        results_dir = run_folder / RESULTS_SUBDIR
         csv_path = latest_results_csv(results_dir)
         if csv_path is None:
             excluded.append({"run_folder": str(run_folder), "fusion": fusion, "reason": "no results_*.csv in results/"})
@@ -435,12 +453,14 @@ def write_summary_table(summary_df: pd.DataFrame, output_dir: Path, run_dir_args
         )
     table_md = "\n".join(lines)
 
-    (output_dir / "test_summary_table.md").write_text(table_md + "\n")
-    summary_df.to_csv(output_dir / "test_summary_table.csv", index=False)
+    (output_dir / f"{SPLIT_KEY}_summary_table.md").write_text(table_md + "\n")
+    summary_df.to_csv(output_dir / f"{SPLIT_KEY}_summary_table.csv", index=False)
     return table_md
 
 
-def plot_scatter_by_run(df: pd.DataFrame, output_dir: Path, rot_col: str, rot_label: str):
+def plot_scatter_by_run(df: pd.DataFrame, output_dir: Path, rot_col: str, rot_label: str, label_name: str = "seed",
+                        x_col: str = "trans_l2_mm", x_label: str = "Test Trans L2 Norm (mm)",
+                        file_suffix: str = "", y_hover_name: str = "rot", y_hover_unit: str = " deg"):
     if df.empty:
         return
     candidates = ordered_candidates(df["candidate"].tolist())
@@ -451,22 +471,22 @@ def plot_scatter_by_run(df: pd.DataFrame, output_dir: Path, rot_col: str, rot_la
         cdf = df[df["candidate"] == cand]
         color = get_color(cand, fallback_seen)
         ax.scatter(
-            cdf["trans_l2_mm"], cdf[rot_col],
+            cdf[x_col], cdf[rot_col],
             color=color, s=100, edgecolor="black", linewidth=0.6,
             alpha=0.85, label=cand,
         )
         for _, row in cdf.iterrows():
             seed_txt = str(int(row["seed"])) if pd.notna(row["seed"]) else "?"
-            ax.annotate(seed_txt, (row["trans_l2_mm"], row[rot_col]),
+            ax.annotate(seed_txt, (row[x_col], row[rot_col]),
                         xytext=(5, 5), textcoords="offset points", fontsize=8)
 
-    ax.set_xlabel("Test Trans L2 Norm (mm)")
-    ax.set_ylabel(f"Test {rot_label}")
-    ax.set_title("Test-set error trade-off by fusion candidate\n(mean over test samples; labels = seed)")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(f"{SPLIT_LABEL} {rot_label}")
+    ax.set_title(f"{SPLIT_LABEL}-set error trade-off by fusion candidate\n(mean over {SPLIT_KEY} samples; labels = {label_name})")
     ax.grid(True, linestyle="--", alpha=0.5)
     ax.legend(title="fusion candidate", fontsize=8, loc="best")
     fig.tight_layout()
-    fig.savefig(output_dir / "scatter_test_by_run.png", dpi=150)
+    fig.savefig(output_dir / f"scatter_{SPLIT_KEY}_by_run{file_suffix}.png", dpi=150)
     plt.close(fig)
 
     fig_plotly = go.Figure()
@@ -475,22 +495,24 @@ def plot_scatter_by_run(df: pd.DataFrame, output_dir: Path, rot_col: str, rot_la
         color = get_color(cand, fallback_seen)
         seed_labels = [str(int(s)) if pd.notna(s) else "?" for s in cdf["seed"]]
         fig_plotly.add_trace(go.Scatter(
-            x=cdf["trans_l2_mm"], y=cdf[rot_col],
+            x=cdf[x_col], y=cdf[rot_col],
             mode="markers+text", name=cand,
             marker=dict(color=color, size=13, line=dict(width=1, color="black")),
             text=seed_labels, textposition="top center",
-            hovertext=[f"{rn} (seed={s}, n={n})" for rn, s, n in zip(cdf["run_name"], cdf["seed"], cdf["n_samples"])],
-            hovertemplate="%{hovertext}<br>trans_l2=%{x:.4f} mm<br>rot=%{y:.4f} deg<extra></extra>",
+            hovertext=[f"{rn} ({label_name}={s}, n={n})" for rn, s, n in zip(cdf["run_name"], cdf["seed"], cdf["n_samples"])],
+            hovertemplate="%{hovertext}<br>x=%{x:.4f}<br>" + y_hover_name + "=%{y:.4f}" + y_hover_unit + "<extra></extra>",
         ))
     fig_plotly.update_layout(
-        title="Test-set error trade-off by fusion candidate (mean over test samples; labels = seed)",
-        xaxis_title="Test Trans L2 Norm (mm)", yaxis_title=f"Test {rot_label}",
+        title=f"{SPLIT_LABEL}-set error trade-off by fusion candidate (mean over {SPLIT_KEY} samples; labels = {label_name})",
+        xaxis_title=x_label, yaxis_title=f"{SPLIT_LABEL} {rot_label}",
         template="plotly_white",
     )
-    fig_plotly.write_html(output_dir / "scatter_test_by_run.html")
+    fig_plotly.write_html(output_dir / f"scatter_{SPLIT_KEY}_by_run{file_suffix}.html")
 
 
-def plot_scatter_per_sample(df: pd.DataFrame, output_dir: Path, rot_col: str, rot_label: str):
+def plot_scatter_per_sample(df: pd.DataFrame, output_dir: Path, rot_col: str, rot_label: str, label_name: str = "seed",
+                        x_col: str = "trans_l2_mm", x_label: str = "Test Trans L2 Norm (mm)",
+                        file_suffix: str = "", y_hover_name: str = "rot", y_hover_unit: str = " deg"):
     if df.empty:
         return
     candidates = ordered_candidates(df["candidate"].tolist())
@@ -501,17 +523,17 @@ def plot_scatter_per_sample(df: pd.DataFrame, output_dir: Path, rot_col: str, ro
         cdf = df[df["candidate"] == cand]
         color = get_color(cand, fallback_seen)
         ax.scatter(
-            cdf["trans_l2_mm"], cdf[rot_col],
+            cdf[x_col], cdf[rot_col],
             color=color, s=14, alpha=0.35, linewidth=0, label=cand,
         )
 
-    ax.set_xlabel("Test Trans L2 Norm (mm)")
-    ax.set_ylabel(f"Test {rot_label}")
-    ax.set_title("Test-set per-sample error by fusion candidate\n(every test sample, all runs pooled)")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(f"{SPLIT_LABEL} {rot_label}")
+    ax.set_title(f"{SPLIT_LABEL}-set per-sample error by fusion candidate\n(every {SPLIT_KEY} sample, all runs pooled)")
     ax.grid(True, linestyle="--", alpha=0.5)
     ax.legend(title="fusion candidate", fontsize=8, loc="best", markerscale=3)
     fig.tight_layout()
-    fig.savefig(output_dir / "scatter_test_per_sample.png", dpi=150)
+    fig.savefig(output_dir / f"scatter_{SPLIT_KEY}_per_sample{file_suffix}.png", dpi=150)
     plt.close(fig)
 
     fig_plotly = go.Figure()
@@ -519,18 +541,18 @@ def plot_scatter_per_sample(df: pd.DataFrame, output_dir: Path, rot_col: str, ro
         cdf = df[df["candidate"] == cand]
         color = get_color(cand, fallback_seen)
         fig_plotly.add_trace(go.Scatter(
-            x=cdf["trans_l2_mm"], y=cdf[rot_col],
+            x=cdf[x_col], y=cdf[rot_col],
             mode="markers", name=cand,
             marker=dict(color=color, size=6, opacity=0.4),
-            hovertext=[f"{rn} (seed={s}, sample={sid})" for rn, s, sid in zip(cdf["run_name"], cdf["seed"], cdf["sample_id"])] if "sample_id" in cdf.columns else None,
-            hovertemplate="%{hovertext}<br>trans_l2=%{x:.4f} mm<br>rot=%{y:.4f} deg<extra></extra>",
+            hovertext=[f"{rn} ({label_name}={s}, sample={sid})" for rn, s, sid in zip(cdf["run_name"], cdf["seed"], cdf["sample_id"])] if "sample_id" in cdf.columns else None,
+            hovertemplate="%{hovertext}<br>x=%{x:.4f}<br>" + y_hover_name + "=%{y:.4f}" + y_hover_unit + "<extra></extra>",
         ))
     fig_plotly.update_layout(
-        title="Test-set per-sample error by fusion candidate (every test sample, all runs pooled)",
-        xaxis_title="Test Trans L2 Norm (mm)", yaxis_title=f"Test {rot_label}",
+        title=f"{SPLIT_LABEL}-set per-sample error by fusion candidate (every {SPLIT_KEY} sample, all runs pooled)",
+        xaxis_title=x_label, yaxis_title=f"{SPLIT_LABEL} {rot_label}",
         template="plotly_white",
     )
-    fig_plotly.write_html(output_dir / "scatter_test_per_sample.html")
+    fig_plotly.write_html(output_dir / f"scatter_{SPLIT_KEY}_per_sample{file_suffix}.html")
 
 
 def main():

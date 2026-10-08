@@ -24,6 +24,9 @@ Candidate 6 differs from scatter_test_results_by_fusion.py, whose #6 is the
 `..._hybrid` variant; the final ablation uses the `..._local` variant, so it is
 overridden here (the other script is left untouched).
 
+Use --scatter_only --output_dir <run folder>/overview/scatter_by_candidate for just the test-set scatter plots,
+and --gates_only --output_dir <run folder>/overview/gate_analysis for just the gate plots.
+
 Run it once per rot_scaling_factor folder so the two scales are never pooled:
     python scripts/evaluate/final_ablation_candidate_analysis.py --run_dir runs/final_ablation
     python scripts/evaluate/final_ablation_candidate_analysis.py --run_dir runs/final_ablation_rot_scaling_200
@@ -77,6 +80,29 @@ def _override_candidate_6():
 
 
 _override_candidate_6()
+
+# ---------------------------------------------------------------------------
+# Candidates 8/9: se_channel_gated_concat and its renorm variant (see
+# fusion/gated_concat.py::_BaseSEChannelGatedConcat) -- a Squeeze-and-Excitation
+# style channel gate (224 gates/stream, one per (scale, channel)) added after the
+# original 7-candidate final_ablation grid. Unlike the "channelwise_*" family
+# (an element-wise gate, one per flattened vector entry -- see that module's
+# "Gate granularity / naming" docstring note), these have their own parameters
+# per channel and a sample-level context summary, so they're a genuinely
+# different mechanism, not a renaming of an existing candidate -- appended as
+# new entries, not an override.
+# ---------------------------------------------------------------------------
+
+SE_CHANNEL_LABEL = "8. SE-style channel gated concatenation"
+SE_CHANNEL_RENORM_LABEL = "9. SE-style channel gated concatenation (renorm)"
+
+scat.CANDIDATE_ORDER += [SE_CHANNEL_LABEL, SE_CHANNEL_RENORM_LABEL]
+scat.CANDIDATE_MAP[("se_channel_gated_concat", False)] = SE_CHANNEL_LABEL
+scat.CANDIDATE_MAP[("se_channel_gated_concat_renorm", False)] = SE_CHANNEL_RENORM_LABEL
+scat.CANDIDATE_SHORT_NAME[SE_CHANNEL_LABEL] = "se_channel_gated_concat"
+scat.CANDIDATE_SHORT_NAME[SE_CHANNEL_RENORM_LABEL] = "se_channel_gated_concat_renorm"
+scat.CANDIDATE_COLORS[SE_CHANNEL_LABEL] = "#4C9A2A"
+scat.CANDIDATE_COLORS[SE_CHANNEL_RENORM_LABEL] = "#D4B106"
 
 # (train col, val col, title, unit, multiplier). y/z are stored in meters -> plotted in mm.
 METRICS = {
@@ -415,9 +441,19 @@ def main():
                              "container so test_multiple_runs.py never mistakes it for a run folder).")
     parser.add_argument("--rot_metric", choices=["val_abs_rot_z", "val_abs_rot_x"], default="val_abs_rot_x",
                         help="Rotation column for the test scatter plots (default: roll-only rot_x).")
+    parser.add_argument("--split", choices=["test", "val"], default="test",
+                        help="Which per-sample errors the scatter plots use: test (results/results_*.csv, default) or "
+                             "val (<run>/results_val/results_val.csv from per-sample validation inference).")
+    parser.add_argument("--scatter_only", action="store_true",
+                        help="Only write the test-set scatter plots + summary table (skip the metrics.csv trace plots), "
+                             "e.g. into <run folder>/overview/scatter_by_candidate.")
+    parser.add_argument("--gates_only", action="store_true",
+                        help="Only write the gate plots (trajectories, saturation, per-level heatmap), "
+                             "e.g. into <run folder>/overview/gate_analysis.")
     parser.add_argument("--min_run_fraction", type=float, default=0.5,
                         help="Show an epoch only if this fraction of a candidate's runs reached it (default 0.5).")
     args = parser.parse_args()
+    scat.set_split(args.split)
 
     out_dir = Path(args.output_dir) if args.output_dir else \
         REPO_ROOT / "runs" / "candidate_analysis" / Path(args.run_dir[0]).name
@@ -432,37 +468,67 @@ def main():
     if per_run_df.empty:
         sys.exit("No runs with usable test results.")
 
-    per_run_df.to_csv(out_dir / "test_comparison_by_run.csv", index=False)
-    excluded_df.to_csv(out_dir / "excluded_runs.csv", index=False)
-    print(f"Included runs: {len(per_run_df)} | excluded: {len(excluded_df)}")
+    # Every final-ablation run has training.seed=50; the varying factor is data.split_seed, so that
+    # is what labels the scatter points / seed column. The original is kept as training_seed.
+    split_of = lambda rf: configs[rf].get("data.split_seed")  # noqa: E731
+    per_run_df["training_seed"] = per_run_df["seed"]
+    per_run_df["seed"] = per_run_df["run_folder"].map(split_of)
+    per_sample_df["seed"] = per_sample_df["run_folder"].map(split_of)
 
-    rot_col_run = "rot_z_geodesic_deg" if args.rot_metric == "val_abs_rot_z" else "rot_x_deg"
-    rot_label = "Rot Error (geodesic, deg)" if args.rot_metric == "val_abs_rot_z" else "Rot Error X / roll (deg)"
+    if not args.gates_only:
+        per_run_df.to_csv(out_dir / f"{scat.SPLIT_KEY}_comparison_by_run.csv", index=False)
+        excluded_df.to_csv(out_dir / "excluded_runs.csv", index=False)
+        print(f"Included runs: {len(per_run_df)} | excluded: {len(excluded_df)}")
 
-    # --- test-set plots + table (reused directly from the scatter script) ---
-    scat.plot_scatter_by_run(per_run_df, out_dir, rot_col_run, rot_label)
-    scat.plot_scatter_per_sample(per_sample_df, out_dir, args.rot_metric, rot_label)
-    summary = scat.flag_comparability(scat.build_summary_table(per_run_df))
-    table_md = scat.write_summary_table(summary, out_dir, args.run_dir)
-    if table_md:
-        print("\nTest-set summary (mean ± std across runs):\n")
-        print(table_md)
+        rot_col_run = "rot_z_geodesic_deg" if args.rot_metric == "val_abs_rot_z" else "rot_x_deg"
+        rot_label = "Rot Error (geodesic, deg)" if args.rot_metric == "val_abs_rot_z" else "Rot Error X / roll (deg)"
 
-    missing = [c for c in scat.CANDIDATE_ORDER if c not in set(per_run_df["candidate"].astype(str))]
-    if missing:
-        print(f"\n⚠️  Candidates with no runs in {args.run_dir}: {missing}")
-    extra = sorted(set(per_run_df["candidate"].astype(str)) - set(scat.CANDIDATE_ORDER))
-    if extra:
-        print(f"⚠️  Runs outside the 7 candidates (plotted under their own label): {extra}")
+        # --- test-set plots + table (reused directly from the scatter script) ---
+        per_sample_df["y_mm"] = per_sample_df["val_abs_y"] * 1000.0
+        per_sample_df["z_mm"] = per_sample_df["val_abs_z"] * 1000.0
+        # rot vs translation L2 (y/z) -- default file names -- then rot vs y and rot vs z alone.
+        for x_col, x_label, suffix in (
+            ("trans_l2_mm", f"{scat.SPLIT_LABEL} Trans L2 Norm (mm)", ""),
+            ("y_mm", f"{scat.SPLIT_LABEL} Trans Y abs error (mm)", "_trans_y"),
+            ("z_mm", f"{scat.SPLIT_LABEL} Trans Z abs error (mm)", "_trans_z"),
+        ):
+            scat.plot_scatter_by_run(per_run_df, out_dir, rot_col_run, rot_label, label_name="split seed",
+                                     x_col=x_col, x_label=x_label, file_suffix=suffix)
+            scat.plot_scatter_per_sample(per_sample_df, out_dir, args.rot_metric, rot_label, label_name="split seed",
+                                         x_col=x_col, x_label=x_label, file_suffix=suffix)
+        # translation-only trade-off: |y| error (x) vs |z| error (y), per run and per sample
+        scat.plot_scatter_by_run(per_run_df, out_dir, "z_mm", "Trans Z abs error (mm)", label_name="split seed",
+                                 x_col="y_mm", x_label=f"{scat.SPLIT_LABEL} Trans Y abs error (mm)",
+                                 file_suffix="_trans_y_vs_trans_z", y_hover_name="z", y_hover_unit=" mm")
+        scat.plot_scatter_per_sample(per_sample_df, out_dir, "z_mm", "Trans Z abs error (mm)", label_name="split seed",
+                                     x_col="y_mm", x_label=f"{scat.SPLIT_LABEL} Trans Y abs error (mm)",
+                                     file_suffix="_trans_y_vs_trans_z", y_hover_name="z", y_hover_unit=" mm")
+        summary = scat.flag_comparability(scat.build_summary_table(per_run_df))
+        table_md = scat.write_summary_table(summary, out_dir, args.run_dir)
+        if table_md:
+            print("\nTest-set summary (mean ± std across runs):\n")
+            print(table_md)
 
-    drift = config_drift(per_run_df, configs)
-    if drift:
-        (out_dir / "config_drift_notes.md").write_text(
-            "# Config differences between runs of the same candidate (split_seed/seed ignored)\n\n"
-            + "\n".join(drift) + "\n")
-        print(f"⚠️  {len(drift)} config difference(s) within candidates -- see config_drift_notes.md")
+        missing = [c for c in scat.CANDIDATE_ORDER if c not in set(per_run_df["candidate"].astype(str))]
+        if missing:
+            print(f"\n⚠️  Candidates with no runs in {args.run_dir}: {missing}")
+        extra = sorted(set(per_run_df["candidate"].astype(str)) - set(scat.CANDIDATE_ORDER))
+        if extra:
+            print(f"⚠️  Runs outside the 7 candidates (plotted under their own label): {extra}")
+
+        drift = config_drift(per_run_df, configs)
+        if drift:
+            (out_dir / "config_drift_notes.md").write_text(
+                "# Config differences between runs of the same candidate (split_seed/seed ignored)\n\n"
+                + "\n".join(drift) + "\n")
+            print(f"⚠️  {len(drift)} config difference(s) within candidates -- see config_drift_notes.md")
 
     # --- trace plots (metrics.csv) ---
+    if args.scatter_only:
+        print(f"\nWrote outputs to {out_dir}:")
+        for f in sorted(out_dir.glob("*")):
+            print(f"  - {f.name}")
+        return
     traces = load_traces(per_run_df, configs)
     if traces.empty:
         print("No metrics.csv traces found; skipping trace plots")
@@ -473,14 +539,16 @@ def main():
         colors = {c: scat.get_color(c, fallback) for c in cands}
         mf = args.min_run_fraction
 
-        plot_convergence(traces, out_dir, cands, names, colors, mf)
-        plot_signed_errors(traces, out_dir, cands, names, colors, mf)
-        plot_rot_vs_trans_at_best_epoch(traces, out_dir, cands, names, colors)
-        plot_overfitting_ratio(traces, out_dir, cands, names, colors, mf)
+        if not args.gates_only:
+            plot_convergence(traces, out_dir, cands, names, colors, mf)
+            plot_signed_errors(traces, out_dir, cands, names, colors, mf)
+            plot_rot_vs_trans_at_best_epoch(traces, out_dir, cands, names, colors)
+            plot_overfitting_ratio(traces, out_dir, cands, names, colors, mf)
         plot_gate_trajectories(traces, out_dir, cands, names, colors, mf)
         plot_gate_saturation(traces, out_dir, cands, names, colors)
         plot_gate_level_heatmap(traces, out_dir, cands, names)
-        write_trace_summary(traces, out_dir, cands)
+        if not args.gates_only:
+            write_trace_summary(traces, out_dir, cands)
 
     print(f"\nWrote outputs to {out_dir}:")
     for f in sorted(out_dir.glob("*")):

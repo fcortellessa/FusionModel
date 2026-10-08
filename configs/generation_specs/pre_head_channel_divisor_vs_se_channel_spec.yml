@@ -1,0 +1,42 @@
+# Tests model.pre_head_channel_divisor (base_model/pose_estimation_model.py) on
+# se_channel_gated_concat -- see head_bottleneck_rank_vs_se_channel_spec.yml for the shared
+# motivation (the head's first layer dominates the model's parameters).
+#
+# Unlike head_bottleneck_rank (constrains the RANK of the head's mapping, sees every input) and
+# unlike model.pre_head_grid_size (shrinks the head's input via SPATIAL pooling -- already tried,
+# made accuracy worse), this shrinks the fused vector via the CHANNEL axis: an extra 1x1 conv per
+# pyramid scale (P3:32->8, P4:64->16, P5:128->32 at divisor=4) applied after the existing stride
+# convs, leaving every spatial position (20x20/10x10/5x5) intact. fused_dim drops from 44800 to
+# 11200 at divisor=4, so every downstream Linear layer (head, and any gate that reads scale_dims)
+# shrinks proportionally.
+#
+# Compared against se_channel_gated_concat (plain, divisor unset) -- runs/final_ablation's existing
+# 5-seed runs -- not regenerated here.
+template_config: configs/generated/q2_ScalarVsChannelwise_gradclip/001_seed-46_fusion-gated_concat_3959bf.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+
+grid:
+  data.split_seed: [36, 37, 38]
+
+variants:
+  - name: se_channel_gated_concat_pre_head_channel_divisor4
+    overrides:
+      model.fusion: se_channel_gated_concat
+      model.dual_fusion: false
+      model.pre_head_channel_divisor: 4
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
