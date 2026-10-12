@@ -1,0 +1,5 @@
+Gate behaviour: 50 run rows from real per-sample TEST-set inference (scripts/evaluate/plot_gate_distributions.py --split test --rebuild_split, written to analysis_fusion/divisor_ablation/6_gate_behaviour/test_set_gate_inference/gate_distribution_stats_test.csv), 0 rows falling back to the older gate_weights_best_epoch.pt snapshot (per-sample VAL gate weights at the best checkpoint) where a run has no live-test entry. See gate_table_per_run.csv's 'source' column per row.
+
+The scale breakdown (gate_per_scale_stream / gate_scale_breakdown.csv) only covers rows sourced from the .pt snapshot -- the live-test CSV doesn't carry a per-channel tensor, only aggregated per-stream stats, so no P3/P4/P5 split is available for those rows.
+
+Methods with NO gate data in the LCD seed sets (neither source -- no gate concept, or the run predates both the .pt checkpointing feature and Task 2's live-test coverage): ['concat', 'se_gated_cross_attention']

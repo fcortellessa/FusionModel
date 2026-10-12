@@ -43,13 +43,22 @@ FUSION_REGISTRY = {
     "se_channel_gated_concat": SEChannelGatedConcatFusion,
     "se_channel_gated_concat_renorm": SEChannelGatedConcatRenormFusion,
     "channelwise_gated_concat": ChannelWiseGatedConcatFusion,
+    # "channelwise_gated_concat" is a legacy misnomer (it's actually an element-wise
+    # gate, not per-channel -- see CLAUDE.md). The key is frozen for backward
+    # compatibility with existing configs/checkpoints; use "elementwise_gated_concat"
+    # for new configs instead.
+    "elementwise_gated_concat": ChannelWiseGatedConcatFusion,
     "channelwise_gated_concat_wide": ChannelWiseGatedConcatWideFusion,
     "channelwise_gated_concat_local": ChannelWiseGatedConcatLocalFusion,
+    # Same legacy-misnomer situation as "channelwise_gated_concat" above -- frozen
+    # for backward compatibility; use "elementwise_gated_concat_local" for new configs.
+    "elementwise_gated_concat_local": ChannelWiseGatedConcatLocalFusion,
     "channelwise_gated_concat_hybrid": ChannelWiseGatedConcatHybridFusion,
     "residual_gated_concat": ResidualGatedConcatFusion,
     "channelwise_residual_gated_concat": ChannelWiseResidualGatedConcatFusion,
     "channelwise_residual_gated_concat_wide": ChannelWiseResidualGatedConcatWideFusion,
     "channelwise_residual_gated_concat_local": ChannelWiseResidualGatedConcatLocalFusion,
+    "elementwise_residual_gated_concat_local": ChannelWiseResidualGatedConcatLocalFusion,
     "channelwise_residual_gated_concat_hybrid": ChannelWiseResidualGatedConcatHybridFusion,
     "gated_concat_floor": GatedConcatFloorFusion,
     "channelwise_gated_concat_floor": ChannelWiseGatedConcatFloorFusion,

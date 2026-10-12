@@ -5,18 +5,17 @@ fixed_overrides:
   model.backbone_trainable: true
   model.rot_scaling_factor: 1.0
   training.lr_backbone: 5e-05
-  training.seed: 50
   training.early_stopping.enabled: true
   training.early_stopping.patience: 10
   training.early_stopping.min_delta: 0.01
   training.early_stopping.smoothing_alpha: 0.3
+  training.seed: 50
 
 grid:
-  data.split_seed: [37, 38, 39, 40]
-  training.checkpoint_selection.type: ["per_head_pareto","combined_loss"]
+  data.split_seed: [41, 42, 43, 44, 45]
 
 variants:
-  - name: se_gated_cross_attention
+  - name: fusion
     overrides:
       model.fusion: se_gated_cross_attention
       model.dual_fusion: false
@@ -26,3 +25,53 @@ variants:
       model.mlp_trans_1: 1024
       model.mlp_trans_2: 1024
       model.mlp_trans_3: 16
+      model.streams: [rgb_image, digit_image]
+
+  # se_channel_gated_concat is this repo's best non-cross-attention fusion (fixes
+  # gated_concat's gate-collapse via a fixed SE-style pooled bottleneck instead of a
+  # learned Linear(44800->32) one -- see se_channel_gated_concat_vs_gated_concat_spec.yml).
+  # Same seeds/split grid, same head sizing, same everything else as the `fusion` variant
+  # above except model.fusion -- so this is a direct, matched comparison of cross-attention
+  # vs. the best established channel-gating alternative.
+  - name: se_channel_gated_concat
+    overrides:
+      model.fusion: se_channel_gated_concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+      model.streams: [rgb_image, digit_image]
+
+  # se_gated_cross_attention hard-requires exactly 2 streams (visual query, tactile
+  # key/value) and raises ValueError with 1 -- there's nothing to cross-attend to or gate
+  # with only one stream. `concat` is the right fallback here: with num_streams=1 it's a
+  # pure identity passthrough (confirmed via a forward-pass smoke test), adding zero extra
+  # learned parameters -- so these arms isolate "how good is this modality alone" without
+  # any spurious gating machinery. Every other override is kept identical to the `fusion`
+  # variant above (dual_fusion, head sizing) so head capacity isn't a confound.
+  - name: tactile_only
+    overrides:
+      model.fusion: concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+      model.streams: [digit_image]
+
+  - name: rgb_only
+    overrides:
+      model.fusion: concat
+      model.dual_fusion: false
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16
+      model.streams: [rgb_image]

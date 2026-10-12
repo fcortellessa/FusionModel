@@ -1,0 +1,12 @@
+{
+  "concat": "#1f77b4",
+  "gated": "#ff7f0e",
+  "gated_concat": "#2ca02c",
+  "dual_gated_concat": "#7f7f7f",
+  "residual_gated_concat": "#8c564b",
+  "se_channel_gated_concat": "#9467bd",
+  "dual_se_channel_gated_concat": "#e377c2",
+  "elementwise_gated_concat": "#d62728",
+  "channelwise_residual_gated_concat_local": "#bcbd22",
+  "se_gated_cross_attention": "#17becf"
+}

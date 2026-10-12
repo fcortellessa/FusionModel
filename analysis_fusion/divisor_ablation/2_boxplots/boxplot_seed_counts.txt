@@ -1,0 +1,17 @@
+Seed/sample counts pooled into each box (abs-metric figure; identical pooling used for signed):
+concat/divisor_4: n_seeds=6, n_samples=1950
+concat/no_divisor: n_seeds=10, n_samples=3257
+gated/divisor_4: n_seeds=10, n_samples=3257
+gated/no_divisor: n_seeds=5, n_samples=1626
+gated_concat/divisor_4: n_seeds=10, n_samples=3257
+gated_concat/no_divisor: n_seeds=5, n_samples=1626
+dual_gated_concat/no_divisor: n_seeds=5, n_samples=1626
+residual_gated_concat/no_divisor: n_seeds=5, n_samples=1626
+se_channel_gated_concat/divisor_4: n_seeds=9, n_samples=2931
+se_channel_gated_concat/no_divisor: n_seeds=5, n_samples=1626
+dual_se_channel_gated_concat/divisor_4: n_seeds=10, n_samples=3257
+elementwise_gated_concat/divisor_4: n_seeds=5, n_samples=1626
+elementwise_gated_concat/no_divisor: n_seeds=5, n_samples=1626
+channelwise_residual_gated_concat_local/no_divisor: n_seeds=5, n_samples=1626
+se_gated_cross_attention/divisor_4: n_seeds=7, n_samples=2279
+se_gated_cross_attention/no_divisor: n_seeds=10, n_samples=3257

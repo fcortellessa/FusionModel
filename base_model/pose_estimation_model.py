@@ -9,12 +9,6 @@ Key components:
 - Pose Head: The head of the model takes the fused features and outputs the predicted pose. Different head architectures can be used depending on the desired output format for the pose.
 The forward pass of the model processes each input stream through its respective backbone, extracts and processes the P3, P4, P5 features, fuses them, and then passes the fused features through the head to get the final pose prediction.
 
-
-ToDo:
-1. Learning Rate Scheduler: Implement a learning rate scheduler that adjusts the learning rate during training based on validation performance or a predefined schedule. This can help improve convergence and prevent overfitting.
-2. Dropout and Regularization: Add dropout layers and other regularization techniques to the model to prevent overfitting, especially when training on smaller datasets.
-3. Change optimizer: Experiment with different optimizers (e.g., AdamW, RMSprop) to see if they improve training stability and convergence.
-
 """
 import os
 import sys
@@ -42,30 +36,6 @@ class PoseEstimationNet(nn.Module):
                  spatial_grid_size=(10, 10), gate_init_prob=None, backbone_trainable=False, pre_head_grid_size=None,
                  pre_head_layernorm=False, head_bottleneck_rank=None, pre_head_channel_divisor=None):
         super().__init__()
-
-        # Optional additional AdaptiveAvgPool2d applied to P3/P4/P5 (all three, same
-        # target size) right before flattening into the fused vector, for the 1D
-        # pipeline only (forward_single_stream) -- shrinks the bottleneck feeding the
-        # prediction heads, whose first layer is otherwise a single dense projection
-        # out of the full flattened size (e.g. rot_head's first layer is ~183.5M of
-        # its ~192.9M total parameters at the current fixed 20x20/10x10/5x5 sizes).
-        #
-        # This is a NEW, separate mechanism -- NOT a fix/wiring of the existing
-        # `spatial_grid_size` parameter above. spatial_grid_size is referenced only
-        # in the (dead, unreachable) 2D-fusion fused_dim calculation further below,
-        # which itself refers to `self.spatial_grid_size`, an attribute that is
-        # never actually assigned anywhere in this class -- so spatial_grid_size has
-        # never affected this (1D pipeline / gated_concat family) forward path at
-        # all, regardless of its config value. Every existing config sets
-        # spatial_grid_size: 10 without it ever doing anything for gated_concat/
-        # channelwise_gated_concat*; reusing that key for this new, real mechanism
-        # would silently change what "10" has always (inertly) meant. Hence a new,
-        # separate name here instead.
-        #
-        # None (default) skips the extra pooling entirely -- fused_dim stays exactly
-        # what the fixed stride convs above already produce, identical to every
-        # existing run. Accepts a single int (square grid, e.g. 6 -> AdaptiveAvgPool2d(6))
-        # or a [h, w] pair, matching spatial_grid_size's own documented convention.
         if pre_head_grid_size is None:
             self.pre_head_pool = None
         else:
@@ -75,10 +45,7 @@ class PoseEstimationNet(nn.Module):
                 pre_head_grid_size = tuple(pre_head_grid_size)
             self.pre_head_pool = nn.AdaptiveAvgPool2d(pre_head_grid_size)
 
-        # Optional low-rank factorization of the head's first Linear layer -- see
-        # MLPHead's bottleneck_rank docstring. None (default) is unchanged/backward
-        # compatible; stored here and threaded into every MLPHead(...) construction
-        # below (rot_head, trans_head/y_head/z_head).
+        # Optional low-rank factorization of the head's first Linear layer
         self.head_bottleneck_rank = head_bottleneck_rank
 
         # Optional channel reduction (1x1 conv) applied to P3/P4/P5 right before flatten,
@@ -87,16 +54,9 @@ class PoseEstimationNet(nn.Module):
         # accuracy -- see final_ablation's paired-comparison results), this shrinks it via
         # the CHANNEL axis instead, leaving every spatial position intact. Each scale's
         # post-stride-conv channel count c (P3:32, P4:64, P5:128 by default) becomes
-        # max(1, c // pre_head_channel_divisor). None (default, divisor unset) skips this
-        # entirely -- identical to every existing run/config.
+        # max(1, c // pre_head_channel_divisor). 
         self.pre_head_channel_divisor = pre_head_channel_divisor
 
-        # New, explicitly-named opt-in for actually training the backbone (see the
-        # extended comment at the freeze/unfreeze site below for why this exists
-        # separately from freeze_backbone, which stays pinned to its historical --
-        # always-frozen -- behavior for backward compatibility). Default False
-        # preserves that historical behavior exactly; True is the first time this
-        # project would ever actually fine-tune the backbone.
         self.backbone_trainable = bool(backbone_trainable)
         if freeze_backbone and self.backbone_trainable:
             raise ValueError(
@@ -107,12 +67,6 @@ class PoseEstimationNet(nn.Module):
                 "freeze_backbone=False when using backbone_trainable=True."
             )
 
-        # Optional initial sigmoid gate output for the gated_concat fusion family (see
-        # fusion/gated_concat.py's _sigmoid_init_bias). None (default) leaves every
-        # accepting fusion class at its own default of 0.5, identical to the previous
-        # zero-bias init -- fully backward compatible. Ignored by fusion types that
-        # don't expose a gate_init_prob kwarg (concat, attention, the softmax/sigmoid
-        # weighted-sum "gated" family, spatial_gated_2d).
         self.gate_init_prob = gate_init_prob
 
         if dual_fusion and rotation_parametrisation == "se3_direct":

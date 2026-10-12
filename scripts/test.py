@@ -517,6 +517,20 @@ def plot_results_plotly(results_directory, csv_results, run_label, timestamp):
     print(f"Saved interactive HTML plot to {html_path}")
 
 
+def run_checkpoint_evaluation(cfg, model_path, results_dir, device, run_label, plot_formats):
+    """Run inference + metrics + plots for a single checkpoint, writing into results_dir."""
+    os.makedirs(results_dir, exist_ok=True)
+    print(f"Loading weights from: {model_path}")
+    print(f"Saving outputs to: {results_dir}\n")
+
+    infer_and_evaluate(cfg, model_path, None, results_dir, device)
+
+    csv_files = [os.path.join(results_dir, f) for f in os.listdir(results_dir) if f.endswith(".csv")]
+    if csv_files:
+        latest_csv = max(csv_files, key=os.path.getmtime)
+        dispatch_plots(results_dir, pd.read_csv(latest_csv), run_label, plot_formats)
+
+
 def dispatch_plots(results_directory, csv_results, run_label, formats):
     # Parse choice combinations
     requested_formats = set()
@@ -602,18 +616,25 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"Could not locate a valid checkpoint file for run: {target_folder}")
 
     os.makedirs(results_dir, exist_ok=True)
-    
+
     cfg = load_config(cfg_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     run_label = build_run_label(cfg, target_folder, cfg_path)
     print(f"Using device: {device}")
     print(f"Run: {run_label}")
-    print(f"Loading weights from: {model_path}")
-    print(f"Saving outputs to: {results_dir}\n")
 
-    infer_and_evaluate(cfg, model_path, None, results_dir, device)
+    run_checkpoint_evaluation(cfg, model_path, results_dir, device, run_label, args.plot_format)
 
-    csv_files = [os.path.join(results_dir, f) for f in os.listdir(results_dir) if f.endswith(".csv")]
-    if csv_files:
-        latest_csv = max(csv_files, key=os.path.getmtime)
-        dispatch_plots(results_dir, pd.read_csv(latest_csv), run_label, args.plot_format)
+    # training.checkpoint_selection.type: "both" saves a second checkpoint
+    # (checkpoint_best_per_head.pth, selected by per-head Pareto improvement)
+    # alongside checkpoint_best.pth (selected by combined loss) -- evaluate it
+    # too, into its own subdirectory, so neither selection's test results are
+    # silently dropped.
+    per_head_checkpoint = os.path.join(os.path.dirname(model_path), "checkpoint_best_per_head.pth")
+    if os.path.exists(per_head_checkpoint) and os.path.abspath(per_head_checkpoint) != os.path.abspath(model_path):
+        per_head_results_dir = os.path.join(results_dir, "per_head")
+        print(f"\nFound checkpoint_best_per_head.pth -- evaluating separately into {per_head_results_dir}\n")
+        run_checkpoint_evaluation(
+            cfg, per_head_checkpoint, per_head_results_dir, device,
+            run_label + " | checkpoint=per_head", args.plot_format,
+        )

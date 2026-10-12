@@ -1,0 +1,62 @@
+[
+  {
+    "candidate": "se_gated_cross_attention",
+    "pair_name": "training.checkpoint_selection.type: per_head_pareto \u2192 combined_loss",
+    "param_name": "training.checkpoint_selection.type",
+    "value1": "per_head_pareto",
+    "value2": "combined_loss",
+    "run1_folder": "/home/MA_Flavia/Documents/FusionModel/runs/se_gca/20261008_104320_bs16_se_gated_cross_attention",
+    "run2_folder": "/home/MA_Flavia/Documents/FusionModel/runs/se_gca/20261008_121232_bs16_se_gated_cross_attention",
+    "run1_name": "20261008_104320_bs16_se_gated_cross_attention",
+    "run2_name": "20261008_121232_bs16_se_gated_cross_attention",
+    "run1_trans_mm": 0.49746378659721874,
+    "run2_trans_mm": 0.5756597794526037,
+    "run1_rot_deg": 0.3673330500075851,
+    "run2_rot_deg": 0.47495377855139326
+  },
+  {
+    "candidate": "se_gated_cross_attention",
+    "pair_name": "training.checkpoint_selection.type: per_head_pareto \u2192 combined_loss",
+    "param_name": "training.checkpoint_selection.type",
+    "value1": "per_head_pareto",
+    "value2": "combined_loss",
+    "run1_folder": "/home/MA_Flavia/Documents/FusionModel/runs/se_gca/20261008_104320_bs16_se_gated_cross_attention",
+    "run2_folder": "/home/MA_Flavia/Documents/FusionModel/runs/se_gca/20261008_171412_bs16_se_gated_cross_attention",
+    "run1_name": "20261008_104320_bs16_se_gated_cross_attention",
+    "run2_name": "20261008_171412_bs16_se_gated_cross_attention",
+    "run1_trans_mm": 0.49746378659721874,
+    "run2_trans_mm": 0.5756597794526037,
+    "run1_rot_deg": 0.3673330500075851,
+    "run2_rot_deg": 0.47495377855139326
+  },
+  {
+    "candidate": "se_gated_cross_attention",
+    "pair_name": "training.checkpoint_selection.type: combined_loss \u2192 per_head_pareto",
+    "param_name": "training.checkpoint_selection.type",
+    "value1": "combined_loss",
+    "value2": "per_head_pareto",
+    "run1_folder": "/home/MA_Flavia/Documents/FusionModel/runs/se_gca/20261008_121232_bs16_se_gated_cross_attention",
+    "run2_folder": "/home/MA_Flavia/Documents/FusionModel/runs/se_gca/20261008_141420_bs16_se_gated_cross_attention",
+    "run1_name": "20261008_121232_bs16_se_gated_cross_attention",
+    "run2_name": "20261008_141420_bs16_se_gated_cross_attention",
+    "run1_trans_mm": 0.5756597794526037,
+    "run2_trans_mm": 0.49746378659721874,
+    "run1_rot_deg": 0.47495377855139326,
+    "run2_rot_deg": 0.3673330500075851
+  },
+  {
+    "candidate": "se_gated_cross_attention",
+    "pair_name": "training.checkpoint_selection.type: per_head_pareto \u2192 combined_loss",
+    "param_name": "training.checkpoint_selection.type",
+    "value1": "per_head_pareto",
+    "value2": "combined_loss",
+    "run1_folder": "/home/MA_Flavia/Documents/FusionModel/runs/se_gca/20261008_141420_bs16_se_gated_cross_attention",
+    "run2_folder": "/home/MA_Flavia/Documents/FusionModel/runs/se_gca/20261008_171412_bs16_se_gated_cross_attention",
+    "run1_name": "20261008_141420_bs16_se_gated_cross_attention",
+    "run2_name": "20261008_171412_bs16_se_gated_cross_attention",
+    "run1_trans_mm": 0.49746378659721874,
+    "run2_trans_mm": 0.5756597794526037,
+    "run1_rot_deg": 0.3673330500075851,
+    "run2_rot_deg": 0.47495377855139326
+  }
+]

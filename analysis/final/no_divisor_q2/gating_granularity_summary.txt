@@ -1,0 +1,139 @@
+==========================================================================================
+Q2: GATING GRANULARITY ANALYSIS - SCALAR VS CHANNEL-WISE
+==========================================================================================
+
+
+================================================================================
+FUSION ARCHITECTURE: CHANNELWISE_GATED_CONCAT_LOCAL
+================================================================================
+
+  GATING TYPE: CHANNELWISE
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 4.50000 ± 1.67110
+    Val Abs Rotation X (deg): 0.6614 ± 0.0395
+    Val Abs Translation (m):  0.00056 ± 0.00004
+
+    Seeds Used: [50]
+
+================================================================================
+FUSION ARCHITECTURE: CHANNELWISE_RESIDUAL_GATED_CONCAT_LOCAL
+================================================================================
+
+  GATING TYPE: CHANNELWISE
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 2.90503 ± 0.95441
+    Val Abs Rotation X (deg): 0.6802 ± 0.0720
+    Val Abs Translation (m):  0.00060 ± 0.00006
+
+    Seeds Used: [50]
+
+================================================================================
+FUSION ARCHITECTURE: CONCAT
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): 0.26532 ± 3.22380
+    Val Abs Rotation X (deg): 0.5826 ± 0.0613
+    Val Abs Translation (m):  0.00063 ± 0.00007
+
+    Seeds Used: [50]
+
+================================================================================
+FUSION ARCHITECTURE: GATED
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): -0.38410 ± 0.90512
+    Val Abs Rotation X (deg): 0.5689 ± 0.0590
+    Val Abs Translation (m):  0.00062 ± 0.00004
+
+    Seeds Used: [50]
+
+================================================================================
+FUSION ARCHITECTURE: GATED_CONCAT
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): -0.91738 ± 1.08528
+    Val Abs Rotation X (deg): 0.5467 ± 0.0553
+    Val Abs Translation (m):  0.00061 ± 0.00004
+
+    Seeds Used: [50]
+
+================================================================================
+FUSION ARCHITECTURE: GATED_CROSS_ATTENTION
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): -2.64793 ± 0.58109
+    Val Abs Rotation X (deg): 0.4693 ± 0.0512
+    Val Abs Translation (m):  0.00055 ± 0.00004
+
+    Seeds Used: [50]
+
+================================================================================
+FUSION ARCHITECTURE: RESIDUAL_GATED_CONCAT
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): -1.13131 ± 0.74601
+    Val Abs Rotation X (deg): 0.5726 ± 0.0555
+    Val Abs Translation (m):  0.00064 ± 0.00004
+
+    Seeds Used: [50]
+
+================================================================================
+FUSION ARCHITECTURE: SE_CHANNEL_GATED_CONCAT
+================================================================================
+
+  GATING TYPE: CHANNELWISE
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): -0.72973 ± 0.83678
+    Val Abs Rotation X (deg): 0.5319 ± 0.0430
+    Val Abs Translation (m):  0.00059 ± 0.00003
+
+    Seeds Used: [50]
+
+================================================================================
+FUSION ARCHITECTURE: SE_GATED_CROSS_ATTENTION
+================================================================================
+
+  GATING TYPE: SCALAR
+  ------------------------------------------------------------
+    Val Loss (Last 5 Epochs): -1.83427 ± 2.94521
+    Val Abs Rotation X (deg): 0.4834 ± 0.0523
+    Val Abs Translation (m):  0.00056 ± 0.00007
+
+    Seeds Used: [50]
+
+==========================================================================================
+INTERPRETATION GUIDE
+==========================================================================================
+
+GATE SPECIALIZATION (Q2.2):
+  - Higher std/specialization = gates becoming more extreme (bimodal)
+  - Lower std/specialization = gates remain uncertain (near 0.5)
+  - Increasing trend = learning to specialize during training
+  - Flat trend = gates remain uncertain throughout
+
+GATING WEIGHTS DISTRIBUTION (Q2.1):
+  Scalar Gating:
+    - Single value per stream (RGB or Tactile)
+    - Boxplot shows spread across seeds/epochs
+    - Higher value = more trust in that stream
+
+  Channel-wise Gating:
+    - Multiple values per stream (one per channel)
+    - Histogram/violin shows per-channel trust distribution
+    - Spread indicates selective channel emphasis
+
+TASK PERFORMANCE (Q2.3):
+  - Scalar gating typically: faster convergence, potentially lower final performance
+  - Channel-wise gating typically: slower convergence, better selectivity
+  - Does specialization = higher performance?
+  - Which gating type balances rotation vs translation better?

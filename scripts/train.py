@@ -1095,10 +1095,7 @@ def train_loop(
                 except Exception as exc:
                     logger.debug(f"Task-weighting epoch update skipped: {exc}")
 
-            # checkpoint_selector.update() is side-effecting (advances its EMA + best
-            # state) -- call it at most once per epoch regardless of which mode is
-            # active, so "both" and "per_head_pareto" see the exact same pareto
-            # trajectory as each other.
+            # checkpoint_selector.update() is side-effecting (advances its EMA + best state)
             pareto_is_best = (
                 checkpoint_selector.update(val_avg["abs_rot_x"], val_avg["abs_trans"])
                 if checkpoint_selector is not None
