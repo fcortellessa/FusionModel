@@ -21,7 +21,6 @@ Usage:
         --noise_deg 0.1
 """
 import argparse
-import os
 import sys
 
 import numpy as np

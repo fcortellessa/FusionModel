@@ -1,0 +1,23 @@
+# Single-modality baselines for plain `concat` + pre_head_channel_divisor=4, seeds 36-45.
+# Template = the two-stream concat divisor4 config (divisor4_missing_methods/029_concat_...):
+# only model.streams differs from that arm, so these are directly comparable to the two-stream
+# concat divisor4 runs (same divisor, MLP sizes, early stopping 0.01/0.3, checkpoint_selection both).
+# With one stream `concat` is an identity: the fused vector is just that stream's features.
+template_config: configs/generated/divisor4_missing_methods/029_concat_divisor4_split_seed-43_ae91bc.yml
+
+fixed_overrides:
+  model.fusion: concat
+  model.dual_fusion: false
+  model.pre_head_channel_divisor: 4
+
+grid:
+  data.split_seed: [36, 37, 38, 39, 40, 41, 42, 43, 44, 45]
+
+variants:
+  - name: concat_rgb_only_divisor4
+    overrides:
+      model.streams: [rgb_image]
+
+  - name: concat_digit_only_divisor4
+    overrides:
+      model.streams: [digit_image]

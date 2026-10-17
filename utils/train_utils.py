@@ -345,7 +345,9 @@ class _MultiplierOptimizer(torch.optim.Optimizer):
 
 
 class HeadLRDecayManager:
-    """Per-head ReduceLROnPlateau: decays each head's LR off that head's own best-ever val loss."""
+    """Per-head ReduceLROnPlateau: decays each head's LR off that head's own best-ever
+    validation metric (val_abs_rot_x / val_abs_y / val_abs_z / val_abs_trans), optionally
+    EMA-smoothed via head_lr_decay.smoothing_alpha."""
 
     def __init__(self, head_lr_decay_cfg, optimizer, param_groups_by_name):
         """
@@ -369,6 +371,16 @@ class HeadLRDecayManager:
         min_delta = float(head_lr_decay_cfg.get("min_delta", 0.0))
         min_lr = head_lr_decay_cfg.get("min_lr", None)
         min_lr_mult_legacy = float(head_lr_decay_cfg.get("min_lr_mult", 0.05))
+        # EMA factor applied to each head's val_abs_* metric before it is handed to that
+        # head's ReduceLROnPlateau -- same smoothing_alpha convention as
+        # PerHeadCheckpointSelector / PerHeadEarlyStoppingManager. Default 1.0 = no
+        # smoothing (ema == current value every epoch), reproducing the previous raw
+        # per-epoch stepping exactly. Smaller alpha = more smoothing (0.3 ~ a 3-4 epoch
+        # window), so one lucky low epoch can't become the best-ever value every later
+        # epoch must beat, which otherwise triggers spurious LR decays.
+        self.smoothing_alpha = float(head_lr_decay_cfg.get("smoothing_alpha", 1.0))
+        if not 0.0 < self.smoothing_alpha <= 1.0:
+            raise ValueError(f"head_lr_decay.smoothing_alpha must be in (0, 1], got {self.smoothing_alpha}")
 
         self.optimizer = optimizer
         self.param_groups_by_name = param_groups_by_name
@@ -391,11 +403,13 @@ class HeadLRDecayManager:
         self.group_to_head = {v: k for k, v in head_to_group.items()}
         self.plateau_schedulers = {}
         self.multiplier_views = {}
+        self.ema = {}
         for head_key, group_name in head_to_group.items():
             if group_name not in param_groups_by_name:
                 continue
             view = _MultiplierOptimizer()
             self.multiplier_views[head_key] = view
+            self.ema[head_key] = None
             # The shadow view's "lr" is a pure multiplier starting at 1.0. When 'min_lr' is
             # given (absolute LR, matching GlobalPlateauLRManager), convert it to the
             # equivalent multiplier floor for this head's own base LR; otherwise fall back
@@ -432,6 +446,7 @@ class HeadLRDecayManager:
             head_key: {
                 "scheduler": sched.state_dict(),
                 "multiplier_lr": float(self.multiplier_views[head_key].param_groups[0]["lr"]),
+                "ema": self.ema.get(head_key),
             }
             for head_key, sched in self.plateau_schedulers.items()
         }
@@ -446,6 +461,8 @@ class HeadLRDecayManager:
                 continue
             sched.load_state_dict(head_state["scheduler"])
             view.param_groups[0]["lr"] = head_state["multiplier_lr"]
+            # .get: checkpoints written before smoothing existed have no "ema" entry.
+            self.ema[head_key] = head_state.get("ema")
 
     def update(self, train_metrics, val_metrics, current_lr_scale, logger=None):
         """
@@ -475,13 +492,22 @@ class HeadLRDecayManager:
         for head_key, scheduler in self.plateau_schedulers.items():
             view = self.multiplier_views[head_key]
             old_mult = float(view.param_groups[0]["lr"])
-            scheduler.step(val_by_head[head_key])
+            current = float(val_by_head[head_key])
+            if self.ema[head_key] is None:
+                self.ema[head_key] = current
+            else:
+                self.ema[head_key] = (
+                    self.smoothing_alpha * current + (1.0 - self.smoothing_alpha) * self.ema[head_key]
+                )
+            smoothed = self.ema[head_key]
+            scheduler.step(smoothed)
             new_mult = float(view.param_groups[0]["lr"])
             if new_mult < old_mult and logger:
                 group_name = self.head_to_group[head_key]
                 logger.info(
                     f"head_lr_reduce head={head_key} group={group_name} "
-                    f"old_mult={old_mult:.6f} new_mult={new_mult:.6f} val_head={val_by_head[head_key]:.6f} "
+                    f"old_mult={old_mult:.6f} new_mult={new_mult:.6f} val_head={current:.6f} "
+                    f"val_head_smoothed={smoothed:.6f} "
                     f"num_bad_epochs={scheduler.num_bad_epochs}"
                 )
 

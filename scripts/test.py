@@ -23,7 +23,6 @@ from data_processing.dataloader_preprocessed import get_test_dataloader
 from data_processing.preprocess_data import ensure_test_split_current
 from utils.normalization import canonicalize_translation_norm_stats
 from utils.utils import load_checkpoint, load_config, get_optimizer, resolve_data_root, resolve_split_seed
-from utils.train_utils import _build_named_param_groups
 
 REPO_ROOT = parent_dir
 
@@ -166,7 +165,7 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     avg_inference_per_sample_ms = avg_inference_ms / config["training"]["batch_size"]
 
     print(f"\n{'='*60}")
-    print(f"INFERENCE TIMING STATISTICS")
+    print("INFERENCE TIMING STATISTICS")
     print(f"{'='*60}")
     print(f"Avg inference time per batch: {avg_inference_ms:.3f}ms ± {std_inference_ms:.3f}ms")
     print(f"Avg inference time per sample: {avg_inference_per_sample_ms:.3f}ms")

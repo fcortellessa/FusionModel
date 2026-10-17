@@ -24,7 +24,7 @@ parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.insert(0, parent_dir)
 
 from base_model.yolo_trunk import load_yolo_trunk, get_p345_indices, align_channels, extract_features_raw
-from base_model.mlp_head import MLPHead, PoseHead_with_quaternion, PoseHead_with_2D_unitVector, SE3_lie_group_PoseHead, PoseHead_with_angle, PoseHead_with_lie_algebra, SE3_lie_algebra_direct_PoseHead
+from base_model.mlp_head import MLPHead, SE3_lie_algebra_direct_PoseHead
 from fusion.registry import build_fusion
 from fusion.adapters import TaskSpecificResidualGate, TaskSpecificChannelAttention
 

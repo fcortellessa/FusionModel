@@ -9,7 +9,6 @@ sys.path.insert(0, '.')
 
 from utils.flops_utils import compute_inference_flops
 from base_model.pose_estimation_model import PoseEstimationNet
-import torch
 
 print("\nTesting FLOPs computation...")
 print("=" * 60)
@@ -26,7 +25,7 @@ try:
 
     # Test with batch_size=32
     stats = compute_inference_flops(model, batch_size=32, device='cpu')
-    print(f"✓ FLOPs computed successfully")
+    print("✓ FLOPs computed successfully")
     print()
     print(f"  GFLOPs/sample:  {stats['gflops_per_sample']:.3f}")
     print(f"  GFLOPs/batch:   {stats['gflops_per_batch']:.3f}")
@@ -38,7 +37,7 @@ try:
     print("=" * 60)
 
 except Exception as e:
-    print(f"✗ Test failed with error:")
+    print("✗ Test failed with error:")
     print(f"  {type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()

@@ -11,7 +11,6 @@ import random
 import tqdm
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PARENT_DIR = CURRENT_DIR.parent

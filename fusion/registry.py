@@ -9,6 +9,12 @@ from .gated import ARGatePlusFusion, SimpleGatedFusion, GatedSoftmaxFusion, Gate
 from .attention import AttentionFusion
 from .spatial_gated import SpatialGatedFusion2D
 from .gated_cross_attention import GatedCrossAttentionFusion, SEGatedCrossAttentionFusion
+from .gated_cross_attention_2d import (
+    GatedCrossAttention2DFusion,
+    SEGatedCrossAttention2DMapFusion,
+    SEGatedCrossAttention2DNoTactilePosFusion,
+    SEGatedCrossAttention2DPoolFusion,
+)
 from .gated_concat import (
     ChannelWiseGatedConcatFloorFusion,
     ChannelWiseGatedConcatFusion,
@@ -38,6 +44,10 @@ FUSION_REGISTRY = {
     "spatial_gated_2d": SpatialGatedFusion2D,
     "gated_cross_attention": GatedCrossAttentionFusion,
     "se_gated_cross_attention": SEGatedCrossAttentionFusion,
+    "se_gated_cross_attention_2d": SEGatedCrossAttention2DMapFusion,
+    "gated_cross_attention_2d": GatedCrossAttention2DFusion,
+    "se_gated_cross_attention_2d_pool": SEGatedCrossAttention2DPoolFusion,
+    "se_gated_cross_attention_2d_notacpos_onlyRGBposenc": SEGatedCrossAttention2DNoTactilePosFusion,
     "gated_concat": GatedConcatFusion,
     "scale_gated_concat": ScaleGatedConcatFusion,
     "se_channel_gated_concat": SEChannelGatedConcatFusion,

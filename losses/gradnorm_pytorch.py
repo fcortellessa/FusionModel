@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import sys
 from functools import partial, lru_cache
-from typing import NamedTuple
 
 try:
     from functools import cache
@@ -42,10 +41,10 @@ import torch
 import torch.distributed as dist
 from torch.autograd import grad
 import torch.nn.functional as F
-from torch import nn, einsum, tensor, Tensor
-from torch.nn import Module, ModuleList, Parameter
+from torch import nn, tensor, Tensor
+from torch.nn import Module, Parameter
 
-from einops import rearrange, repeat
+from einops import repeat
 
 from accelerate import Accelerator
 
@@ -130,7 +129,7 @@ class GradNormLossWeighter(Module):
         self.has_restoring_force = self.alpha > 0
 
         if exists(grad_norm_parameters):
-            assert isinstance(grad_norm_parameters, nn.Parameter), f'`grad_norm_parameters` needs to be a `Parameter` in which it receives gradients from all losses'
+            assert isinstance(grad_norm_parameters, nn.Parameter), '`grad_norm_parameters` needs to be a `Parameter` in which it receives gradients from all losses'
 
         self._grad_norm_parameters = [grad_norm_parameters] # hack
 

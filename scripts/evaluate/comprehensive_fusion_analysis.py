@@ -26,7 +26,6 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

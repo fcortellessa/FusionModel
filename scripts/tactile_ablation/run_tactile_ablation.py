@@ -86,7 +86,7 @@ def generate_ablation_variants(
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
     
     print(f"\n{'='*80}")
-    print(f"Tactile Augmentation Ablation Study")
+    print("Tactile Augmentation Ablation Study")
     print(f"{'='*80}")
     print(f"Input: {input_path}")
     print(f"Seed: {seed}")

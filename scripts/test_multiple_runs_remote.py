@@ -26,7 +26,7 @@ IGNORE_FOLDERS = ["results"]
 # ==============================================================================
 
 def run_inference_on_folder(folder_path):
-    print(f"\n" + "="*80)
+    print("\n" + "="*80)
     print(f"🚀 Processing: {folder_path}")
     print("="*80 + "\n")
     

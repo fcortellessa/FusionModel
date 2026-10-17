@@ -8,7 +8,6 @@ Analyzes: gate specialization, weight distributions, task performance trade-offs
 import os
 import glob
 import argparse
-import re
 import yaml
 import pandas as pd
 import numpy as np

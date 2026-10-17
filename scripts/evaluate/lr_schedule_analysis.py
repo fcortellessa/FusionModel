@@ -11,13 +11,12 @@ Compares global vs per-head learning rate schedules and their impact on:
 import os
 import glob
 import argparse
-import re
 import yaml
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Tuple
 
 try:
     import plotly.graph_objects as go

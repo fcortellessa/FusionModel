@@ -2,7 +2,6 @@
 
 import torch
 import torch.nn.functional as F
-import tqdm
 
 def absolute_pose_error(pred, target):
     """

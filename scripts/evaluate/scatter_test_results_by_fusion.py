@@ -617,7 +617,7 @@ def main():
         c for c in per_run_df["candidate"].astype(str).unique() if c not in CANDIDATE_ORDER
     )
     if other_candidates and not args.include_other_candidates:
-        print(f"\nFound but NOT included in the table above (not comparable to the 7 target candidates):")
+        print("\nFound but NOT included in the table above (not comparable to the 7 target candidates):")
         for cand in other_candidates:
             cdf = per_run_df[per_run_df["candidate"].astype(str) == cand]
             reason = "task-specific adapter enabled" if "[+task_adapter]" in cand else "outside the 7 target fusion/dual_fusion combos"

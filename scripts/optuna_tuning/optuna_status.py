@@ -18,7 +18,7 @@ from pathlib import Path
 
 import optuna
 
-from optuna_common import REPO_ROOT, resolve_path
+from optuna_common import resolve_path
 
 
 def main():
@@ -48,7 +48,7 @@ def main():
         for k, v in best.params.items():
             print(f"    {k}: {v}")
 
-        print(f"\nAll completed trials, ranked (ascending = better):")
+        print("\nAll completed trials, ranked (ascending = better):")
         for t in sorted(completed, key=lambda t: t.value):
             print(f"  #{t.number:04d}  score={t.value:.4f}")
 

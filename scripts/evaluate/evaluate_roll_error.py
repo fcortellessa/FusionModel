@@ -8,7 +8,6 @@ import os
 import sys
 import argparse
 import torch
-import json
 from tqdm import tqdm
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -17,7 +16,6 @@ sys.path.insert(0, parent_dir)
 
 from base_model.pose_estimation_model import PoseEstimationNet
 from data_processing.dataloader_preprocessed import get_dataloaders
-from losses.absolute_pose_error import absolute_pose_error_x_rot
 from scripts.train import quaternion_to_2d_unit_vector
 from utils.utils import load_config
 
@@ -116,7 +114,7 @@ def evaluate_roll(checkpoint_path, config_path, data_dir="Data/Data_split"):
     std_roll_error = all_roll_errors.std()
     median_roll_error = np.median(all_roll_errors)
     
-    print(f"\n=== Roll Error Summary ===")
+    print("\n=== Roll Error Summary ===")
     print(f"Model type: {head_type}")
     print(f"Mean roll error: {mean_roll_error:.2f}°")
     print(f"Std roll error:  {std_roll_error:.2f}°")

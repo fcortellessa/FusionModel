@@ -1,0 +1,42 @@
+# dual_fusion version of se_gated_cross_attention +divisor4: two independent
+# se_gated_cross_attention modules (own parameters), one feeding the rotation head and one the
+# translation head, instead of one shared fused vector.
+#
+# Single varying factor vs the divisor4 se_gated_cross_attention runs (seeds 36-45, see
+# configs/generated/divisor4_missing_methods/*se_gated_cross_attention_divisor4*): model.dual_fusion
+# false -> true. Everything else (divisor 4, MLP sizes, early stopping 0.01/0.3, lr_backbone,
+# rot_scaling_factor) is identical.
+#
+# training.checkpoint_selection.type: both writes checkpoint_best.pth (val loss) AND
+# checkpoint_best_per_head.pth (per-head Pareto), so this model can be compared against
+# se_gated_cross_attention's pareto checkpoint -- dual_se_channel_gated_concat has no pareto
+# checkpoint because it predates per-head checkpointing.
+template_config: configs/generated/divisor4_missing_methods/004_se_gated_cross_attention_divisor4_split_seed-36_ce57f6.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: 4
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+  training.checkpoint_selection.type: both
+
+grid:
+  data.split_seed: [36, 37, 38, 39, 40, 41, 42, 43, 44, 45]
+
+variants:
+  - name: dual_se_gated_cross_attention_divisor4
+    overrides:
+      model.fusion: se_gated_cross_attention
+      model.dual_fusion: true
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

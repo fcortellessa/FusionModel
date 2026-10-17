@@ -160,9 +160,14 @@ training:
     enabled: false
     patience: 5
     factor: 0.2
-    # min_delta: 0.0   # min absolute val-loss improvement (per head) to reset patience; filters noise
+    # min_delta: 0.0   # RELATIVE improvement fraction (0.01 == 1%) of that head's metric to reset patience
+    # smoothing_alpha: 1.0   # EMA factor on each head's val_abs_* metric before it is compared (1.0 = raw, no
+    #                        # smoothing; 0.3 ~ 3-4 epoch window). Same convention as early_stopping /
+    #                        # checkpoint_selection.smoothing_alpha.
     # Per-head torch ReduceLROnPlateau floor, one scheduler per head off that head's own
-    # val loss -- same mechanism as lr_schedule's reduce_on_plateau, scoped per head. Legacy
+    # val_abs metric (val_abs_rot_x for rotation; val_abs_trans, or val_abs_y/val_abs_z with
+    # separate translation heads) -- not the composite val_loss. Same mechanism as
+    # lr_schedule's reduce_on_plateau (which does use val_fixed_loss), scoped per head. Legacy
     # key: floor as a fraction of each head's base_lr. Prefer 'min_lr' (absolute LR floor,
     # aligned with lr_schedule.min_lr) in new configs; 'min_lr' takes precedence if both are set.
     min_lr: 0.00001

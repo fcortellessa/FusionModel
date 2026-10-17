@@ -8,13 +8,12 @@ Analyzes: convergence speed, task-specific dynamics, bias learning, robustness
 import os
 import glob
 import argparse
-import re
 import yaml
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Tuple
 
 try:
     import plotly.graph_objects as go
@@ -264,7 +263,7 @@ def plot_final_accuracy_scatter(master_df: pd.DataFrame, output_dir: Path, fmt=N
 
         ax.set_xlabel(f"Validation Loss - {trans_label} ({trans_col})", fontsize=12, fontweight='bold')
         ax.set_ylabel("Validation Loss - Rotation (val_loss_q)", fontsize=12, fontweight='bold')
-        ax.set_title(f"Final Accuracy by LR Schedule\n(Circle=No Uncertainty | Square=Uncertainty Enabled)",
+        ax.set_title("Final Accuracy by LR Schedule\n(Circle=No Uncertainty | Square=Uncertainty Enabled)",
                     fontsize=13, fontweight='bold')
         ax.grid(True, alpha=0.3)
 
@@ -802,7 +801,7 @@ def plot_learning_rate_schedules(master_df: pd.DataFrame, output_dir: Path, fmt=
             ))
 
         fig.update_layout(
-            title=f"Learning Rate Schedules Over Training (Interactive)",
+            title="Learning Rate Schedules Over Training (Interactive)",
             xaxis_title="Epoch",
             yaxis_title="Learning Rate (log scale)",
             yaxis_type="log",

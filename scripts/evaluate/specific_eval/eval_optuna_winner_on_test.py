@@ -57,7 +57,6 @@ from base_model.pose_estimation_model import PoseEstimationNet
 from data_processing.dataloader_preprocessed import (
     _load_or_compute_norm_stats,
     get_test_dataloader,
-    tactile_collate_fn,
 )
 from data_processing.preprocess_data import ensure_test_split_current
 from utils.normalization import canonicalize_translation_norm_stats

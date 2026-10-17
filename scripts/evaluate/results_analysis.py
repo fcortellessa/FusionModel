@@ -13,8 +13,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
-import plotly.express as px
-from ast import literal_eval
 from pathlib import Path
 
 
@@ -225,23 +223,23 @@ def generate_ablation_summary(master_history: pd.DataFrame, runs_dir: Path, outp
         for idx, row in summary_df.iterrows():
             f.write(f"Rank {idx + 1}: {row['Ablation Variant Config']}\n")
             f.write(f"  [Folder Instance Reference: {row['Run Folder']}]\n")
-            f.write(f"  --> COMBINED GEOMETRIC SCORE:\n")
+            f.write("  --> COMBINED GEOMETRIC SCORE:\n")
             rank_score = row['Rank Metric (Rot + Trans L2)']
             f.write(f"      - Rot X + L2 Trans Metric : {f'{rank_score:.5f}' if pd.notna(rank_score) else 'N/A'}\n")
-            f.write(f"  --> VALIDATION SET PROFILE:\n")
+            f.write("  --> VALIDATION SET PROFILE:\n")
             f.write(f"      - Val Loss (Mean)         : {row['Val Loss (Mean)']:.5f}\n")
             f.write(f"      - Val Rot X Error (deg)   : {row['Val Abs Rot X (Mean)']:.4f}\n")
             f.write(f"      - Val Trans L2 Norm [m]   : {row['Val Trans L2']:.4f}\n")
             f.write(f"      - Val Trans Y Error       : {row['Val Abs Y (Mean)']:.4f}\n")
             f.write(f"      - Val Trans Z Error       : {row['Val Abs Z (Mean)']:.4f}\n")
             
-            f.write(f"  --> HOLDOUT TEST DATASET EVALUATION PROFILE:\n")
+            f.write("  --> HOLDOUT TEST DATASET EVALUATION PROFILE:\n")
             t_trans = row['Test Abs Trans (Mean)']
             t_rot = row['Test Abs Rot X (Mean)']
             f.write(f"      - Test Abs Trans Magnitude : {f'{t_trans:.5f}' if pd.notna(t_trans) else 'N/A (Run test.py first)'}\n")
             f.write(f"      - Test Rot X Error (deg)   : {f'{t_rot:.4f}' if pd.notna(t_rot) else 'N/A'}\n")
             
-            f.write(f"  --> SPEED & COMPLEXITY:\n")
+            f.write("  --> SPEED & COMPLEXITY:\n")
             f.write(f"      - Computational Rhythm    : {row['Avg Epoch Time (Sec)']:.2f} sec/epoch\n")
             f.write("=" * 72 + "\n")
             

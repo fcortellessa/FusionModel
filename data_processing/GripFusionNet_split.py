@@ -10,7 +10,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.insert(0, parent_dir)
 
-from utils.GripFusionNet_utils import load_config, get_triplets
+from utils.GripFusionNet_utils import get_triplets
 
 DEFAULT_TRAIN_RATIO = 0.8
 DEFAULT_VAL_RATIO = 0.15

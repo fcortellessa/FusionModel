@@ -174,7 +174,7 @@ def _ensure_matching_split(cfg, folder_path):
 
 def run_inference_on_folder(folder_path, plot_formats):
     """Run test.py on one run folder. Returns a record dict on success, or None on failure."""
-    print(f"\n" + "="*80)
+    print("\n" + "="*80)
     print(f"🚀 Processing: {folder_path}")
     print("="*80 + "\n")
 

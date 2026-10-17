@@ -11,9 +11,8 @@ from ultralytics.data.augment import LetterBox
 import cv2
 from scipy.spatial.transform import Rotation as R
 from tqdm import tqdm
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool
 from functools import partial
-from pathlib import Path
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, ".."))

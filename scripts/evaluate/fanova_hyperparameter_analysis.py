@@ -22,7 +22,6 @@ Usage:
 Dependencies: pandas, numpy, scipy, matplotlib, plotly (optional)
 """
 
-import os
 import sys
 import argparse
 import json
@@ -30,16 +29,12 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
-from collections import defaultdict
 import warnings
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap, Normalize
-import matplotlib.patches as mpatches
-from scipy import interpolate, stats
-from scipy.spatial.distance import pdist, squareform
+from scipy import interpolate
 
 # Try to import optional dependencies
 try:
@@ -817,7 +812,7 @@ Examples:
         json.dump(results_json, f, indent=2)
     logger.info(f"Saved detailed results to {results_json_path}")
 
-    logger.info(f"\n✓ fANOVA analysis complete!")
+    logger.info("\n✓ fANOVA analysis complete!")
     logger.info(f"  Results saved to: {results_dir}")
     logger.info(f"  Plots: {list(plots.keys())}")
 
