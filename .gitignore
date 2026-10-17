@@ -18,3 +18,9 @@ runs/
 plots/
 
 *archived*
+
+# Generated interactive Plotly plots (each embeds plotly.js, several MB per file).
+# Regenerate with the analysis scripts; the PNG/SVG versions stay tracked.
+analysis/**/*.html
+analysis_fusion/**/*.html
+lr_analysis_output/**/*.html
