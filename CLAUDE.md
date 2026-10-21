@@ -108,6 +108,7 @@ python scripts/cluster/prepare_data.py build-cache                              
 python scripts/cluster/prepare_data.py verify-splits && python scripts/cluster/prepare_data.py verify-cache
 ls configs/generated/<name>/*.yml > lists/<name>.txt
 N=$(grep -cvE '^\s*(#|$)' lists/<name>.txt)
+mkdir -p slurm_out   # submit from the repo root; logs go to slurm_out/
 sbatch --array=0-$((N-1))%8 --export=ALL,CONFIG_LIST=lists/<name>.txt,OUT_ROOT=runs/<name> scripts/cluster/slurm_array.sbatch
 ```
 `FUSIONMODEL_DATA_ROOT` overrides `data.root` (configs carry workstation paths). Inside SLURM jobs run folders get a `_j<job>_t<task>` suffix, folder creation is collision-proof, and no TensorBoard server is started (also `--no_tensorboard_server`). `run_array_task.py` writes `TRAINING_DONE`/`TEST_DONE` markers, so resubmitting the same array only redoes unfinished tasks. Online augmentation is not supported by the compact pipeline yet.

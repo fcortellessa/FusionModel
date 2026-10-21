@@ -24,3 +24,6 @@ plots/
 analysis/**/*.html
 analysis_fusion/**/*.html
 lr_analysis_output/**/*.html
+
+# SLURM job logs (scripts/cluster/slurm_array.sbatch)
+slurm_out/

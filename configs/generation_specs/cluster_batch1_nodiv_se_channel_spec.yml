@@ -1,0 +1,27 @@
+# cluster_batch1 (no divisor, splits 36-45). Generated for the SLURM array (data.pipeline: compact -> frozen splits).
+# Same template and fixed_overrides as gated_cross_attention_2d_divisor4 / _nodivisor specs, so runs are
+# comparable with the existing cohort; only the fusion varies per variant and the split seed per grid entry.
+template_config: configs/generated/divisor4_missing_methods/004_se_gated_cross_attention_divisor4_split_seed-36_ce57f6.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: null
+  model.dual_fusion: false
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+  training.checkpoint_selection.type: both
+  data.pipeline: compact
+
+grid:
+  data.split_seed: [36, 37, 38, 39, 40, 41, 42, 43, 44, 45]
+
+variants:
+  - name: se_channel_gated_concat_nodivisor
+    overrides:
+      model.fusion: se_channel_gated_concat
