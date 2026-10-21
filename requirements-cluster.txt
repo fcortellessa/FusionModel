@@ -3,7 +3,8 @@
 # Python 3.8.10. torch 2.4.1 from PyPI is the CUDA 12.1 build on Linux (the nvidia-* packages
 # below are its CUDA libraries); the GPU driver must support CUDA >= 12.1.
 #   python3.8 -m venv .venv && source .venv/bin/activate
-#   pip install --upgrade pip && pip install -r requirements-cluster.txt
+#   pip install --upgrade "pip<25.1" && pip install -r requirements-cluster.txt
+# Cluster without Python 3.8 (e.g. KISSKI, only python/3.11.9): use requirements-cluster-py311.txt.
 absl-py==2.3.1
 accelerate==1.0.1
 albucore==0.0.17

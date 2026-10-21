@@ -36,9 +36,11 @@
 
 set -euo pipefail
 
+# KISSKI only provides Python 3.11: venv built from requirements-cluster-py311.txt (same torch/numpy/
+# ultralytics pins as the 3.8 environment of all existing runs; see that file's header).
 module load gcc
 module load python/3.11.9
-source "$HOME/.venv/fusionmodel/bin/activate"   # pip install -r requirements-cluster.txt
+source "$HOME/.venv/fusionmodel/bin/activate"
 
 REPO_DIR="$HOME/repos/FusionModel"
 : "${CONFIG_LIST:?pass --export=ALL,CONFIG_LIST=lists/<name>.txt,OUT_ROOT=runs/<name>}"

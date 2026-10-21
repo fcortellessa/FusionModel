@@ -1,0 +1,30 @@
+# Minimal Python 3.11 environment for training/testing on clusters without Python 3.8 (e.g. KISSKI,
+# only python/3.11.9). Pins exactly the packages the training/test code imports, at the versions of the
+# 3.8 environment all existing runs used (requirements-cluster.txt); pip resolves everything else.
+# Differences from the 3.8 environment:
+#   opencv-python(-headless) 4.13.0.92 -> 4.11.0.86: 4.13 requires numpy>=2 on Python>=3.9, numpy must stay
+#   1.24.4. OpenCV is only used to BUILD the compact cache, not by compact-pipeline training.
+#
+#   module load gcc python/3.11.9
+#   python -m venv ~/.venv/fusionmodel && source ~/.venv/fusionmodel/bin/activate
+#   pip install --upgrade pip && pip install -r requirements-cluster-py311.txt
+torch==2.4.1
+torchvision==0.19.1
+numpy==1.24.4
+pillow==10.4.0
+ultralytics==8.4.36
+ultralytics-thop==2.0.18
+opencv-python==4.11.0.86
+opencv-python-headless==4.11.0.86
+scipy==1.10.1
+pandas==2.0.3
+matplotlib==3.7.5
+plotly==6.9.0
+PyYAML==6.0.3
+tqdm==4.67.3
+tensorboard==2.14.0
+albumentations==1.4.18
+albucore==0.0.17
+einops==0.8.1
+beartype==0.19.0
+accelerate==1.0.1
