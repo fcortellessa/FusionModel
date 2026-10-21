@@ -19,6 +19,7 @@ parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.insert(0, parent_dir)
 
 from base_model.pose_estimation_model import PoseEstimationNet
+from data_processing.compact_cache import get_compact_test_dataloader, is_compact_pipeline
 from data_processing.dataloader_preprocessed import get_test_dataloader
 from data_processing.preprocess_data import ensure_test_split_current
 from utils.normalization import canonicalize_translation_norm_stats
@@ -111,14 +112,20 @@ def infer_and_evaluate(config, model_path, test_data, results_dir, device):
     )
     
     data_root = resolve_data_root(config, REPO_ROOT)
-    ensure_test_split_current(config, data_root)
-    split_root = os.path.join(data_root, "Data_split")
+    if is_compact_pipeline(config):
+        # Frozen split + shared uint8 cache: read-only, never rebuilds anything.
+        test_loader = get_compact_test_dataloader(
+            config, data_root, num_workers=int(config.get("training", {}).get("num_workers", 2))
+        )
+    else:
+        ensure_test_split_current(config, data_root)
+        split_root = os.path.join(data_root, "Data_split")
 
-    test_loader = get_test_dataloader(
-        root_dir=split_root,
-        batch_size=config["training"]["batch_size"],
-        shuffle=False
-    )
+        test_loader = get_test_dataloader(
+            root_dir=split_root,
+            batch_size=config["training"]["batch_size"],
+            shuffle=False
+        )
     
     optimizer = get_optimizer(model_or_params=model, optimizer_name=config["training"]["optimizer"], lr=config["training"]["lr"])
     load_checkpoint(model, optimizer, model_path, device="cpu", load_optimizer=False)

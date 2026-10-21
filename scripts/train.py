@@ -1277,6 +1277,7 @@ def main(
     force_preprocess=False,
     run_directory=None,
     resume_from=None,
+    no_tensorboard_server=False,
 ):
     """Main training entry point.
 
@@ -1327,7 +1328,8 @@ def main(
     nested_run_name = Path(fusion_type) / head_type / f"{optimizer_name}_{timestamp}_bs{resolved_batch_size}"
     
     # Setup run artifacts, logging, and tensorboard
-    run_setup = RunSetupManager(config_path, cfg, resolved_batch_size, run_directory=run_directory)
+    run_setup = RunSetupManager(config_path, cfg, resolved_batch_size, run_directory=run_directory,
+                                no_tensorboard_server=no_tensorboard_server)
     artifacts = run_setup.setup_artifacts(existing_run_dir=resume_from)
 
     # Overwrite the default tensorboard target directory with nested layout
@@ -1571,6 +1573,13 @@ if __name__ == "__main__":
         ),
     )
 
+    parser.add_argument(
+        "--no_tensorboard_server",
+        action="store_true",
+        help="Do not start a background TensorBoard server (event files are still written). "
+             "Implied automatically inside SLURM jobs.",
+    )
+
     args = parser.parse_args()
 
     main(
@@ -1582,4 +1591,5 @@ if __name__ == "__main__":
         force_preprocess=args.force_preprocess or args.force_renormalize,
         run_directory=args.run_directory,
         resume_from=args.resume_from,
+        no_tensorboard_server=args.no_tensorboard_server,
     )

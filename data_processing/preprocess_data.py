@@ -53,20 +53,32 @@ def _create_image_transforms(rgb_mean, rgb_std, digit_mean, digit_std):
     return rgb_transform, digit_transform
 
 
-def _process_image(image_path, transform, use_letterbox=True):
-    """Load and process a single image."""
+LETTERBOX_PAD_VALUE = 114  # ultralytics LetterBox fill value (grey)
+
+
+def load_letterboxed_uint8(image_path, use_letterbox=True):
+    """Read an image as RGB uint8 (H, W, 3), letterboxed to 640x640 (no upscaling).
+
+    Shared by the legacy .pt cache (via _process_image) and the compact uint8 cache
+    (data_processing/compact_cache.py) so both start from byte-identical pixels.
+    """
     img = cv2.imread(image_path)
     if img is None:
         raise ValueError(f"cv2.imread failed for {image_path}")
-    
+
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    
+
     if use_letterbox:
         letterbox = LetterBox(new_shape=(640, 640), auto=False,
                               scale_fill=False, scaleup=False,
                               center=True, stride=32)
         img = letterbox(image=img)
-    
+    return img
+
+
+def _process_image(image_path, transform, use_letterbox=True):
+    """Load and process a single image."""
+    img = load_letterboxed_uint8(image_path, use_letterbox=use_letterbox)
     img = Image.fromarray(img).convert("RGB")
     tensor = transform(img)
     return tensor

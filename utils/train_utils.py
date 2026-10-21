@@ -1167,7 +1167,11 @@ class DataPipelineManager:
         self.logger = logger
     
     def _get_data_dir(self):
-        """Resolve data directory from config."""
+        """Resolve data directory from config (FUSIONMODEL_DATA_ROOT overrides data.root)."""
+        from utils.utils import DATA_ROOT_ENV
+
+        if os.environ.get(DATA_ROOT_ENV):
+            return os.path.abspath(os.environ[DATA_ROOT_ENV])
 
         configured_data_root = self.cfg.get("data", {}).get("root", "")
         if configured_data_root:
@@ -1262,7 +1266,25 @@ class DataPipelineManager:
             (see compute_translation_norm_stats) -- callers should snapshot it into
             the run's config so predictions can be un-normalized consistently later.
         """
+        from data_processing.compact_cache import get_compact_dataloaders, is_compact_pipeline
         from data_processing.dataloader_preprocessed import get_dataloaders
+
+        if is_compact_pipeline(self.cfg):
+            # Read-only: frozen split file + shared uint8 cache. Never splits or preprocesses, so
+            # any number of concurrent jobs (any split) can use the same data root.
+            data_dir = self._get_data_dir()
+            num_workers = int(self.cfg.get("training", {}).get("num_workers", 2))
+            train_loader, val_loader, test_loader, trans_norm_stats, split = get_compact_dataloaders(
+                self.cfg, data_dir, batch_size, num_workers=num_workers
+            )
+            # Recorded in the config snapshot; test.py refuses to evaluate if the split file changed.
+            self.cfg.setdefault("data", {})["split_file_sha256"] = split["_sha256"]
+            if self.logger:
+                self.logger.info(
+                    f"Compact pipeline: split {split['_path']} (train/val/test = {len(split['train'])}/"
+                    f"{len(split['val'])}/{len(split['test'])}), batch_size={batch_size}, num_workers={num_workers}"
+                )
+            return train_loader, val_loader, test_loader, trans_norm_stats
 
         self.preprocess_if_needed()
 
@@ -1288,7 +1310,7 @@ class DataPipelineManager:
 class RunSetupManager:
     """Manages run setup: logging, artifacts, tensorboard, manifests."""
     
-    def __init__(self, config_path, cfg, batch_size, logger=None, run_directory=None):
+    def __init__(self, config_path, cfg, batch_size, logger=None, run_directory=None, no_tensorboard_server=False):
         """
         Args:
             config_path: Path to config file
@@ -1303,6 +1325,7 @@ class RunSetupManager:
         self.logger = logger
         self.artifacts = None
         self.run_directory = run_directory or "runs"
+        self.no_tensorboard_server = bool(no_tensorboard_server)
 
     def setup_artifacts(self, existing_run_dir=None):
         """Build the run artifacts directory structure.
@@ -1353,8 +1376,15 @@ class RunSetupManager:
         tb_root = tb_root or self.artifacts["tensorboard_root_dir"]
         tensorboard_log_dir = os.path.join(tb_root, self.artifacts["run_name"])
         
+        from utils.utils import running_under_scheduler
+
         tensorboard_process = None
-        if is_port_in_use(tb_port):
+        if self.no_tensorboard_server or running_under_scheduler():
+            # Event files are still written; only the background server is skipped (array tasks would
+            # otherwise race for the port and leave stray servers on compute nodes).
+            if self.logger:
+                self.logger.info("TensorBoard server not started (scheduler job or --no_tensorboard_server)")
+        elif is_port_in_use(tb_port):
             if self.logger:
                 self.logger.info(f"TensorBoard already running on port {tb_port}")
         else:

@@ -25,6 +25,7 @@ Everything is driven by YAML configs (`configs/`) consumed by `scripts/train.py`
 | `scripts/train.py`, `scripts/test.py` | Single-run training and evaluation entry points |
 | `scripts/train_multiple_runs.py`, `scripts/test_multiple_runs.py` | Batch launchers over multiple configs/run folders |
 | `scripts/tactile_ablation/` | Config-grid generator (`generate_config_variants.py`), tactile augmentation ablation tooling |
+| `scripts/cluster/` | Cluster / SLURM array tooling for the compact pipeline: `prepare_data.py` (freeze splits, build + verify the uint8 cache), `run_array_task.py` (one array task = train + test one config), `slurm_array.sbatch` |
 | `scripts/evaluate/` | Post-hoc analysis/plotting over `metrics.csv` and test results (some files suffixed `_archived`/`_old` are superseded — check before using) |
 | `utils/` | `train_utils.py` (training orchestration managers), `utils.py` (config/checkpoint I/O), `logging_utils.py` (CSV/TensorBoard logging), `normalization.py` (translation normalization constants) |
 | `Data/` | Raw capture triplets + `Data_split/{train,val,test}` + cached `*_preprocessing/*.pt` tensors (large, data not code) |
@@ -95,6 +96,22 @@ python scripts/tactile_ablation/generate_config_variants.py --template-config <b
 
 Preprocessing (split + normalize + cache to `.pt`) runs automatically inside `train.py` the first time (or with `--force_preprocess`) via `data_processing/preprocess_data.py::preprocess_data`; there is no separate required preprocessing command. `scripts/data_preprocess_pipeline.py` is a **separate, unwired** standalone preprocessor with different output paths/naming (`{split}_preprocessed` at the `Data_split` root) — it is not called by `train.py`; don't confuse its cache with the real one at `Data_split/<split>/<split>_preprocessing/`.
 
+### Cluster / parallel runs (`data.pipeline: compact`)
+
+The legacy pipeline keeps one split-specific cache in `Data/Data_split` (~60 GB float32 per split) and rebuilds it **in place** whenever a run (or `test.py`) needs a different split, so concurrent jobs corrupt each other. For parallel or array jobs, set `data.pipeline: compact` (e.g. as a `fixed_overrides` entry in the generation spec). It reads two read-only artefacts under the data root:
+- `splits/split_<seed>.json`: frozen train/val/test timestamp lists + that split's normalization stats (seeds 36-45 frozen 2026-10-21, verified against all group-aware runs on those splits). Training never re-derives a split; a missing file fails fast.
+- `compact_cache/`: letterboxed image content as uint8 + raw hub-frame poses (~4 GB, split-independent). It yields **bit-identical** input tensors to the legacy `.pt` cache (checked with `verify-cache`); only the sample order differs (sorted timestamps vs filesystem `os.listdir` order).
+
+```bash
+python scripts/cluster/prepare_data.py freeze-splits --seeds 36 37 38 39 40 41 42 43 44 45   # once; never overwrites
+python scripts/cluster/prepare_data.py build-cache                                           # once (~1 min)
+python scripts/cluster/prepare_data.py verify-splits && python scripts/cluster/prepare_data.py verify-cache
+ls configs/generated/<name>/*.yml > lists/<name>.txt
+N=$(grep -cvE '^\s*(#|$)' lists/<name>.txt)
+sbatch --array=0-$((N-1))%8 --export=ALL,CONFIG_LIST=lists/<name>.txt,OUT_ROOT=runs/<name> scripts/cluster/slurm_array.sbatch
+```
+`FUSIONMODEL_DATA_ROOT` overrides `data.root` (configs carry workstation paths). Inside SLURM jobs run folders get a `_j<job>_t<task>` suffix, folder creation is collision-proof, and no TensorBoard server is started (also `--no_tensorboard_server`). `run_array_task.py` writes `TRAINING_DONE`/`TEST_DONE` markers, so resubmitting the same array only redoes unfinished tasks. Online augmentation is not supported by the compact pipeline yet.
+
 **No test suite, linter, or formatter is configured** in this repo (no pytest/ruff/black/mypy config in `pyproject.toml`). `test_adapter.py` and `reproduce_issue.py` at the repo root are ad hoc, uncommitted debugging scripts, not a maintained test suite — don't assume `pytest` runs cleanly, and validate changes by running the actual training/eval script for a few steps/epochs or a small model-construction smoke test instead.
 
 ## Configuration system
@@ -126,6 +143,8 @@ Preprocessing (split + normalize + cache to `.pt`) runs automatically inside `tr
 
 ## Common pitfalls
 
+- **Never run legacy-pipeline jobs with different split seeds concurrently** (training or `test.py`): they rebuild the one shared `Data/Data_split` cache under each other. Use `data.pipeline: compact` for anything parallel.
+- **Old runs (Jul-Aug 2026) without a `group_aware_split` key** were trained on the legacy per-frame split and are not comparable with the frozen group-aware splits, even with the same seed.
 - **Preprocessing cache masks seed changes**: see "Experimental methodology" above — always pass `--force_preprocess` when a new seed must produce a new split.
 - **Translation "normalization" is currently a no-op**: `utils/normalization.py`'s `MEAN_Y/STD_Y/MEAN_Z/STD_Z` are literally `0.0/1.0/0.0/1.0` placeholders ("Replace these with actual values from your dataset"). Don't assume cross-run translation metrics reflect real normalization.
 - **Two unrelated preprocessing pipelines exist**: `data_processing/preprocess_data.py` (the real one, wired into `train.py`, caches to `Data_split/<split>/<split>_preprocessing/`) vs. `scripts/data_preprocess_pipeline.py` (orphaned standalone script, caches to `Data_split/<split>_preprocessed/`). Both cache directories currently exist on disk under `Data/Data_split/` — don't confuse them.

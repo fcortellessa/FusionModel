@@ -159,7 +159,12 @@ def _existing_results_record(folder_path):
 
 def _ensure_matching_split(cfg, folder_path):
     from utils.utils import resolve_data_root
+    from data_processing.compact_cache import is_compact_pipeline
     from data_processing.preprocess_data import ensure_test_split_current
+
+    if is_compact_pipeline(cfg):
+        print(f"✅ Compact pipeline: frozen split, nothing to rebuild ({folder_path})")
+        return
 
     data_root = resolve_data_root(cfg, REPO_ROOT)
     split_seed = ensure_test_split_current(

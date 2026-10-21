@@ -12,13 +12,27 @@ different number of input channels (e.g., for depth images with 4 channels inste
 
 """
 
+import os
+
 import torch
 import torch.nn as nn
 from ultralytics import YOLO
 
 
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+
+def _resolve_weights_path(model_name):
+    """Relative weight names (e.g. 'yolo26n.pt') resolve against the repo root when the file is there, so
+    jobs started from another working directory load the local file instead of triggering a download."""
+    if os.path.isabs(model_name) or os.path.exists(model_name):
+        return model_name
+    candidate = os.path.join(_REPO_ROOT, model_name)
+    return candidate if os.path.exists(candidate) else model_name
+
+
 def load_yolo_trunk(model_name):
-    full = YOLO(model_name).model
+    full = YOLO(_resolve_weights_path(model_name)).model
     base = full.model[:-1]
     return full, base
 

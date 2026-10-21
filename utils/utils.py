@@ -15,12 +15,19 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
+DATA_ROOT_ENV = "FUSIONMODEL_DATA_ROOT"
+
+
 def resolve_data_root(cfg, repo_root):
     """Resolve the dataset root directory from `data.root`, defaulting to <repo_root>/Data.
 
     Shared by every entry point that needs to locate a run's data (training and
     testing) so they all agree on the same folder for the same config.
+    The FUSIONMODEL_DATA_ROOT environment variable, when set, overrides `data.root`
+    (configs carry absolute workstation paths that do not exist on a cluster).
     """
+    if os.environ.get(DATA_ROOT_ENV):
+        return os.path.abspath(os.environ[DATA_ROOT_ENV])
     configured_root = cfg.get("data", {}).get("root", "")
     if configured_root:
         return os.path.abspath(configured_root)
@@ -57,6 +64,35 @@ def sanitize_filename(value):
     return value or "run"
 
 
+def running_under_scheduler():
+    """True inside a SLURM job (array task or not)."""
+    return bool(os.environ.get("SLURM_JOB_ID"))
+
+
+def scheduler_run_suffix():
+    """`_j<jobid>_t<taskid>` for SLURM array tasks, `_j<jobid>` for plain SLURM jobs, else ''."""
+    array_job, task = os.environ.get("SLURM_ARRAY_JOB_ID"), os.environ.get("SLURM_ARRAY_TASK_ID")
+    if array_job and task is not None:
+        return f"_j{array_job}_t{task}"
+    if os.environ.get("SLURM_JOB_ID"):
+        return f"_j{os.environ['SLURM_JOB_ID']}"
+    return ""
+
+
+def _claim_unique_run_dir(run_root_dir, run_name):
+    """Atomically create run_root_dir/run_name; on a name collision (two runs started in the same
+    second) append _2, _3, ... instead of silently sharing one folder."""
+    os.makedirs(run_root_dir, exist_ok=True)
+    candidate, n = run_name, 1
+    while True:
+        try:
+            os.makedirs(os.path.join(run_root_dir, candidate))
+            return candidate
+        except FileExistsError:
+            n += 1
+            candidate = f"{run_name}_{n}"
+
+
 def build_run_artifacts(config_path, cfg, batch_size, output_root="runs", existing_run_dir=None):
     """Build (or, when resuming, reuse) a run's artifact paths.
 
@@ -73,8 +109,9 @@ def build_run_artifacts(config_path, cfg, batch_size, output_root="runs", existi
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         fusion_name = sanitize_filename(cfg["model"]["fusion"])
-        run_name = f"{timestamp}_bs{batch_size}_{fusion_name}"
+        run_name = f"{timestamp}_bs{batch_size}_{fusion_name}" + scheduler_run_suffix()
         run_root_dir = output_root
+        run_name = _claim_unique_run_dir(run_root_dir, run_name)
         run_dir = os.path.join(run_root_dir, run_name)
     results_dir = os.path.join(run_dir, "results")
     tensorboard_root_dir = os.path.join(run_root_dir, "tensorboard")
@@ -251,7 +288,17 @@ def load_checkpoint_for_resume(checkpoint_path, model, optimizer, device, uncert
             "saved before checkpoint-resume support was added and can only be used for "
             "inference (see load_checkpoint), not training resume."
         )
+    # optimizer.load_state_dict() also overwrites every param group's "lr" with the LR that group
+    # had when the checkpoint was saved, i.e. the *already schedule-scaled* LR of that epoch. The LR
+    # managers built afterwards (HeadLRDecayManager / GlobalPlateauLRManager) take their base LR from
+    # optimizer.param_groups[*]["lr"] and the epoch loop then applies the warmup-cosine scale on top,
+    # so without this restore the schedule is applied twice after a resume (e.g. only 0.14x of the
+    # intended LR by epoch 80 when resuming at epoch 66). The LR is a pure function of (config base LR,
+    # epoch, restored manager states), so keep the freshly constructed config LRs.
+    constructed_lrs = [float(group["lr"]) for group in optimizer.param_groups]
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    for group, lr in zip(optimizer.param_groups, constructed_lrs):
+        group["lr"] = lr
 
     if uncertainty_module is not None and 'uncertainty_state_dict' in checkpoint:
         uncertainty_module.load_state_dict(checkpoint['uncertainty_state_dict'])

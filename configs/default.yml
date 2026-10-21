@@ -240,6 +240,18 @@ data:
   # at eval time (see scripts/test.py).
   normalize_translation: true
   translation_norm_stats: {}
+  # Data pipeline. "legacy" (default): per-run split + float32 .pt cache in <root>/Data_split,
+  # rebuilt in place whenever split_seed changes -- unsafe for concurrent jobs. "compact": read-only
+  # frozen split file + shared uint8 cache (data_processing/compact_cache.py); same input tensors,
+  # safe for any number of parallel / array jobs. Prepare once with scripts/cluster/prepare_data.py.
+  # The FUSIONMODEL_DATA_ROOT environment variable overrides `root` (e.g. on a cluster).
+  pipeline: legacy
+  # compact only (relative paths are resolved under the data root):
+  split_dir: splits                 # holds split_<split_seed>.json (frozen by prepare_data.py freeze-splits)
+  compact_cache_dir: compact_cache  # built by prepare_data.py build-cache
+  # split_file: <path>              # optional explicit split file instead of split_dir/split_<seed>.json
+  # split_file_sha256 is written automatically into each run's config snapshot; test.py refuses to
+  # evaluate a compact run if its split file changed since training.
 
 # Set `data.root` to the folder containing your samples:
 # {timestamp}.json, {timestamp}.png, {timestamp}_digit.png
