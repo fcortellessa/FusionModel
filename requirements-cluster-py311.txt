@@ -5,8 +5,10 @@
 #   opencv-python(-headless) 4.13.0.92 -> 4.11.0.86: 4.13 requires numpy>=2 on Python>=3.9, numpy must stay
 #   1.24.4. OpenCV is only used to BUILD the compact cache, not by compact-pipeline training.
 #
-#   module load gcc python/3.11.9
-#   python -m venv ~/.venv/fusionmodel && source ~/.venv/fusionmodel/bin/activate
+#   KISSKI: build the venv from the zen2 Python (the login-node module is an AVX-512 build that crashes on
+#   the AMD GPU nodes with "Illegal instruction"):
+#   /sw/rev/25.04/rome_mofed_cuda80_rocky8/linux-rocky8-zen2/gcc-13.2.0/python-3.11.9-kukywutwnl5yzx55y6qol3awkq2g7vw6/bin/python3.11 -m venv ~/.venv/fusionmodel
+#   source ~/.venv/fusionmodel/bin/activate
 #   pip install --upgrade pip && pip install -r requirements-cluster-py311.txt
 torch==2.4.1
 torchvision==0.19.1

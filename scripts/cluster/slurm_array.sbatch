@@ -36,11 +36,28 @@
 
 set -euo pipefail
 
-# KISSKI only provides Python 3.11: venv built from requirements-cluster-py311.txt (same torch/numpy/
-# ultralytics pins as the 3.8 environment of all existing runs; see that file's header).
-module load gcc
-module load python/3.11.9
-source "$HOME/.venv/fusionmodel/bin/activate"
+# Python environment. KISSKI's module tree is built per CPU architecture: `module load python` on the
+# Intel (Sapphire Rapids) login nodes gives an AVX-512 build that crashes with "Illegal instruction" on the
+# AMD Milan (zen3) kisski GPU nodes. So no `module load` here: the venv carries its own interpreter, and it
+# must be created from the zen2 (AMD Rome, A100 stack) build of Python 3.11.9, which runs on both:
+#   PY=/sw/rev/25.04/rome_mofed_cuda80_rocky8/linux-rocky8-zen2/gcc-13.2.0/python-3.11.9-kukywutwnl5yzx55y6qol3awkq2g7vw6/bin/python3.11
+#   $PY -m venv ~/.venv/fusionmodel && source ~/.venv/fusionmodel/bin/activate
+#   pip install --upgrade pip && pip install -r requirements-cluster-py311.txt
+VENV="${FUSION_VENV:-$HOME/.venv/fusionmodel}"
+source "$VENV/bin/activate"
+
+# Preflight: fail fast with a clear message instead of a bare core dump.
+PY_REAL="$(readlink -f "$VENV/bin/python")"
+echo "python: $PY_REAL"
+case "$PY_REAL" in
+  *sapphirerapids*|*cascadelake*|*skylake*)
+    if ! grep -qw avx512f /proc/cpuinfo; then
+      echo "ERROR: $VENV was built from an Intel/AVX-512 Python ($PY_REAL), but this node's CPU has no AVX-512." >&2
+      echo "       Recreate the venv from the zen2 Python (see the comment above in this script)." >&2
+      exit 1
+    fi ;;
+esac
+python -c "import torch, torchvision, numpy, cv2, ultralytics; print('torch', torch.__version__, '| cuda', torch.cuda.is_available(), '| numpy', numpy.__version__)"
 
 REPO_DIR="$HOME/repos/FusionModel"
 : "${CONFIG_LIST:?pass --export=ALL,CONFIG_LIST=lists/<name>.txt,OUT_ROOT=runs/<name>}"
