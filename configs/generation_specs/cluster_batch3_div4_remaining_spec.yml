@@ -1,0 +1,45 @@
+# cluster_batch3 (divisor 4, splits 36-45): every divisor-4 method of the local cohort not yet in cluster_batch1/2.
+template_config: configs/generated/divisor4_missing_methods/004_se_gated_cross_attention_divisor4_split_seed-36_ce57f6.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: 4
+  model.dual_fusion: false
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+  training.checkpoint_selection.type: both
+  data.pipeline: compact
+
+grid:
+  data.split_seed: [36, 37, 38, 39, 40, 41, 42, 43, 44, 45]
+
+variants:
+  - name: concat_divisor4
+    overrides:
+      model.fusion: concat
+  - name: gated_divisor4
+    overrides:
+      model.fusion: gated
+  - name: channelwise_gated_concat_local_divisor4
+    overrides:
+      model.fusion: channelwise_gated_concat_local
+  - name: gated_concat_divisor4
+    overrides:
+      model.fusion: gated_concat
+  - name: dual_gated_concat_divisor4
+    overrides:
+      model.fusion: gated_concat
+      model.dual_fusion: true
+  - name: se_gated_cross_attention_divisor4
+    overrides:
+      model.fusion: se_gated_cross_attention
+  - name: dual_se_gated_cross_attention_divisor4
+    overrides:
+      model.fusion: se_gated_cross_attention
+      model.dual_fusion: true

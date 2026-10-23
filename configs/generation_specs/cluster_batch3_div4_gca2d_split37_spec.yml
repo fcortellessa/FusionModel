@@ -1,0 +1,25 @@
+# cluster_batch3: gated_cross_attention_2d divisor 4 split 37 (cluster_batch1 covers 36, 38-45).
+template_config: configs/generated/divisor4_missing_methods/004_se_gated_cross_attention_divisor4_split_seed-36_ce57f6.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: 4
+  model.dual_fusion: false
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+  training.checkpoint_selection.type: both
+  data.pipeline: compact
+
+grid:
+  data.split_seed: [37]
+
+variants:
+  - name: gated_cross_attention_2d_divisor4
+    overrides:
+      model.fusion: gated_cross_attention_2d
