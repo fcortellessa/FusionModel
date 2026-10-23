@@ -85,3 +85,4 @@ def list_fusions():
 from . import concat  # noqa: F401
 from . import gated   # noqa: F401
 from . import gated_concat  # noqa: F401
+from . import cross_gated  # noqa: F401

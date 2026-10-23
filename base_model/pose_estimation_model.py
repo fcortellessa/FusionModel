@@ -254,6 +254,10 @@ class PoseEstimationNet(nn.Module):
                 "channelwise_residual_gated_concat_hybrid",
                 "gated_concat_floor",
                 "channelwise_gated_concat_floor",
+                "cross_gated_concat",
+                "cross_channelwise_gated_concat",
+                "cross_se_channel_gated_concat",
+                "cross_channelwise_gated_concat_local",
             }
 
             if self.dual_fusion:

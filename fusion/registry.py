@@ -15,6 +15,13 @@ from .gated_cross_attention_2d import (
     SEGatedCrossAttention2DNoTactilePosFusion,
     SEGatedCrossAttention2DPoolFusion,
 )
+from .cross_gated import (
+    CrossChannelWiseGatedConcatFusion,
+    CrossChannelWiseGatedConcatLocalFusion,
+    CrossGatedConcatFusion,
+    CrossGatedFusion,
+    CrossSEChannelGatedConcatFusion,
+)
 from .gated_concat import (
     ChannelWiseGatedConcatFloorFusion,
     ChannelWiseGatedConcatFusion,
@@ -49,6 +56,11 @@ FUSION_REGISTRY = {
     "se_gated_cross_attention_2d_pool": SEGatedCrossAttention2DPoolFusion,
     "se_gated_cross_attention_2d_notacpos_onlyRGBposenc": SEGatedCrossAttention2DNoTactilePosFusion,
     "gated_concat": GatedConcatFusion,
+    "cross_gated": CrossGatedFusion,
+    "cross_gated_concat": CrossGatedConcatFusion,
+    "cross_channelwise_gated_concat": CrossChannelWiseGatedConcatFusion,
+    "cross_se_channel_gated_concat": CrossSEChannelGatedConcatFusion,
+    "cross_channelwise_gated_concat_local": CrossChannelWiseGatedConcatLocalFusion,
     "scale_gated_concat": ScaleGatedConcatFusion,
     "se_channel_gated_concat": SEChannelGatedConcatFusion,
     "se_channel_gated_concat_renorm": SEChannelGatedConcatRenormFusion,
