@@ -1,0 +1,35 @@
+# gated_cross_attention_2d with NO channel reduction (22,400-d per stream: 32/64/128 channels on
+# 20/10/5 grids), one split. Single varying factor vs the divisor-4 run on the same split
+# (gated_cross_attention_2d_divisor4_spec.yml, config 001): model.pre_head_channel_divisor 4 -> null
+# (null == key absent in the existing no-divisor runs; a value of 1 would add an extra 1x1 conv).
+# Comparison baselines at split 36 without divisor: se_gated_cross_attention, gated_cross_attention
+# (runs/no_divisor_final_ablation). Rationale: at divisor 4 each P3 token is lifted from only 8 numbers.
+template_config: configs/generated/divisor4_missing_methods/004_se_gated_cross_attention_divisor4_split_seed-36_ce57f6.yml
+
+fixed_overrides:
+  group_aware_split: true
+  model.backbone_trainable: true
+  model.rot_scaling_factor: 1.0
+  model.pre_head_channel_divisor: null
+  model.dual_fusion: false
+  training.lr_backbone: 5e-05
+  training.seed: 50
+  training.early_stopping.enabled: true
+  training.early_stopping.patience: 10
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+  training.checkpoint_selection.type: both
+
+grid:
+  data.split_seed: [36]
+
+variants:
+  - name: gated_cross_attention_2d_nodivisor
+    overrides:
+      model.fusion: gated_cross_attention_2d
+      model.mlp_quat_1: 256
+      model.mlp_quat_2: 1024
+      model.mlp_quat_3: 0
+      model.mlp_trans_1: 1024
+      model.mlp_trans_2: 1024
+      model.mlp_trans_3: 16

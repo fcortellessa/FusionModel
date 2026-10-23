@@ -6,6 +6,8 @@ helper functions are imported from it) but: runs on CUDA, can read the val split
 
   python scripts/evaluate/infer_split_gpu.py --split test --runs <run_dir> [...]     (sanity check vs test.py's csv)
   python scripts/evaluate/infer_split_gpu.py --split val  --sweeps runs/final_ablation runs/final_ablation_rot_scaling_200
+  python scripts/evaluate/infer_split_gpu.py --split val  --runs <run_dir> --checkpoint checkpoint_best_per_head.pth
+      (writes <run>/results_val_per_head/results_val.csv)
 """
 import argparse
 import glob
@@ -88,7 +90,7 @@ def errors_frame(pred_pose, gt_pose, config):
     })
 
 
-def run_one(run_dir, split, device):
+def run_one(run_dir, split, device, checkpoint="checkpoint_best.pth"):
     cfg = load_config(os.path.join(run_dir, "config.yml"))
     data_root = resolve_data_root(cfg, REPO)
     ensure_test_split_current(cfg, data_root)          # rebuilds Data_split for this run's split seed if needed
@@ -97,7 +99,7 @@ def run_one(run_dir, split, device):
                         collate_fn=tactile_collate_fn)
     model = build_model(cfg)
     opt = get_optimizer(model_or_params=model, optimizer_name=cfg["training"]["optimizer"], lr=cfg["training"]["lr"])
-    load_checkpoint(model, opt, os.path.join(run_dir, "checkpoint_best.pth"), device="cpu", load_optimizer=False)
+    load_checkpoint(model, opt, os.path.join(run_dir, checkpoint), device="cpu", load_optimizer=False)
     model.to(device).eval()
     preds, gts = [], []
     with torch.no_grad():
@@ -106,7 +108,8 @@ def run_one(run_dir, split, device):
             out, _ = model(inputs)
             preds.append(out["pose"].cpu().numpy()); gts.append(sample["pose"].numpy())
     df = errors_frame(np.concatenate(preds), np.concatenate(gts), cfg)
-    out_dir = os.path.join(run_dir, f"results_{split}")
+    suffix = "" if checkpoint == "checkpoint_best.pth" else "_" + checkpoint.replace("checkpoint_best_", "").replace(".pth", "")
+    out_dir = os.path.join(run_dir, f"results_{split}{suffix}")
     os.makedirs(out_dir, exist_ok=True)
     for old in glob.glob(os.path.join(out_dir, f"results_{split}*.csv")):
         os.remove(old)
@@ -119,11 +122,12 @@ if __name__ == "__main__":
     ap.add_argument("--split", choices=["val", "test"], required=True)
     ap.add_argument("--runs", nargs="*", default=[])
     ap.add_argument("--sweeps", nargs="*", default=[])
+    ap.add_argument("--checkpoint", default="checkpoint_best.pth", help="checkpoint file inside each run dir")
     a = ap.parse_args()
     runs = [os.path.abspath(r) for r in a.runs]
     for s in a.sweeps:
         runs += [os.path.abspath(d) for d in sorted(glob.glob(os.path.join(s, "2026*")))]
-    runs = [r for r in runs if os.path.exists(os.path.join(r, "checkpoint_best.pth"))]
+    runs = [r for r in runs if os.path.exists(os.path.join(r, a.checkpoint))]
 
     def seed_key(r):
         try:
@@ -135,6 +139,6 @@ if __name__ == "__main__":
     print(f"{len(runs)} runs, split={a.split}, device={dev}", flush=True)
     for i, r in enumerate(runs, 1):
         t0 = time.time()
-        df = run_one(r, a.split, dev)
+        df = run_one(r, a.split, dev, a.checkpoint)
         print(f"[{i}/{len(runs)}] {os.path.relpath(r, REPO)}  n={len(df)}  rot_x={df.val_abs_rot_x.mean():.4f}  "
               f"y={df.val_abs_y.mean()*1e3:.4f}mm  z={df.val_abs_z.mean()*1e3:.4f}mm  ({time.time()-t0:.0f}s)", flush=True)

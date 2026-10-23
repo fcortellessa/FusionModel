@@ -1,0 +1,101 @@
+# Per-head-checkpoint reruns at divisor 4 for methods whose earlier runs only have checkpoint_best.pth:
+# concat (two-stream) 36/38, gated_concat 36-45, gated 41-45, dual gated_concat 36 (18 runs, seed-major order).
+# Template = the old generalization-check gated_concat config; the old configs of these four method families differ only in
+# model.fusion / model.dual_fusion. Overrides match the newer per-head runs (se_gated_cross_attention, single-stream concat, ...):
+# early stopping min_delta 0.01 / smoothing_alpha 0.3 (old: 0.03 / 0.2) and checkpoint_selection.type: both.
+template_config: configs/generated/pre_head_channel_divisor4_generalization_check/004_gated_concat_divisor4_split_seed-36_0de402.yml
+fixed_overrides:
+  training.early_stopping.min_delta: 0.01
+  training.early_stopping.smoothing_alpha: 0.3
+  training.checkpoint_selection.type: both
+variants:
+- name: concat_per_head_divisor4_s36
+  overrides:
+    data.split_seed: 36
+    model.fusion: concat
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s36
+  overrides:
+    data.split_seed: 36
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: dual_gated_concat_per_head_divisor4_s36
+  overrides:
+    data.split_seed: 36
+    model.fusion: gated_concat
+    model.dual_fusion: true
+- name: gated_concat_per_head_divisor4_s37
+  overrides:
+    data.split_seed: 37
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: concat_per_head_divisor4_s38
+  overrides:
+    data.split_seed: 38
+    model.fusion: concat
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s38
+  overrides:
+    data.split_seed: 38
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s39
+  overrides:
+    data.split_seed: 39
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s40
+  overrides:
+    data.split_seed: 40
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s41
+  overrides:
+    data.split_seed: 41
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: gated_per_head_divisor4_s41
+  overrides:
+    data.split_seed: 41
+    model.fusion: gated
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s42
+  overrides:
+    data.split_seed: 42
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: gated_per_head_divisor4_s42
+  overrides:
+    data.split_seed: 42
+    model.fusion: gated
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s43
+  overrides:
+    data.split_seed: 43
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: gated_per_head_divisor4_s43
+  overrides:
+    data.split_seed: 43
+    model.fusion: gated
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s44
+  overrides:
+    data.split_seed: 44
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: gated_per_head_divisor4_s44
+  overrides:
+    data.split_seed: 44
+    model.fusion: gated
+    model.dual_fusion: false
+- name: gated_concat_per_head_divisor4_s45
+  overrides:
+    data.split_seed: 45
+    model.fusion: gated_concat
+    model.dual_fusion: false
+- name: gated_per_head_divisor4_s45
+  overrides:
+    data.split_seed: 45
+    model.fusion: gated
+    model.dual_fusion: false
